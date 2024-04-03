@@ -158,7 +158,8 @@ void BindReconstruction(py::module& m) {
           "Scales scene such that the minimum and maximum camera centers are "
           "at the\n"
           "given `extent`, whereas `p0` and `p1` determine the minimum and\n"
-          "maximum percentiles of the camera centers considered.")
+          "maximum percentiles of the camera centers considered.\n"
+          "@return                   (scale, scaled translation).")
       .def("transform",
            &Reconstruction::Transform,
            "Apply the 3D similarity transformation to all images and points.")

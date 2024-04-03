@@ -326,7 +326,7 @@ void Reconstruction::DeRegisterImage(const image_t image_id) {
       reg_image_ids_.end());
 }
 
-void Reconstruction::Normalize(const double extent,
+std::pair<double, Eigen::Vector3d> Reconstruction::Normalize(const double extent,
                                const double p0,
                                const double p1,
                                const bool use_images) {
@@ -334,7 +334,7 @@ void Reconstruction::Normalize(const double extent,
 
   if ((use_images && reg_image_ids_.size() < 2) ||
       (!use_images && points3D_.size() < 2)) {
-    return;
+    return {1, Eigen::Vector3d::Zero()};;
   }
 
   auto bound = ComputeBoundsAndCentroid(p0, p1, use_images);
@@ -348,10 +348,11 @@ void Reconstruction::Normalize(const double extent,
   } else {
     scale = extent / old_extent;
   }
-
+  Eigen::Vector3d translation = -scale * std::get<2>(bound);
   Sim3d tform(
-      scale, Eigen::Quaterniond::Identity(), -scale * std::get<2>(bound));
+      scale, Eigen::Quaterniond::Identity(), translation);
   Transform(tform);
+  return {scale, translation};
 }
 
 Eigen::Vector3d Reconstruction::ComputeCentroid(const double p0,

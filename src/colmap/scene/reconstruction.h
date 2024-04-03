@@ -175,7 +175,7 @@ class Reconstruction {
   // Scales scene such that the minimum and maximum camera centers are at the
   // given `extent`, whereas `p0` and `p1` determine the minimum and
   // maximum percentiles of the camera centers considered.
-  void Normalize(double extent = 10.0,
+  std::pair<double, Eigen::Vector3d> Normalize(double extent = 10.0,
                  double p0 = 0.1,
                  double p1 = 0.9,
                  bool use_images = true);
