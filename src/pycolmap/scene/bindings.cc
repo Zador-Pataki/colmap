@@ -1,3 +1,5 @@
+#include "pycolmap/scene/types.h"
+
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
@@ -14,9 +16,9 @@ void BindReconstructionManager(py::module& m);
 void BindTrack(py::module& m);
 
 void BindScene(py::module& m) {
+  BindPoint2D(m);
   BindImage(m);
   BindCamera(m);
-  BindPoint2D(m);
   BindTrack(m);
   BindPoint3D(m);
   BindCorrespondenceGraph(m);
@@ -24,4 +26,6 @@ void BindScene(py::module& m) {
   BindReconstructionManager(m);
   BindDatabase(m);
   BindDatabaseCache(m);
+
+  py::implicitly_convertible<py::iterable, Point2DVector>();
 }
