@@ -146,4 +146,10 @@ void BindCostFunctions(py::module& m_parent) {
         &PositionPriorErrorCostFunction::Create,
         "world_from_cam_position_prior"_a,
         "covariance"_a);
+  m.def(
+      "ScaledDepthErrorCost", &ScaledDepthErrorCostFunction::Create, "depth"_a);
+  m.def("ScaledDepthErrorCost",
+        &ScaledDepthErrorConstantPoseCostFunction::Create,
+        "cam_from_world"_a,
+        "depth"_a);
 }
