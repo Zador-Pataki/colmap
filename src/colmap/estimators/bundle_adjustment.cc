@@ -263,6 +263,10 @@ ceres::LossFunction* BundleAdjustmentOptions::CreateLossFunction() const {
       break;
   }
   THROW_CHECK_NOTNULL(loss_function);
+  // If magnitude is not 1.0, wrap the loss function with ScaledLoss
+  if (loss_function_magnitude != 1.0) {
+    loss_function = new ceres::ScaledLoss(loss_function, loss_function_magnitude, ceres::TAKE_OWNERSHIP);
+  }
   return loss_function;
 }
 
