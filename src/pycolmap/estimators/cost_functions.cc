@@ -190,4 +190,10 @@ void BindCostFunctions(py::module& m_parent) {
         &ScaledDepthErrorConstantPoseCostFunction::Create,
         "cam_from_world"_a,
         "depth"_a);
+  m.def(
+      "LogScaledDepthErrorCost", &LogScaledDepthErrorCostFunction::Create, "depth"_a);
+  m.def(
+      "ClippedLogScaledDepthErrorCost", &ClippedLogScaledDepthErrorCostFunction::Create, "depth"_a);
+  m.def(
+      "TruncatedLogScaledDepthErrorCost", &TruncatedLogScaledDepthErrorCostFunction::Create, "depth"_a);
 }

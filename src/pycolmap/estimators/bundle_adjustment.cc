@@ -202,4 +202,19 @@ void BindBundleAdjuster(py::module& m) {
         "config"_a,
         "pose_priors"_a,
         "reconstruction"_a);
+m.def("extend_bundle_adjuster_with_depth",
+      &ExtendBundleAdjusterWithDepth,
+      "problem"_a,
+      "image_id"_a,
+      "point3D_ids"_a,
+      "depths"_a,
+      "loss_magnitudes"_a,
+      "loss_params"_a,
+      "loss_name"_a,
+      "shift_scale"_a,
+      "reconstruction"_a,
+      "fix_shift"_a = false,
+      "fix_scale"_a = false,
+      "Extend the bundle adjuster with depth residuals for the given image");
 }
+

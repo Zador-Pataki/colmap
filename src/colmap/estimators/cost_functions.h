@@ -548,6 +548,98 @@ struct ScaledDepthErrorCostFunction {
   const double depth_;
 };
 
+struct LogScaledDepthErrorCostFunction {
+ public:
+  LogScaledDepthErrorCostFunction(const double depth) : depth_(depth) {}
+  static ceres::CostFunction* Create(const double depth) {
+    return (
+        new ceres::
+            AutoDiffCostFunction<LogScaledDepthErrorCostFunction, 1, 4, 3, 3, 2>(
+                new LogScaledDepthErrorCostFunction(depth)));
+  }
+  template <typename T>
+  bool operator()(const T* const cam_from_world_rotation,
+                  const T* const cam_from_world_translation,
+                  const T* const point3D,
+                  const T* const shift_scale,
+                  T* residuals) const {
+    *residuals = ceres::log(
+                 (EigenQuaternionMap<T>(cam_from_world_rotation) * 
+                  EigenVector3Map<T>(point3D))[2] +
+                 cam_from_world_translation[2])
+                 - (ceres::log(T(depth_)) + shift_scale[1]);
+    return true;
+  }
+ private:
+  const double depth_;
+};
+
+struct ClippedLogScaledDepthErrorCostFunction {
+ public:
+  ClippedLogScaledDepthErrorCostFunction(const double depth) : depth_(depth) {}
+
+  static ceres::CostFunction* Create(const double depth) {
+    return new ceres::AutoDiffCostFunction<ClippedLogScaledDepthErrorCostFunction, 1, 4, 3, 3, 2>(
+        new ClippedLogScaledDepthErrorCostFunction(depth));
+  }
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_rotation,
+                  const T* const cam_from_world_translation,
+                  const T* const point3D,
+                  const T* const shift_scale,
+                  T* residuals) const {
+    // Compute the predicted depth in the camera frame.
+    T d_pred = (EigenQuaternionMap<T>(cam_from_world_rotation) *
+                EigenVector3Map<T>(point3D))[2] +
+               cam_from_world_translation[2];
+
+    // Define a small epsilon and ensure d_pred is above this threshold.
+    T epsilon = T(1e-6);
+    T safe_d_pred = d_pred > epsilon ? d_pred : epsilon;
+
+    // Compute the residual in log space:
+    // log(safe_d_pred) - (log(depth_) + shift_scale[1])
+    *residuals = ceres::log(safe_d_pred) - (ceres::log(T(depth_)) + shift_scale[1]);
+    return true;
+  }
+
+ private:
+  const double depth_;
+};
+
+struct TruncatedLogScaledDepthErrorCostFunction {
+ public:
+  TruncatedLogScaledDepthErrorCostFunction(const double depth) : depth_(depth) {}
+
+  static ceres::CostFunction* Create(const double depth) {
+    return new ceres::AutoDiffCostFunction<TruncatedLogScaledDepthErrorCostFunction, 1, 4, 3, 3, 2>(
+        new TruncatedLogScaledDepthErrorCostFunction(depth));
+  }
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_rotation,
+                  const T* const cam_from_world_translation,
+                  const T* const point3D,
+                  const T* const shift_scale,
+                  T* residuals) const {
+    // Compute the predicted depth in the camera frame.
+    T d_pred = (EigenQuaternionMap<T>(cam_from_world_rotation) *
+                EigenVector3Map<T>(point3D))[2] +
+               cam_from_world_translation[2];
+    
+    if (d_pred <= T(0)) {
+      *residuals = T(0);
+      return true;
+    }
+
+    *residuals = ceres::log(d_pred) - (ceres::log(T(depth_)) + shift_scale[1]);
+    return true;
+  }
+
+ private:
+  const double depth_;
+};
 struct ScaledDepthErrorConstantPoseCostFunction
     : public ScaledDepthErrorCostFunction {
   using Parent = ScaledDepthErrorCostFunction;

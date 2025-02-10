@@ -247,6 +247,18 @@ std::unique_ptr<BundleAdjuster> CreatePosePriorBundleAdjuster(
     std::unordered_map<image_t, PosePrior> pose_priors,
     Reconstruction& reconstruction);
 
+void ExtendBundleAdjusterWithDepth(ceres::Problem* problem,
+                                   image_t image_id,
+                                   const std::vector<point3D_t>& point3D_ids,
+                                   const std::vector<double>& depths,
+                                   const std::vector<double>& loss_magnitudes,
+                                   const std::vector<double>& loss_params,
+                                   const std::string& loss_name,
+                                   const std::array<double, 2>& shift_scale,
+                                   Reconstruction& reconstruction,
+                                   bool fix_shift = false,
+                                   bool fix_scale = false);
+
 void PrintSolverSummary(const ceres::Solver::Summary& summary,
                         const std::string& header);
 
