@@ -1197,16 +1197,17 @@ ceres::LossFunction* CreateLossFunctionPerPoint(const std::string& loss_name,
   return lf;
 }
 void ExtendBundleAdjusterWithDepth(ceres::Problem* problem,
-                                   image_t image_id,
-                                   const std::vector<point3D_t>& point3D_ids,
-                                   const std::vector<double>& depths,
-                                   const std::vector<double>& loss_magnitudes,
-                                   const std::vector<double>& loss_params,
-                                   const std::string& loss_name,
-                                   const std::array<double, 2>& shift_scale,
-                                   Reconstruction& reconstruction,
-                                   bool fix_shift,
-                                   bool fix_scale) {
+    image_t image_id,
+    const std::vector<point3D_t>& point3D_ids,
+    const std::vector<double>& depths,
+    const std::vector<double>& loss_magnitudes,
+    const std::vector<double>& loss_params,
+    const std::string& loss_name,
+    double* shift_scale_ptr,  
+    Reconstruction& reconstruction,
+    bool logloss,
+    bool fix_shift,
+    bool fix_scale) {
   if (point3D_ids.size() != depths.size() ||
       point3D_ids.size() != loss_magnitudes.size() ||
       point3D_ids.size() != loss_params.size()) {
@@ -1217,9 +1218,7 @@ void ExtendBundleAdjusterWithDepth(ceres::Problem* problem,
 
   double* cam_rot = image.CamFromWorld().rotation.coeffs().data();
   double* cam_trans = image.CamFromWorld().translation.data();
-  double* shift_scale_ptr = const_cast<double*>(shift_scale.data());
 
-  // Loop over each 3D point and add the residual block.
   for (size_t i = 0; i < point3D_ids.size(); ++i) {
     point3D_t pt_id = point3D_ids[i];
     double depth = depths[i];
@@ -1228,31 +1227,21 @@ void ExtendBundleAdjusterWithDepth(ceres::Problem* problem,
 
     Point3D& point3D = reconstruction.Point3D(pt_id);
 
-    ceres::CostFunction* cost_function = ScaledDepthErrorCostFunction::Create(depth);
+    ceres::CostFunction* cost_function = nullptr;
+    if (logloss)
+      cost_function = TruncatedLogScaledDepthErrorCostFunction::Create(depth);
+    else
+      cost_function = ScaledDepthErrorCostFunction::Create(depth);
+
     ceres::LossFunction* loss_function = CreateLossFunctionPerPoint(loss_name, loss_param, loss_magnitude);
 
     problem->AddResidualBlock(cost_function,
-                                        loss_function,
-                                        cam_rot,
-                                        cam_trans,
-                                        point3D.xyz.data(),
-                                        shift_scale_ptr);
-  }
-
-  // If we need to fix the shift and/or scale, set a subset manifold on shift_scale.
-  if (fix_shift || fix_scale) {
-    std::vector<int> fix_shiftscale;
-    if (fix_shift)
-      fix_shiftscale.push_back(0);
-    if (fix_scale)
-      fix_shiftscale.push_back(1);
-
-    if (!fix_shiftscale.empty()) {
-      SetSubsetManifold(2, fix_shiftscale, problem, shift_scale_ptr);
+        loss_function,
+        cam_rot,
+        cam_trans,
+        point3D.xyz.data(),
+        shift_scale_ptr);
     }
-  }
 }
-
-
 
 }  // namespace colmap

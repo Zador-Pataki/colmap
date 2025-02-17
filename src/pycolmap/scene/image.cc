@@ -100,19 +100,6 @@ void BindImage(py::module& m) {
            "point2D_idx"_a,
            "Direct accessor for a point2D.")
       .def(
-          "get_2d_ids_with_3d_points",
-          [](const Image& self) {
-              std::vector<point2D_t> point2D_ids;
-              for (point2D_t point2D_idx = 0; point2D_idx < self.NumPoints2D(); ++point2D_idx) {
-                  if (self.Point2D(point2D_idx).HasPoint3D()) {
-                      point2D_ids.push_back(point2D_idx);
-                  }
-              }
-              return point2D_ids;
-          },
-          "Get the indices of 2D points that observe a 3D point."
-      )
-      .def(
           "get_xy",
           [](const Image& self, std::optional<std::vector<point2D_t>> point_ids = std::nullopt) -> py::array {
               std::vector<double> xy_coords;

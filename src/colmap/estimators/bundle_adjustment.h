@@ -254,8 +254,9 @@ void ExtendBundleAdjusterWithDepth(ceres::Problem* problem,
                                    const std::vector<double>& loss_magnitudes,
                                    const std::vector<double>& loss_params,
                                    const std::string& loss_name,
-                                   const std::array<double, 2>& shift_scale,
+                                   double* shift_scale_ptr, 
                                    Reconstruction& reconstruction,
+                                   bool loggloss = false,
                                    bool fix_shift = false,
                                    bool fix_scale = false);
 
