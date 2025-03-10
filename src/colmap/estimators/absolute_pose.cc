@@ -541,4 +541,80 @@ double EPNPEstimator::ComputeTotalReprojectionError(const Eigen::Matrix3d& R,
   return reproj_error;
 }
 
+void CovariantEPNPEstimator::Estimate(const std::vector<X_t>& points2D,
+  const std::vector<Y_t>& points3D,
+  std::vector<M_t>* models) {
+// TODO: EPNP could theoretically take advantage of the covariance.
+THROW_CHECK_GE(points2D.size(), 4);
+THROW_CHECK_EQ(points2D.size(), points3D.size());
+const size_t num_points = points2D.size();
+thread_local std::vector<Eigen::Vector2d> points2D_without_cov;
+thread_local std::vector<Eigen::Vector3d> points3D_without_cov;
+points2D_without_cov.resize(num_points);
+points3D_without_cov.resize(num_points);
+for (size_t i = 0; i < num_points; ++i) {
+points2D_without_cov[i] = points2D[i].first;
+points3D_without_cov[i] = points3D[i].first;
+EPNPEstimator::Estimate(points2D_without_cov, points3D_without_cov, models);
+}
+}
+void CovariantP3PEstimator::Estimate(const std::vector<X_t>& points2D,
+  const std::vector<Y_t>& points3D,
+  std::vector<M_t>* models) {
+THROW_CHECK_EQ(points2D.size(), 3);
+THROW_CHECK_EQ(points3D.size(), 3);
+thread_local std::vector<Eigen::Vector2d> points2D_without_cov(3);
+points2D_without_cov[0] = points2D[0].first;
+points2D_without_cov[1] = points2D[1].first;
+points2D_without_cov[2] = points2D[2].first;
+thread_local std::vector<Eigen::Vector3d> points3D_without_cov(3);
+points3D_without_cov[0] = points3D[0].first;
+points3D_without_cov[1] = points3D[1].first;
+points3D_without_cov[2] = points3D[2].first;
+P3PEstimator::Estimate(points2D_without_cov, points3D_without_cov, models);
+}
+void CovariantP3PEstimator::Residuals(const std::vector<X_t>& points2D,
+                                      const std::vector<Y_t>& points3D,
+                                      const M_t& cam_from_world,
+                                      std::vector<double>* residuals) {
+  constexpr double kInlierSigmaFactorSqr = 3.0 * 3.0;
+
+  const size_t num_points2D = points2D.size();
+  THROW_CHECK_EQ(num_points2D, points3D.size());
+  residuals->resize(num_points2D);
+  for (size_t i = 0; i < num_points2D; ++i) {
+    const Eigen::Vector3d point3D_in_cam =
+        cam_from_world * points3D[i].first.homogeneous();
+    if (point3D_in_cam.z() <= std::numeric_limits<double>::epsilon()) {
+      (*residuals)[i] = std::numeric_limits<double>::max();
+      continue;
+    }
+    const Eigen::Vector2d proj_point = point3D_in_cam.hnormalized();
+    Eigen::Matrix<double, 2, 3> J_proj;
+    J_proj << 1 / point3D_in_cam.z(), 0,
+        -point3D_in_cam.x() / (point3D_in_cam.z() * point3D_in_cam.z()), 0,
+        1 / point3D_in_cam.z(),
+        -point3D_in_cam.y() / (point3D_in_cam.z() * point3D_in_cam.z());
+    const Eigen::Matrix<double, 2, 3> J = J_proj * cam_from_world.leftCols<3>();
+    const Eigen::Matrix2d proj_cov = J * points3D[i].second * J.transpose();
+    const Eigen::Matrix2d joint_cov = points2D[i].second + proj_cov;
+    const Eigen::Vector2d proj_error = proj_point - points2D[i].first;
+    const double mahalanobis_dist_sqr =
+        proj_error.transpose() * joint_cov.inverse() * proj_error;
+    if (mahalanobis_dist_sqr > kInlierSigmaFactorSqr) {
+      (*residuals)[i] = std::numeric_limits<double>::max();
+      continue;
+    }
+    (*residuals)[i] = mahalanobis_dist_sqr + std::log(joint_cov.determinant());
+  }
+}
+void CovariantEPNPEstimator::Residuals(const std::vector<X_t>& points2D,
+   const std::vector<Y_t>& points3D,
+   const M_t& cam_from_world,
+   std::vector<double>* residuals) {
+CovariantP3PEstimator::Residuals(
+points2D, points3D, cam_from_world, residuals);
+}
+
+
 }  // namespace colmap

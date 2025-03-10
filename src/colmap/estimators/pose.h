@@ -47,6 +47,21 @@ namespace colmap {
 
 struct AbsolutePoseEstimationOptions {
   // Whether to estimate the focal length.
+  // Whether to estimate the focal length.
+
+  // Number of discrete samples for focal length estimation.
+  size_t num_focal_length_samples = 30;
+
+  // Minimum focal length ratio for discrete focal length sampling
+  // around focal length of given camera.
+  double min_focal_length_ratio = 0.2;
+
+  // Maximum focal length ratio for discrete focal length sampling
+  // around focal length of given camera.
+  double max_focal_length_ratio = 5;
+
+  // Number of threads for parallel estimation of focal length.
+  int num_threads = ThreadPool::kMaxNumThreads;
   bool estimate_focal_length = false;
 
   // Options used for P3P RANSAC.
@@ -61,7 +76,13 @@ struct AbsolutePoseEstimationOptions {
     ransac_options.confidence = 0.99999;
   }
 
-  void Check() const { ransac_options.Check(); }
+  void Check() const {
+    THROW_CHECK_GT(num_focal_length_samples, 0);
+    THROW_CHECK_GT(min_focal_length_ratio, 0);
+    THROW_CHECK_GT(max_focal_length_ratio, 0);
+    THROW_CHECK_LT(min_focal_length_ratio, max_focal_length_ratio);
+    ransac_options.Check();
+  }
 };
 
 struct AbsolutePoseRefinementOptions {
@@ -106,6 +127,14 @@ struct AbsolutePoseRefinementOptions {
 // @param inlier_mask          Inlier mask for 2D-3D correspondences.
 //
 // @return                     Whether pose is estimated successfully.
+bool EstimateAbsolutePoseCov(const AbsolutePoseEstimationOptions& options,
+  const std::vector<Eigen::Vector2d>& points2D,
+  const std::vector<Eigen::Vector3d>& points3D,
+  const std::vector<Eigen::Matrix3d>& points3D_cov,
+  Rigid3d* cam_from_world,
+  Camera* camera,
+  size_t* num_inliers,
+  std::vector<char>* inlier_mask);
 bool EstimateAbsolutePose(const AbsolutePoseEstimationOptions& options,
                           const std::vector<Eigen::Vector2d>& points2D,
                           const std::vector<Eigen::Vector3d>& points3D,

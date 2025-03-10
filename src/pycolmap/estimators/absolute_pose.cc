@@ -16,6 +16,51 @@ using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
 
+py::typing::Optional<py::dict> PyEstimateAndRefineAbsolutePoseCov(
+  const std::vector<Eigen::Vector2d>& points2D,
+  const std::vector<Eigen::Vector3d>& points3D,
+  const std::vector<Eigen::Matrix3d>& points3D_cov,
+  Camera& camera,
+  const AbsolutePoseEstimationOptions& estimation_options,
+  const AbsolutePoseRefinementOptions& refinement_options,
+  const bool return_covariance) {
+py::gil_scoped_release release;
+Rigid3d cam_from_world;
+size_t num_inliers;
+std::vector<char> inlier_mask;
+if (!EstimateAbsolutePoseCov(estimation_options,
+                          points2D,
+                          points3D,
+                          points3D_cov,
+                          &cam_from_world,
+                          &camera,
+                          &num_inliers,
+                          &inlier_mask)) {
+  py::gil_scoped_acquire acquire;
+  return py::none();
+}
+
+// TODO: Pass the points3D_cov to the refinement.
+Eigen::Matrix<double, 6, 6> covariance;
+if (!RefineAbsolutePose(refinement_options,
+                        inlier_mask,
+                        points2D,
+                        points3D,
+                        &cam_from_world,
+                        &camera,
+                        return_covariance ? &covariance : nullptr)) {
+  py::gil_scoped_acquire acquire;
+  return py::none();
+}
+
+py::gil_scoped_acquire acquire;
+py::dict success_dict("cam_from_world"_a = cam_from_world,
+                      "num_inliers"_a = num_inliers,
+                      "inliers"_a = ToPythonMask(inlier_mask));
+if (return_covariance) success_dict["covariance"] = covariance;
+return success_dict;
+}
+
 py::typing::Optional<py::dict> PyEstimateAbsolutePose(
     const std::vector<Eigen::Vector2d>& points2D,
     const std::vector<Eigen::Vector3d>& points3D,
@@ -151,6 +196,21 @@ void BindAbsolutePoseEstimator(py::module& m) {
                   "AbsolutePoseEstimationOptions()"),
         "Robustly estimate absolute pose using LO-RANSAC "
         "without non-linear refinement.");
+
+  m.def("estimate_and_refine_absolute_pose_cov",
+        &PyEstimateAndRefineAbsolutePoseCov,
+        "points2D"_a,
+        "points3D"_a,
+        "points3D_cov"_a,
+        "camera"_a,
+        py::arg_v("estimation_options",
+                  AbsolutePoseEstimationOptions(),
+                  "AbsolutePoseEstimationOptions()"),
+        py::arg_v("refinement_options",
+                  AbsolutePoseRefinementOptions(),
+                  "AbsolutePoseRefinementOptions()"),
+        "return_covariance"_a = false,
+        "Absolute pose estimation with non-linear refinement.");
 
   m.def("refine_absolute_pose",
         &PyRefineAbsolutePose,

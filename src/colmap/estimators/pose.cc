@@ -27,9 +27,10 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#include "colmap/estimators/pose.h"
+
 
 #include "colmap/estimators/absolute_pose.h"
+#include "colmap/estimators/pose.h"
 #include "colmap/estimators/bundle_adjustment.h"
 #include "colmap/estimators/cost_functions.h"
 #include "colmap/estimators/essential_matrix.h"
@@ -40,7 +41,167 @@
 #include "colmap/sensor/models.h"
 #include "colmap/util/logging.h"
 
+
+#include "colmap/math/matrix.h"
+#include "colmap/util/threading.h"
+
+
 namespace colmap {
+namespace {
+
+  typedef LORANSAC<P3PEstimator, EPNPEstimator> AbsolutePoseRANSAC;
+  typedef LORANSAC<CovariantP3PEstimator,
+                    CovariantEPNPEstimator,
+                    MEstimatorSupportMeasurer>
+      CovariantAbsolutePoseRANSAC;
+    
+  void EstimateCovariantAbsolutePoseKernel(
+    const Camera& camera,
+    const double focal_length_factor,
+    const std::vector<Eigen::Vector2d>& points2D,
+    const std::vector<Eigen::Vector3d>& points3D,
+    const std::vector<Eigen::Matrix3d>& points3D_cov,
+    const RANSACOptions& options,
+    AbsolutePoseRANSAC::Report* report) {
+  constexpr double kSigmaInlierFactor = 3.0;
+
+  // Scale the focal length by the given factor.
+  Camera scaled_camera = camera;
+  for (const size_t idx : camera.FocalLengthIdxs()) {
+    scaled_camera.params[idx] *= focal_length_factor;
+  }
+
+  const double max_error_in_cam =
+      scaled_camera.CamFromImgThreshold(options.max_error);
+  const Eigen::Matrix2d point2D_cov = (max_error_in_cam / kSigmaInlierFactor) *
+                                      (max_error_in_cam / kSigmaInlierFactor) *
+                                      Eigen::Matrix2d::Identity();
+
+  // Normalize image coordinates with current camera hypothesis.
+  std::vector<std::pair<Eigen::Vector2d, Eigen::Matrix2d>> points2D_with_cov(
+      points2D.size());
+  for (size_t i = 0; i < points2D.size(); ++i) {
+    points2D_with_cov[i] = {scaled_camera.CamFromImg(points2D[i]), point2D_cov};
+  }
+
+  std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> points3D_with_cov(
+      points3D.size());
+  for (size_t i = 0; i < points3D.size(); ++i) {
+    points3D_with_cov[i] = {points3D[i], points3D_cov[i]};
+  }
+
+  // Estimate pose for given focal length.
+  auto custom_options = options;
+  // TODO: Do we need to account for the log(det(cov)) term in the residual?
+  custom_options.max_error = kSigmaInlierFactor;
+  CovariantAbsolutePoseRANSAC ransac(custom_options);
+  const auto covariant_report =
+      ransac.Estimate(points2D_with_cov, points3D_with_cov);
+
+  report->success = covariant_report.success;
+  report->num_trials = covariant_report.num_trials;
+  report->support.num_inliers = covariant_report.support.num_inliers;
+  report->inlier_mask = covariant_report.inlier_mask;
+  report->model = covariant_report.model;
+}
+
+}  // namespace
+bool EstimateAbsolutePoseCov(const AbsolutePoseEstimationOptions& options,
+                          const std::vector<Eigen::Vector2d>& points2D,
+                          const std::vector<Eigen::Vector3d>& points3D,
+                          const std::vector<Eigen::Matrix3d>& points3D_cov,
+                          Rigid3d* cam_from_world,
+                          Camera* camera,
+                          size_t* num_inliers,
+                          std::vector<char>* inlier_mask) {
+  THROW_CHECK_EQ(points2D.size(), points3D.size());
+  if (!points3D_cov.empty()) {
+    THROW_CHECK_EQ(points2D.size(), points3D_cov.size());
+  }
+
+  options.Check();
+
+  std::vector<double> focal_length_factors;
+  if (options.estimate_focal_length) {
+    // Generate focal length factors using a quadratic function,
+    // such that more samples are drawn for small focal lengths
+    focal_length_factors.reserve(options.num_focal_length_samples + 1);
+    const double fstep = 1.0 / options.num_focal_length_samples;
+    const double fscale =
+        options.max_focal_length_ratio - options.min_focal_length_ratio;
+    double focal = 0.;
+    for (size_t i = 0; i <= options.num_focal_length_samples;
+         ++i, focal += fstep) {
+      focal_length_factors.push_back(options.min_focal_length_ratio +
+                                     fscale * focal * focal);
+    }
+  } else {
+    focal_length_factors.reserve(1);
+    focal_length_factors.push_back(1);
+  }
+
+  std::vector<std::future<void>> futures;
+  futures.resize(focal_length_factors.size());
+  std::vector<typename AbsolutePoseRANSAC::Report,
+              Eigen::aligned_allocator<typename AbsolutePoseRANSAC::Report>>
+      reports;
+  reports.resize(focal_length_factors.size());
+
+  ThreadPool thread_pool(std::min(
+      options.num_threads, static_cast<int>(focal_length_factors.size())));
+
+  for (size_t i = 0; i < focal_length_factors.size(); ++i) {
+    futures[i] = thread_pool.AddTask(EstimateCovariantAbsolutePoseKernel,
+                                      *camera,
+                                      focal_length_factors[i],
+                                      points2D,
+                                      points3D,
+                                      points3D_cov,
+                                      options.ransac_options,
+                                      &reports[i]);
+  }
+
+  double focal_length_factor = 0;
+  Eigen::Matrix3x4d cam_from_world_matrix;
+  *num_inliers = 0;
+  inlier_mask->clear();
+
+  // Find best model among all focal lengths.
+  for (size_t i = 0; i < focal_length_factors.size(); ++i) {
+    futures[i].get();
+    const auto report = reports[i];
+    if (report.success && report.support.num_inliers > *num_inliers) {
+      *num_inliers = report.support.num_inliers;
+      cam_from_world_matrix = report.model;
+      *inlier_mask = report.inlier_mask;
+      focal_length_factor = focal_length_factors[i];
+    }
+  }
+
+  if (*num_inliers == 0) {
+    return false;
+  }
+
+  // Scale output camera with best estimated focal length.
+  if (options.estimate_focal_length && *num_inliers > 0) {
+    for (const size_t idx : camera->FocalLengthIdxs()) {
+      camera->params[idx] *= focal_length_factor;
+    }
+  }
+
+  *cam_from_world =
+      Rigid3d(Eigen::Quaterniond(cam_from_world_matrix.leftCols<3>()),
+              cam_from_world_matrix.col(3));
+
+  if (cam_from_world->rotation.coeffs().array().isNaN().any() ||
+      cam_from_world->translation.array().isNaN().any()) {
+    return false;
+  }
+
+  LOG(INFO) << "Absolute pose estimation with " << *num_inliers << " inliers";
+
+  return true;
+}
 
 bool EstimateAbsolutePose(const AbsolutePoseEstimationOptions& options,
                           const std::vector<Eigen::Vector2d>& points2D,
