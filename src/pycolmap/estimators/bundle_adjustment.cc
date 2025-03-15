@@ -190,10 +190,11 @@ void BindBundleAdjuster(py::module& m) {
       .def_property_readonly("config", &BundleAdjuster::Config);
 
   m.def("create_default_bundle_adjuster",
-        CreateDefaultBundleAdjuster,
+        CreateDefaultBundleAdjuster,  
         "options"_a,
         "config"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        "image_point2D_stds"_a = std::unordered_map<image_t, std::vector<double>>());
 
   m.def("create_pose_prior_bundle_adjuster",
         CreatePosePriorBundleAdjuster,

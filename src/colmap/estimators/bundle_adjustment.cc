@@ -445,25 +445,29 @@ class DefaultBundleAdjuster : public BundleAdjuster {
  public:
   DefaultBundleAdjuster(BundleAdjustmentOptions options,
                         BundleAdjustmentConfig config,
-                        Reconstruction& reconstruction)
+                        Reconstruction& reconstruction,
+                        const std::unordered_map<image_t, std::vector<double>>& image_point2D_stds = {})
       : BundleAdjuster(std::move(options), std::move(config)),
         loss_function_(std::unique_ptr<ceres::LossFunction>(
             options_.CreateLossFunction())) {
     ceres::Problem::Options problem_options;
     problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
     problem_ = std::make_shared<ceres::Problem>(problem_options);
-
     // Set up problem
     // Warning: AddPointsToProblem assumes that AddImageToProblem is called
     // first. Do not change order of instructions!
     for (const image_t image_id : config_.Images()) {
-      AddImageToProblem(image_id, reconstruction);
+      const auto it = image_point2D_stds.find(image_id);
+      const std::vector<double>& std_devs = (it != image_point2D_stds.end()) ? it->second : std::vector<double>();
+      AddImageToProblem(image_id, reconstruction, std_devs);
     }
+    
     for (const auto point3D_id : config_.VariablePoints()) {
-      AddPointToProblem(point3D_id, reconstruction);
+        AddPointToProblem(point3D_id, reconstruction, image_point2D_stds);
     }
+    
     for (const auto point3D_id : config_.ConstantPoints()) {
-      AddPointToProblem(point3D_id, reconstruction);
+        AddPointToProblem(point3D_id, reconstruction, image_point2D_stds);
     }
 
     ParameterizeCameras(
@@ -493,7 +497,9 @@ class DefaultBundleAdjuster : public BundleAdjuster {
   std::shared_ptr<ceres::Problem>& Problem() override { return problem_; }
 
   void AddImageToProblem(const image_t image_id,
-                         Reconstruction& reconstruction) {
+                        Reconstruction& reconstruction,
+                        const std::vector<double>& std_devs = {}) {  // New: std deviation list
+    
     Image& image = reconstruction.Image(image_id);
     Camera& camera = *image.CameraPtr();
 
@@ -511,10 +517,21 @@ class DefaultBundleAdjuster : public BundleAdjuster {
 
     // Add residuals to bundle adjustment problem.
     size_t num_observations = 0;
-    for (const Point2D& point2D : image.Points2D()) {
+    const auto& points2D = image.Points2D();
+    // Ensure std_devs matches points2D size if provided
+    if (!std_devs.empty()) {
+      assert(std_devs.size() == points2D.size() && 
+             "std_devs.size() does not match points2D.size()! Check input.");
+    }
+
+    for (size_t i = 0; i < points2D.size(); ++i) {
+      const Point2D& point2D = points2D[i];
+      double std_dev = (std_devs.size() == points2D.size()) ? std_devs[i] : 1.0;
+
       if (!point2D.HasPoint3D()) {
         continue;
       }
+      assert(std_dev != -1.0 && "std_dev should not be -1 when used!");
 
       num_observations += 1;
       point3D_num_observations_[point2D.point3D_id] += 1;
@@ -524,22 +541,22 @@ class DefaultBundleAdjuster : public BundleAdjuster {
 
       if (constant_cam_pose) {
         problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-                camera.model_id, point2D.xy, image.CamFromWorld()),
+            CreateCameraCostFunction<WeightedReprojErrorConstantPoseCostFunctor>(
+            camera.model_id, point2D.xy, image.CamFromWorld(), std_dev),  // Pass std_dev
             loss_function_.get(),
             point3D.xyz.data(),
             camera_params);
       } else {
         problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
-                                                             point2D.xy),
+            CreateCameraCostFunction<WeightedReprojErrorCostFunctor>(
+            camera.model_id, point2D.xy, std_dev),  // Pass std_dev
             loss_function_.get(),
             cam_from_world_rotation,
             cam_from_world_translation,
             point3D.xyz.data(),
             camera_params);
       }
-    }
+    } 
 
     if (num_observations > 0) {
       camera_ids_.insert(image.CameraId());
@@ -560,7 +577,8 @@ class DefaultBundleAdjuster : public BundleAdjuster {
   }
 
   void AddPointToProblem(const point3D_t point3D_id,
-                         Reconstruction& reconstruction) {
+                        Reconstruction& reconstruction,
+                        const std::unordered_map<image_t, std::vector<double>>& image_point2D_stds) {  
     Point3D& point3D = reconstruction.Point3D(point3D_id);
 
     // Is 3D point already fully contained in the problem? I.e. its entire track
@@ -569,7 +587,7 @@ class DefaultBundleAdjuster : public BundleAdjuster {
     if (point3D_num_observations_[point3D_id] == point3D.track.Length()) {
       return;
     }
-
+    
     for (const auto& track_el : point3D.track.Elements()) {
       // Skip observations that were already added in `FillImages`.
       if (config_.HasImage(track_el.image_id)) {
@@ -582,19 +600,23 @@ class DefaultBundleAdjuster : public BundleAdjuster {
       Camera& camera = *image.CameraPtr();
       const Point2D& point2D = image.Point2D(track_el.point2D_idx);
 
-      // CostFunction assumes unit quaternions.
-      image.CamFromWorld().rotation.normalize();
+      // Retrieve the standard deviation, defaulting to 1.0 if not found.
+      double std_dev = 1.0;
+      auto img_it = image_point2D_stds.find(track_el.image_id);
+      if (img_it != image_point2D_stds.end()) {
+        const std::vector<double>& std_devs = img_it->second;
+        if (track_el.point2D_idx < std_devs.size()) {
+            std_dev = std_devs[track_el.point2D_idx];
+        }
+    }
 
-      // We do not want to refine the camera of images that are not
-      // part of `constant_image_ids_`, `constant_image_ids_`,
-      // `constant_x_image_ids_`.
       if (camera_ids_.count(image.CameraId()) == 0) {
         camera_ids_.insert(image.CameraId());
         config_.SetConstantCamIntrinsics(image.CameraId());
       }
       problem_->AddResidualBlock(
-          CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-              camera.model_id, point2D.xy, image.CamFromWorld()),
+    CreateCameraCostFunction<WeightedReprojErrorConstantPoseCostFunctor>(
+          camera.model_id, point2D.xy, image.CamFromWorld(), std_dev),
           loss_function_.get(),
           point3D.xyz.data(),
           camera.params.data());
@@ -761,7 +783,7 @@ class RigBundleAdjuster : public BundleAdjuster {
               camera_params);
         } else {
           problem_->AddResidualBlock(
-              CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
+              CreateCameraCostFunction<WeightedReprojErrorCostFunctor>(camera.model_id,
                                                                point2D.xy),
               loss_function_.get(),
               cam_from_rig_rotation,     // rig == world
@@ -1087,9 +1109,11 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
 std::unique_ptr<BundleAdjuster> CreateDefaultBundleAdjuster(
     BundleAdjustmentOptions options,
     BundleAdjustmentConfig config,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    const std::unordered_map<image_t, std::vector<double>>& image_point2D_stds) {
   return std::make_unique<DefaultBundleAdjuster>(
-      std::move(options), std::move(config), reconstruction);
+      std::move(options), std::move(config), reconstruction,
+      image_point2D_stds);
 }
 
 std::unique_ptr<BundleAdjuster> CreateRigBundleAdjuster(

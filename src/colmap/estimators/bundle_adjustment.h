@@ -231,7 +231,8 @@ class BundleAdjuster {
 std::unique_ptr<BundleAdjuster> CreateDefaultBundleAdjuster(
     BundleAdjustmentOptions options,
     BundleAdjustmentConfig config,
-    Reconstruction& reconstruction);
+    Reconstruction& reconstruction,
+    const std::unordered_map<image_t, std::vector<double>>& image_point2D_stds = {});
 
 std::unique_ptr<BundleAdjuster> CreateRigBundleAdjuster(
     BundleAdjustmentOptions options,
