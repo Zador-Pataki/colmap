@@ -10,6 +10,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "colmap/sfm/incremental_mapper_impl.h"
+
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
@@ -487,6 +489,12 @@ void BindIncrementalMapperImpl(py::module& m) {
       .def("get_modified_points3D", &IncrementalMapper::GetModifiedPoints3D)
       .def("clear_modified_points3D",
            &IncrementalMapper::ClearModifiedPoints3D);
+
+      m.def("find_rec_local_bundle",
+            &IncrementalMapperImpl::FindLocalBundle,
+            "options"_a,
+            "image_id"_a,
+            "reconstruction"_a);
 }
 
 void BindIncrementalMapper(py::module& m) {
