@@ -118,6 +118,24 @@ void Image::ResetPoint3DForPoint2D(const point2D_t point2D_idx) {
   }
 }
 
+std::vector<point3D_t> Image::Point3DIds() const {
+  std::vector<point3D_t> point3D_ids;
+  point3D_ids.resize(NumPoints2D());
+  for (point2D_t idx = 0; idx < NumPoints2D(); ++idx) {
+    point3D_ids[idx] = Point2D(idx).point3D_id;
+  }
+
+  return point3D_ids;
+}
+
+Eigen::MatrixXd Image::Point2DCoords() const {
+  Eigen::MatrixXd coords(NumPoints2D(), 2);
+  for (point2D_t idx = 0; idx < NumPoints2D(); ++idx) {
+    coords.row(idx) = Point2D(idx).xy;
+  }
+  return coords;
+}
+
 bool Image::HasPoint3D(const point3D_t point3D_id) const {
   return std::find_if(points2D_.begin(),
                       points2D_.end(),

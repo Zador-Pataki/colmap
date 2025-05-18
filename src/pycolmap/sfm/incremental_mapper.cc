@@ -10,6 +10,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "colmap/sfm/incremental_mapper_impl.h"
+
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
@@ -492,4 +494,10 @@ void BindIncrementalMapperImpl(py::module& m) {
 void BindIncrementalMapper(py::module& m) {
   BindIncrementalMapperImpl(m);
   BindIncrementalPipeline(m);
+
+  m.def("find_local_bundle_from_reconstruction",
+        &IncrementalMapperImpl::FindLocalBundle,
+        "options"_a,
+        "image_id"_a,
+        "reconstruction"_a);
 }
