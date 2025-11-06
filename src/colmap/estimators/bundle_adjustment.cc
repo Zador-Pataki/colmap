@@ -1183,17 +1183,18 @@ void DepthPriorBundleAdjuster(ceres::Problem* problem,
     image_t image_id,
     const std::vector<point3D_t>& point3D_ids,
     const std::vector<double>& depths,
-    const std::vector<double>& loss_weights,
+    const std::vector<double>& loss_magnitudes,
     const std::vector<double>& loss_params,
-    BundleAdjustmentOptions::LossFunctionType loss_type,
+    const std::vector<BundleAdjustmentOptions::LossFunctionType>& loss_types,
     double* shift_scale_ptr,  
     Reconstruction& reconstruction,
     bool logloss,
     bool fix_shift,
     bool fix_scale) {
   if (point3D_ids.size() != depths.size() ||
-      point3D_ids.size() != loss_weights.size() ||
-      point3D_ids.size() != loss_params.size()) {
+      point3D_ids.size() != loss_magnitudes.size() ||
+      point3D_ids.size() != loss_params.size() ||
+      point3D_ids.size() != loss_types.size()) {
     throw std::runtime_error("Input vectors must have the same size");
   }
 
@@ -1205,7 +1206,7 @@ void DepthPriorBundleAdjuster(ceres::Problem* problem,
   for (size_t i = 0; i < point3D_ids.size(); ++i) {
     point3D_t pt_id = point3D_ids[i];
     double depth = depths[i];
-    double loss_weight = loss_weights[i];
+    double loss_weight = loss_magnitudes[i];
     double loss_param = loss_params[i];
 
     Point3D& point3D = reconstruction.Point3D(pt_id);
@@ -1215,7 +1216,7 @@ void DepthPriorBundleAdjuster(ceres::Problem* problem,
       : ScaledDepthErrorCostFunction::Create(depth);
 
     BundleAdjustmentOptions loss_opts;
-    loss_opts.loss_function_type = loss_type;
+    loss_opts.loss_function_type = loss_types[i];
     loss_opts.loss_function_scale = loss_param;
     loss_opts.loss_function_weight = loss_weight;
 

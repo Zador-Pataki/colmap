@@ -210,7 +210,7 @@ void BindBundleAdjuster(py::module& m) {
             const std::vector<double>& depths,
             const std::vector<double>& loss_magnitudes,
             const std::vector<double>& loss_params,
-            BAOpts::LossFunctionType loss_type,
+            const std::vector<BAOpts::LossFunctionType>& loss_types,
             py::array_t<double> shift_scale,
             Reconstruction& reconstruction,
             bool logloss,
@@ -224,7 +224,7 @@ void BindBundleAdjuster(py::module& m) {
             double* shift_scale_ptr = static_cast<double*>(buf.ptr);
 
             DepthPriorBundleAdjuster(problem, image_id, point3D_ids, depths,
-                                            loss_magnitudes, loss_params, loss_type,
+                                            loss_magnitudes, loss_params, loss_types,
                                             shift_scale_ptr, reconstruction,
                                             logloss, fix_shift, fix_scale);
         },
@@ -234,7 +234,7 @@ void BindBundleAdjuster(py::module& m) {
         "depths"_a,
         "loss_magnitudes"_a,
         "loss_params"_a,
-        "loss_type"_a,
+        "loss_types"_a,
         "shift_scale"_a,
         "reconstruction"_a,
         "logloss"_a = false,

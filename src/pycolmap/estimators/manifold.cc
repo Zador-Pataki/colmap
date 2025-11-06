@@ -12,9 +12,20 @@ namespace py = pybind11;
 void BindCustomizedManifold(py::module& m) {
 #if CERES_VERSION_MAJOR >= 3 || \
     (CERES_VERSION_MAJOR == 2 && CERES_VERSION_MINOR >= 1)
-  py::class_<PositiveExponentialManifold<ceres::DYNAMIC>, ceres::Manifold>(
-      m, "PositiveExponentialManifold")
-      .def(py::init<int>());
+  // Only bind PositiveExponentialManifold if pyceres is available.
+  // This avoids stubgen errors when pyceres is not installed.
+  // The ceres::Manifold base type needs to be registered in Python for the binding to work.
+  try {
+    // Try to import ceres module to register the base type
+    (void)py::module_::import("ceres");
+    // If successful, bind the class
+    py::class_<PositiveExponentialManifold<ceres::DYNAMIC>, ceres::Manifold>(
+        m, "PositiveExponentialManifold")
+        .def(py::init<int>());
+  } catch (const py::error_already_set&) {
+    // ceres module not available (e.g., during stub generation without pyceres)
+    // Skip binding - this is fine since PositiveExponentialManifold is rarely used
+  }
 #endif
 }
 
