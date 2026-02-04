@@ -511,8 +511,13 @@ class DefaultBundleAdjuster : public BundleAdjuster {
 
     // Add residuals to bundle adjustment problem.
     size_t num_observations = 0;
+    const bool use_covariances = options_.use_keypoint_covariances &&
+                                 image.HasPixelCovariances();
+    point2D_t point2D_idx = 0;
+
     for (const Point2D& point2D : image.Points2D()) {
       if (!point2D.HasPoint3D()) {
+        ++point2D_idx;
         continue;
       }
 
@@ -522,23 +527,50 @@ class DefaultBundleAdjuster : public BundleAdjuster {
       Point3D& point3D = reconstruction.Point3D(point2D.point3D_id);
       assert(point3D.track.Length() > 1);
 
-      if (constant_cam_pose) {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-                camera.model_id, point2D.xy, image.CamFromWorld()),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            camera_params);
+      // Check if we should use per-keypoint covariance weighting
+      const bool use_weighted = use_covariances &&
+                                point2D_idx < image.PixelCholeskyXY().size();
+
+      if (use_weighted) {
+        const Eigen::Vector3d& chol = image.PixelCholeskyXY()[point2D_idx];
+        if (constant_cam_pose) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<WeightedReprojErrorConstantPoseCostFunctor>(
+                  camera.model_id, point2D.xy, image.CamFromWorld(),
+                  chol[0], chol[1], chol[2]),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera_params);
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<WeightedReprojErrorCostFunctor>(
+                  camera.model_id, point2D.xy, chol[0], chol[1], chol[2]),
+              loss_function_.get(),
+              cam_from_world_rotation,
+              cam_from_world_translation,
+              point3D.xyz.data(),
+              camera_params);
+        }
       } else {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
-                                                             point2D.xy),
-            loss_function_.get(),
-            cam_from_world_rotation,
-            cam_from_world_translation,
-            point3D.xyz.data(),
-            camera_params);
+        if (constant_cam_pose) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
+                  camera.model_id, point2D.xy, image.CamFromWorld()),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera_params);
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
+                                                               point2D.xy),
+              loss_function_.get(),
+              cam_from_world_rotation,
+              cam_from_world_translation,
+              point3D.xyz.data(),
+              camera_params);
+        }
       }
+      ++point2D_idx;
     }
 
     if (num_observations > 0) {

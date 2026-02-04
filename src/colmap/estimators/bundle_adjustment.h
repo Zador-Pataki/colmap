@@ -133,6 +133,11 @@ struct BundleAdjustmentOptions {
   // Whether to refine the extrinsic parameter group.
   bool refine_extrinsics = true;
 
+  // Use per-keypoint pixel covariances for Mahalanobis weighting.
+  // Requires Image::pixel_cholesky_xy_ to be populated for all features.
+  // If enabled but covariances missing for an image, uses uniform weighting.
+  bool use_keypoint_covariances = false;
+
   // Whether to print a final summary.
   bool print_summary = true;
 

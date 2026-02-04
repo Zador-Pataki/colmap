@@ -151,6 +151,125 @@ class ReprojErrorConstantPoseCostFunctor
   const ReprojErrorCostFunctor<CameraModel> reproj_cost_;
 };
 
+// Weighted reprojection error with Mahalanobis norm in pixel space.
+// Uses Cholesky factor L of precision matrix: P = L @ L^T = Sigma^{-1}
+// Residual: [L00 * rx, L10 * rx + L11 * ry] where (rx, ry) = proj - observed
+template <typename CameraModel>
+class WeightedReprojErrorCostFunctor
+    : public AutoDiffCostFunctor<WeightedReprojErrorCostFunctor<CameraModel>,
+                                 2,
+                                 4,
+                                 3,
+                                 3,
+                                 CameraModel::num_params> {
+ public:
+  explicit WeightedReprojErrorCostFunctor(const Eigen::Vector2d& point2D,
+                                          double L00,
+                                          double L10,
+                                          double L11)
+      : observed_x_(point2D(0)),
+        observed_y_(point2D(1)),
+        L00_(L00),
+        L10_(L10),
+        L11_(L11) {}
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_rotation,
+                  const T* const cam_from_world_translation,
+                  const T* const point3D,
+                  const T* const camera_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 3, 1> point3D_in_cam =
+        EigenQuaternionMap<T>(cam_from_world_rotation) *
+            EigenVector3Map<T>(point3D) +
+        EigenVector3Map<T>(cam_from_world_translation);
+
+    T proj_x, proj_y;
+    if (CameraModel::ImgFromCam(camera_params,
+                                point3D_in_cam[0],
+                                point3D_in_cam[1],
+                                point3D_in_cam[2],
+                                &proj_x,
+                                &proj_y)) {
+      // Raw residuals
+      T rx = proj_x - T(observed_x_);
+      T ry = proj_y - T(observed_y_);
+      // Apply Mahalanobis weighting: L @ [rx, ry]
+      residuals[0] = T(L00_) * rx;
+      residuals[1] = T(L10_) * rx + T(L11_) * ry;
+    } else {
+      residuals[0] = T(0);
+      residuals[1] = T(0);
+    }
+    return true;
+  }
+
+ private:
+  const double observed_x_;
+  const double observed_y_;
+  const double L00_, L10_, L11_;
+};
+
+// Weighted reprojection error with constant (fixed) camera pose.
+// Uses Cholesky factor L of precision matrix for Mahalanobis weighting.
+template <typename CameraModel>
+class WeightedReprojErrorConstantPoseCostFunctor
+    : public AutoDiffCostFunctor<
+          WeightedReprojErrorConstantPoseCostFunctor<CameraModel>,
+          2,
+          3,
+          CameraModel::num_params> {
+ public:
+  WeightedReprojErrorConstantPoseCostFunctor(const Eigen::Vector2d& point2D,
+                                             const Rigid3d& cam_from_world,
+                                             double L00,
+                                             double L10,
+                                             double L11)
+      : cam_from_world_(cam_from_world),
+        observed_x_(point2D(0)),
+        observed_y_(point2D(1)),
+        L00_(L00),
+        L10_(L10),
+        L11_(L11) {}
+
+  template <typename T>
+  bool operator()(const T* const point3D,
+                  const T* const camera_params,
+                  T* residuals) const {
+    const Eigen::Quaternion<T> cam_from_world_rotation =
+        cam_from_world_.rotation.cast<T>();
+    const Eigen::Matrix<T, 3, 1> cam_from_world_translation =
+        cam_from_world_.translation.cast<T>();
+
+    const Eigen::Matrix<T, 3, 1> point3D_in_cam =
+        cam_from_world_rotation * EigenVector3Map<T>(point3D) +
+        cam_from_world_translation;
+
+    T proj_x, proj_y;
+    if (CameraModel::ImgFromCam(camera_params,
+                                point3D_in_cam[0],
+                                point3D_in_cam[1],
+                                point3D_in_cam[2],
+                                &proj_x,
+                                &proj_y)) {
+      T rx = proj_x - T(observed_x_);
+      T ry = proj_y - T(observed_y_);
+      residuals[0] = T(L00_) * rx;
+      residuals[1] = T(L10_) * rx + T(L11_) * ry;
+    } else {
+      residuals[0] = T(0);
+      residuals[1] = T(0);
+    }
+    return true;
+  }
+
+ private:
+  const Rigid3d cam_from_world_;
+  const double observed_x_;
+  const double observed_y_;
+  const double L00_, L10_, L11_;
+};
+
 // Bundle adjustment cost function for variable
 // camera pose and calibration parameters, and fixed point.
 template <typename CameraModel>

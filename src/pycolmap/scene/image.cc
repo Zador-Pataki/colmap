@@ -178,7 +178,19 @@ void BindSceneImage(py::module& m) {
             }
             return points2D;
           },
-          "Get the 2D points that observe a 3D point.");
+          "Get the 2D points that observe a 3D point.")
+      .def_property(
+          "pixel_cholesky_xy",
+          [](const Image& self) { return self.PixelCholeskyXY(); },
+          [](Image& self, const std::vector<Eigen::Vector3d>& v) {
+            self.SetPixelCholeskyXY(v);
+          },
+          "Per-observation Cholesky factors (N, 3) for pixel covariance "
+          "weighting.\n"
+          "Stored as (L00, L10, L11) where L @ L^T = Precision matrix.")
+      .def("has_pixel_covariances",
+           &Image::HasPixelCovariances,
+           "Check if pixel covariances are set and match points2D count.");
   MakeDataclass(PyImage);
 
   py::bind_map<ImageMap>(m, "ImageMap");

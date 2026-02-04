@@ -107,6 +107,11 @@ void BindBundleAdjuster(py::module& m) {
           .def_readwrite("refine_extrinsics",
                          &BAOpts::refine_extrinsics,
                          "Whether to refine the extrinsic parameter group.")
+          .def_readwrite(
+              "use_keypoint_covariances",
+              &BAOpts::use_keypoint_covariances,
+              "Use per-keypoint pixel covariances for Mahalanobis weighting.\n"
+              "Requires Image.pixel_cholesky_xy to be populated.")
           .def_readwrite("print_summary",
                          &BAOpts::print_summary,
                          "Whether to print a final summary.")
