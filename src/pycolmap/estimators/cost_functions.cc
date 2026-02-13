@@ -196,4 +196,11 @@ void BindCostFunctions(py::module& m_parent) {
         "Scaled depth error cost function with constant camera pose.");
   m.def(
       "LogScaledDepthErrorCost", &LogScaledDepthErrorCostFunction::Create, "depth"_a);
+
+  m.def("HeightPriorCost",
+        &HeightPriorCostFunctor::Create<double, double, int>,
+        "inv_sigma"_a,
+        "target_height"_a,
+        "axis"_a = 1,
+        "Penalizes world coordinate of camera toward target. axis: 0=x, 1=y, 2=z.");
 }

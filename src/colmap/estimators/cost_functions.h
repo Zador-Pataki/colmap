@@ -518,6 +518,31 @@ struct AbsolutePosePositionPriorCostFunctor
   const Eigen::Vector3d position_in_world_prior_;
 };
 
+// 1-DoF error penalizing the world Y-coordinate of the camera center toward a
+// target height.  world_y = -(R^{-1} * t)[1] where R,t are cam_from_world.
+struct HeightPriorCostFunctor
+    : public AutoDiffCostFunctor<HeightPriorCostFunctor, 1, 4, 3> {
+ public:
+  HeightPriorCostFunctor(double inv_sigma, double target_height, int axis = 1)
+      : inv_sigma_(inv_sigma), target_height_(target_height), axis_(axis) {}
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_rotation,
+                  const T* const cam_from_world_translation,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 3, 1> rotated_t =
+        EigenQuaternionMap<T>(cam_from_world_rotation).inverse() *
+        EigenVector3Map<T>(cam_from_world_translation);
+    residuals[0] = T(inv_sigma_) * (-rotated_t[axis_] - T(target_height_));
+    return true;
+  }
+
+ private:
+  const double inv_sigma_;
+  const double target_height_;
+  const int axis_;
+};
+
 // 6-DoF error between two absolute camera poses based on a prior on their
 // relative pose, with identical scale for the translation. The residual is
 // computed in the frame of camera i. Its first and last three components

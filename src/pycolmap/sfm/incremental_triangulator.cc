@@ -108,6 +108,8 @@ void BindIncrementalTriangulator(py::module& m) {
            "point3D_id"_a)
       .def("clear_modified_points3D",
            &IncrementalTriangulator::ClearModifiedPoints3D)
+      .def("get_merge_log", &IncrementalTriangulator::GetMergeLog)
+      .def("clear_merge_log", &IncrementalTriangulator::ClearMergeLog)
       .def("merge_tracks",
            &IncrementalTriangulator::MergeTracks,
            "options"_a,

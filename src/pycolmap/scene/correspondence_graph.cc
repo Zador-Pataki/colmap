@@ -120,4 +120,34 @@ void BindCorrespondenceGraph(py::module& m) {
              return CorrespondenceGraph(self);
            })
       .def("__repr__", &CreateRepresentation<CorrespondenceGraph>);
+
+  m.def(
+      "build_correspondence_graph",
+      [](const std::vector<image_t>& image_ids,
+         const std::vector<size_t>& num_points2D,
+         const std::vector<image_t>& pair_ids1,
+         const std::vector<image_t>& pair_ids2,
+         const std::vector<PyFeatureMatches>& matches_list)
+          -> std::shared_ptr<CorrespondenceGraph> {
+        THROW_CHECK_EQ(image_ids.size(), num_points2D.size());
+        THROW_CHECK_EQ(pair_ids1.size(), pair_ids2.size());
+        THROW_CHECK_EQ(pair_ids1.size(), matches_list.size());
+        auto cg = std::make_shared<CorrespondenceGraph>();
+        for (size_t i = 0; i < image_ids.size(); ++i) {
+          cg->AddImage(image_ids[i], num_points2D[i]);
+        }
+        for (size_t i = 0; i < pair_ids1.size(); ++i) {
+          FeatureMatches matches = FeatureMatchesFromMatrix(matches_list[i]);
+          cg->AddCorrespondences(pair_ids1[i], pair_ids2[i], matches);
+        }
+        cg->Finalize();
+        return cg;
+      },
+      "image_ids"_a,
+      "num_points2D"_a,
+      "pair_ids1"_a,
+      "pair_ids2"_a,
+      "matches_list"_a,
+      "Build a CorrespondenceGraph from image info and match arrays in "
+      "a single call.");
 }

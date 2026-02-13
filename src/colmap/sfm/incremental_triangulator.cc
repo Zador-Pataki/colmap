@@ -435,6 +435,13 @@ void IncrementalTriangulator::ClearModifiedPoints3D() {
   modified_point3D_ids_.clear();
 }
 
+const std::unordered_map<point3D_t, point3D_t>&
+IncrementalTriangulator::GetMergeLog() const {
+  return merge_log_;
+}
+
+void IncrementalTriangulator::ClearMergeLog() { merge_log_.clear(); }
+
 void IncrementalTriangulator::ClearCaches() {
   camera_has_bogus_params_.clear();
   merge_trials_.clear();
@@ -662,6 +669,9 @@ size_t IncrementalTriangulator::Merge(const Options& options,
         modified_point3D_ids_.erase(point3D_id);
         modified_point3D_ids_.erase(corr_point2D.point3D_id);
         modified_point3D_ids_.insert(merged_point3D_id);
+
+        merge_log_[point3D_id] = merged_point3D_id;
+        merge_log_[corr_point2D.point3D_id] = merged_point3D_id;
 
         // Merge merged 3D point and return, as the original points are
         // deleted.
