@@ -62,6 +62,10 @@ class ObservationManager {
                               std::shared_ptr<const CorrespondenceGraph>
                                   correspondence_graph = nullptr);
 
+  // Add stats for a single new image (and its pairs) incrementally,
+  // instead of reconstructing the entire ObservationManager.
+  void AddImage(image_t image_id);
+
   inline const class Reconstruction& Reconstruction() const;
   inline class Reconstruction& Reconstruction();
 

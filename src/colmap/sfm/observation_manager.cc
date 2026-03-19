@@ -108,6 +108,73 @@ ObservationManager::ObservationManager(
   }
 }
 
+void ObservationManager::AddImage(const image_t image_id) {
+  const Image& image = reconstruction_.Image(image_id);
+  const Camera& camera = *image.CameraPtr();
+
+  // Add image stat (same as the per-image block in the constructor).
+  ImageStat image_stat;
+  image_stat.point3D_visibility_pyramid = VisibilityPyramid(
+      kNumPoint3DVisibilityPyramidLevels, camera.width, camera.height);
+  image_stat.num_visible_correspondences = 0;
+  image_stat.num_correspondences_have_point3D.resize(image.NumPoints2D(), 0);
+  image_stat.num_visible_points3D = 0;
+  image_stat.num_observations = 0;
+  image_stat.num_correspondences = 0;
+  if (correspondence_graph_ && correspondence_graph_->ExistsImage(image_id)) {
+    image_stat.num_observations =
+        correspondence_graph_->NumObservationsForImage(image_id);
+    image_stat.num_correspondences =
+        correspondence_graph_->NumCorrespondencesForImage(image_id);
+  }
+  image_stats_.emplace(image_id, std::move(image_stat));
+
+  // Add image pair stats for all pairs involving this image, and refresh
+  // stats for paired images whose corr_graph counts may have changed.
+  if (correspondence_graph_) {
+    for (const auto& [other_id, other_image] : reconstruction_.Images()) {
+      if (other_id == image_id) continue;
+      const point2D_t num_matches =
+          correspondence_graph_->NumMatchesBetweenImages(image_id, other_id);
+      if (num_matches > 0) {
+        const image_pair_t pair_id = ImagePairToPairId(image_id, other_id);
+        image_pair_stats_[pair_id].num_total_corrs = num_matches;
+
+        // Refresh the paired image's observation/correspondence counts,
+        // which may have increased when AddTwoViewGeometry added new
+        // correspondences to it.
+        auto it = image_stats_.find(other_id);
+        if (it != image_stats_.end() &&
+            correspondence_graph_->ExistsImage(other_id)) {
+          it->second.num_observations =
+              correspondence_graph_->NumObservationsForImage(other_id);
+          it->second.num_correspondences =
+              correspondence_graph_->NumCorrespondencesForImage(other_id);
+        }
+      }
+    }
+
+    // Retroactive visibility propagation: if this new image has
+    // correspondences to already-triangulated points in other images,
+    // update this image's visibility stats. In COLMAP's batch pipeline,
+    // this happens naturally because the CG is complete before any
+    // triangulation. With incremental CG construction, we must
+    // propagate pre-existing 3D point visibility to the new image.
+    for (point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
+         ++point2D_idx) {
+      const auto corr_range =
+          correspondence_graph_->FindCorrespondences(image_id, point2D_idx);
+      for (const auto* corr = corr_range.beg; corr < corr_range.end; ++corr) {
+        const Image& corr_image = reconstruction_.Image(corr->image_id);
+        if (corr->point2D_idx < corr_image.NumPoints2D() &&
+            corr_image.Point2D(corr->point2D_idx).HasPoint3D()) {
+          IncrementCorrespondenceHasPoint3D(image_id, point2D_idx);
+        }
+      }
+    }
+  }
+}
+
 void ObservationManager::IncrementCorrespondenceHasPoint3D(
     const image_t image_id, const point2D_t point2D_idx) {
   const Image& image = reconstruction_.Image(image_id);
