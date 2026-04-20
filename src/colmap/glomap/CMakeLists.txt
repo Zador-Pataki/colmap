@@ -33,6 +33,7 @@ COLMAP_ADD_LIBRARY(
         processors/image_undistorter.h processors/image_undistorter.cc
         processors/image_pair_inliers.h processors/image_pair_inliers.cc
         processors/view_graph_manipulation.h processors/view_graph_manipulation.cc
+        processors/reconstruction_normalizer.h processors/reconstruction_normalizer.cc
     PUBLIC_LINK_LIBS
         colmap_util
         colmap_geometry

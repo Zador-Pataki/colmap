@@ -93,7 +93,6 @@ def test_options_pickle_roundtrips(options_cls):
         "run_global_positioning",
         "run_relative_pose_estimation",
         "run_view_graph_calibration",
-        "run_track_establishment",
         "run_track_filter",
         "run_bundle_adjustment",
     ],
