@@ -43,6 +43,31 @@ COLMAP_ADD_LIBRARY(
         sampson_error.h
         utils.h
         weighted_reprojection_error.h
+        # §06 glomap-ported cost functors (autodiff-only, Eigen+Ceres-only).
+        bata_pairwise_direction_error.h
+        bata_pairwise_direction_error_with_rotation.h
+        direct_scale_regularization_error.h
+        fetzer_focal_length_cost.h
+        fetzer_focal_length_same_camera_cost.h
+        focal_length_random_walk_error.h
+        grav_error.h
+        log_scale_prior_error.h
+        mahalanobis_bata_directional_error.h
+        mahalanobis_bata_directional_error_with_rotation.h
+        metric_depth_error.h
+        metric_depth_error_with_rotation.h
+        point_camera_anisotropic_range_error.h
+        point_camera_direct_scaled_range_error.h
+        point_camera_range_error.h
+        point_camera_scaled_metric_range_error.h
+        point_camera_scaled_range_error.h
+        relative_translation_error.h
+        rotation_prior_error.h
+        scale_prior_error.h
+        scale_regularization_error.h
+        weighted_bata_directional_error.h
+        weighted_bata_directional_error_with_rotation.h
+        weighted_point_camera_scaled_metric_range_error.h
     INTERFACE_LINK_LIBS
         colmap_geometry
         colmap_sensor
@@ -90,3 +115,29 @@ COLMAP_ADD_TEST(
     SRCS depth_prior_test.cc
     LINK_LIBS colmap_estimators_cost_functions
 )
+
+# §06 glomap-ported cost functor tests (one smoke test per functor).
+COLMAP_ADD_TEST(NAME bata_pairwise_direction_error_test SRCS bata_pairwise_direction_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME bata_pairwise_direction_error_with_rotation_test SRCS bata_pairwise_direction_error_with_rotation_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME direct_scale_regularization_error_test SRCS direct_scale_regularization_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME fetzer_focal_length_cost_test SRCS fetzer_focal_length_cost_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME fetzer_focal_length_same_camera_cost_test SRCS fetzer_focal_length_same_camera_cost_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME focal_length_random_walk_error_test SRCS focal_length_random_walk_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME grav_error_test SRCS grav_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME log_scale_prior_error_test SRCS log_scale_prior_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME mahalanobis_bata_directional_error_test SRCS mahalanobis_bata_directional_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME mahalanobis_bata_directional_error_with_rotation_test SRCS mahalanobis_bata_directional_error_with_rotation_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME metric_depth_error_test SRCS metric_depth_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME metric_depth_error_with_rotation_test SRCS metric_depth_error_with_rotation_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME point_camera_anisotropic_range_error_test SRCS point_camera_anisotropic_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME point_camera_direct_scaled_range_error_test SRCS point_camera_direct_scaled_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME point_camera_range_error_test SRCS point_camera_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME point_camera_scaled_metric_range_error_test SRCS point_camera_scaled_metric_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME point_camera_scaled_range_error_test SRCS point_camera_scaled_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME relative_translation_error_test SRCS relative_translation_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME rotation_prior_error_test SRCS rotation_prior_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME scale_prior_error_test SRCS scale_prior_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME scale_regularization_error_test SRCS scale_regularization_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME weighted_bata_directional_error_test SRCS weighted_bata_directional_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME weighted_bata_directional_error_with_rotation_test SRCS weighted_bata_directional_error_with_rotation_test.cc LINK_LIBS colmap_estimators_cost_functions)
+COLMAP_ADD_TEST(NAME weighted_point_camera_scaled_metric_range_error_test SRCS weighted_point_camera_scaled_metric_range_error_test.cc LINK_LIBS colmap_estimators_cost_functions)
