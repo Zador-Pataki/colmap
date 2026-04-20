@@ -9,6 +9,7 @@ void BindGlomapImagePair(py::module& m);
 void BindGlomapImage(py::module& m);
 void BindGlomapViewGraph(py::module& m);
 void BindGlomapOptions(py::module& m);
+void BindGlomapPipeline(py::module& m);
 
 void BindGlomapSceneTypes(py::module& m_outer) {
   // Fork-style scene types live under pycolmap.glomap.* to avoid name
@@ -28,4 +29,5 @@ void BindGlomapSceneTypes(py::module& m_outer) {
   BindGlomapImage(m);        // uses GravityInfo
   BindGlomapViewGraph(m);    // uses ImagePair
   BindGlomapOptions(m);
+  BindGlomapPipeline(m);     // 7 run_* free functions (§12)
 }

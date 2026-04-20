@@ -37,6 +37,8 @@ COLMAP_ADD_LIBRARY(
         # Database::PairIdToImagePair, std::optional<Rigid3d>) — wiring
         # deferred until those are reconciled.
         # track_retriangulation.h track_retriangulation.cc
+        # §12 pipeline run_* free functions.
+        pipeline.h pipeline.cc
     PUBLIC_LINK_LIBS
         colmap_glomap
         colmap_estimators_cost_functions
