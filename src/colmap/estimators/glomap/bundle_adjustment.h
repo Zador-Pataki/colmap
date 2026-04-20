@@ -15,11 +15,11 @@
 
 namespace colmap::glomap {
 
-// BundleAdjusterOptions is defined in colmap/estimators/glomap/bundle_adjustment_options.h (§07).
+// BundleAdjustmentOptions is defined in colmap/estimators/glomap/bundle_adjustment_options.h (§07).
 
 class BundleAdjuster {
  public:
-  BundleAdjuster(const BundleAdjusterOptions& options) : options_(options) {}
+  BundleAdjuster(const BundleAdjustmentOptions& options) : options_(options) {}
 
   // Returns true if the optimization was a success, false if there was a
   // failure.
@@ -30,7 +30,7 @@ class BundleAdjuster {
              std::unordered_map<track_t, Track>& tracks,
              IterationCallbackFn iteration_callback = nullptr);
 
-  BundleAdjusterOptions& GetOptions() { return options_; }
+  BundleAdjustmentOptions& GetOptions() { return options_; }
 
  private:
   // Reset the problem
@@ -54,7 +54,7 @@ class BundleAdjuster {
                              std::unordered_map<image_t, Image>& images,
                              std::unordered_map<track_t, Track>& tracks);
 
-  BundleAdjusterOptions options_;
+  BundleAdjustmentOptions options_;
 
   std::unique_ptr<ceres::Problem> problem_;
   std::shared_ptr<ceres::LossFunction> loss_function_;

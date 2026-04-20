@@ -2,9 +2,22 @@
 
 #include <colmap/util/threading.h>
 
+#include <PoseLib/misc/colmap_models.h>
 #include <PoseLib/robust.h>
 
 namespace colmap::glomap {
+
+namespace {
+inline poselib::Camera ColmapCameraToPoseLibCamera(
+    const ::colmap::glomap::Camera& camera) {
+  return poselib::Camera(
+      camera.camera.ModelName(),
+      camera.camera.params,
+      camera.camera.width,
+      camera.camera.height);
+}
+}  // namespace
+
 
 void EstimateRelativePoses(ViewGraph& view_graph,
                            std::unordered_map<camera_t, Camera>& cameras,

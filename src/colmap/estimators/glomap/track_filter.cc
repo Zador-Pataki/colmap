@@ -2,6 +2,10 @@
 
 #include "colmap/glomap/math/rigid3d.h"
 
+namespace {
+constexpr double EPS = 1e-12;
+}
+
 namespace colmap::glomap {
 
 int TrackFilter::FilterTracksByReprojection(

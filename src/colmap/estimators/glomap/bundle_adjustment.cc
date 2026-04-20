@@ -42,26 +42,26 @@ bool BundleAdjuster::Solve(const ViewGraph& view_graph,
     ceres_callback = std::make_unique<SfMIterationCallback>(
         std::move(iteration_callback), images, tracks, view_graph,
         /*gp_mode=*/false);
-    options_.solver_options.callbacks.push_back(ceres_callback.get());
-    options_.solver_options.update_state_every_iteration = true;
+    options_.solver_base.solver_options.callbacks.push_back(ceres_callback.get());
+    options_.solver_base.solver_options.update_state_every_iteration = true;
   }
 
   // Set the solver options.
   ceres::Solver::Summary summary;
 
   // Do not use the iterative solver, as it does not seem to be helpful
-  options_.solver_options.linear_solver_type = ceres::SPARSE_SCHUR;
-  options_.solver_options.preconditioner_type = ceres::CLUSTER_TRIDIAGONAL;
+  options_.solver_base.solver_options.linear_solver_type = ceres::SPARSE_SCHUR;
+  options_.solver_base.solver_options.preconditioner_type = ceres::CLUSTER_TRIDIAGONAL;
 
-  options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
-  ceres::Solve(options_.solver_options, problem_.get(), &summary);
+  options_.solver_base.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+  ceres::Solve(options_.solver_base.solver_options, problem_.get(), &summary);
 
   // Clean up callback from solver options
   if (ceres_callback) {
-    auto& cbs = options_.solver_options.callbacks;
+    auto& cbs = options_.solver_base.solver_options.callbacks;
     cbs.erase(std::remove(cbs.begin(), cbs.end(), ceres_callback.get()),
               cbs.end());
-    options_.solver_options.update_state_every_iteration = false;
+    options_.solver_base.solver_options.update_state_every_iteration = false;
   }
   if (VLOG_IS_ON(2))
     LOG(INFO) << summary.FullReport();
@@ -120,10 +120,10 @@ void BundleAdjuster::AddCamerasAndPointsToParameterGroups(
   if (tracks.size() == 0) return;
 
   // Create a custom ordering for Schur-based problems.
-  options_.solver_options.linear_solver_ordering.reset(
+  options_.solver_base.solver_options.linear_solver_ordering.reset(
       new ceres::ParameterBlockOrdering);
   ceres::ParameterBlockOrdering* parameter_ordering =
-      options_.solver_options.linear_solver_ordering.get();
+      options_.solver_base.solver_options.linear_solver_ordering.get();
   // Add point parameters to group 0.
   for (auto& [track_id, track] : tracks) {
     if (problem_->HasParameterBlock(track.xyz.data()))

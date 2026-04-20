@@ -26,13 +26,13 @@ COLMAP_ADD_LIBRARY(
         rotation_averaging.h rotation_averaging.cc
         # §10 global positioner.
         global_positioner.h global_positioner.cc
-        # §11 non-RA/non-GP estimators — files present in tree but not built
-        # yet. Each requires porting additional fork helpers (union_find,
-        # two_view_geometry, colmap_converter, ColmapCameraToPoseLibCamera) and
-        # reconciling BundleAdjusterOptions→BundleAdjustmentOptions rename +
-        # colmap4 API differences (DatabaseCache::Create signature,
-        # BundleAdjustmentOptions refine_extra_params). Wired into build at §12
-        # when run_* wrappers depend on them.
+        # §11 non-RA/non-GP estimators — ported into tree but NOT yet built.
+        # Reconciling fork↔colmap4 API divergences is nontrivial: colmap4's
+        # Image uses SetCamFromWorld() not `.cam_from_world=`, PosePrior
+        # has no IsValid(), Database lacks PairIdToImagePair, TwoViewGeometry
+        # wraps Rigid3d in std::optional, BundleAdjustmentOptions renamed
+        # refine_extrinsics→refine_extra_params, BundleAdjustmentSummary
+        # drops .termination_type. Wiring at §12 when run_* wrappers need them.
         # relpose_estimation.h relpose_estimation.cc
         # view_graph_calibration.h view_graph_calibration.cc
         # bundle_adjustment.h bundle_adjustment.cc
@@ -51,13 +51,3 @@ COLMAP_ADD_TEST(
     SRCS options_test.cc
     LINK_LIBS colmap_estimators_glomap
 )
-# §11 non-RA/non-GP estimators (stub — may need per-file surgery to build)
-# TODO: several fork references (BundleAdjusterOptions vs BundleAdjustmentOptions
-# rename, RelativePoseEstimationOptions poselib dep, colmap_converter dep)
-# need reconciliation with §07 options. Commented out until build proven.
-#        relpose_estimation.h relpose_estimation.cc
-#        view_graph_calibration.h view_graph_calibration.cc
-#        bundle_adjustment.h bundle_adjustment.cc
-#        track_filter.h track_filter.cc
-#        track_establishment.h track_establishment.cc
-#        track_retriangulation.h track_retriangulation.cc

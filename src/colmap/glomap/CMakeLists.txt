@@ -21,6 +21,13 @@ COLMAP_ADD_LIBRARY(
         math/l1_solver.h
         math/rigid3d.h math/rigid3d.cc
         math/tree.h math/tree.cc
+        # §11 additional helpers — union_find is header-only + self-contained.
+        # two_view_geometry + colmap_converter also not wired here; they need
+        # EPS constant adds and colmap4 std::optional API adaptations
+        # respectively. See §11 note in estimators/glomap/CMakeLists.txt.
+        math/union_find.h
+        # math/two_view_geometry.h math/two_view_geometry.cc
+        # io/colmap_converter.h io/colmap_converter.cc
     PUBLIC_LINK_LIBS
         colmap_util
         colmap_geometry
