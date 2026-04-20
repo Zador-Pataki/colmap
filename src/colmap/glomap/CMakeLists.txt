@@ -17,6 +17,10 @@ COLMAP_ADD_LIBRARY(
         track.h track.cc
         view_graph.h view_graph.cc
         camera.h camera.cc
+        # §09 math helpers (l1 solver header-only; rigid3d + tree have .cc)
+        math/l1_solver.h
+        math/rigid3d.h math/rigid3d.cc
+        math/tree.h math/tree.cc
     PUBLIC_LINK_LIBS
         colmap_util
         colmap_geometry
@@ -24,6 +28,7 @@ COLMAP_ADD_LIBRARY(
         colmap_scene
         colmap_estimators
         Eigen3::Eigen
+        ${Boost_GRAPH_LIBRARY}
 )
 
 COLMAP_ADD_TEST(

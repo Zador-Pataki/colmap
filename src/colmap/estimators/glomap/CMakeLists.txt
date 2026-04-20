@@ -10,7 +10,6 @@ set(FOLDER_NAME "estimators_glomap")
 
 COLMAP_ADD_LIBRARY(
     NAME colmap_estimators_glomap
-    TYPE INTERFACE
     SRCS
         # §07 options headers.
         bundle_adjustment_options.h
@@ -22,8 +21,12 @@ COLMAP_ADD_LIBRARY(
         track_establishment_options.h
         triangulator_options.h
         view_graph_calibrator_options.h
-    INTERFACE_LINK_LIBS
+        # §09 rotation averaging + iteration callback.
+        iteration_callback.h
+        rotation_averaging.h rotation_averaging.cc
+    PUBLIC_LINK_LIBS
         colmap_glomap
+        colmap_estimators_cost_functions
         Ceres::ceres
         Eigen3::Eigen
 )
