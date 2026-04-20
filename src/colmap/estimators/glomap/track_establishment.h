@@ -4,6 +4,7 @@
 #include "colmap/estimators/glomap/track_establishment_options.h"
 
 #include "colmap/glomap/math/union_find.h"
+#include "colmap/glomap/camera.h"
 #include "colmap/glomap/image.h"
 #include "colmap/glomap/image_pair.h"
 #include "colmap/glomap/track.h"

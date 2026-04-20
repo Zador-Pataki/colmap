@@ -1,6 +1,10 @@
 #include "colmap/glomap/math/two_view_geometry.h"
 
 namespace colmap::glomap {
+
+namespace {
+constexpr double EPS = 1e-12;
+}
 // Code from PoseLib by Viktor Larsson
 bool CheckCheirality(const Rigid3d& pose,
                      const Eigen::Vector3d& x1,
@@ -39,8 +43,9 @@ double GetOrientationSignum(const Eigen::Matrix3d& F,
 }
 
 void EssentialFromMotion(const Rigid3d& pose, Eigen::Matrix3d* E) {
-  *E << 0.0, -pose.translation(2), pose.translation(1), pose.translation(2),
-      0.0, -pose.translation(0), -pose.translation(1), pose.translation(0), 0.0;
+  // colmap4's translation() returns Eigen::Map<Vector3d>, no operator().
+  const Eigen::Vector3d t = pose.translation();
+  *E << 0.0, -t(2), t(1), t(2), 0.0, -t(0), -t(1), t(0), 0.0;
   *E = (*E) * pose.rotation().toRotationMatrix();
 }
 

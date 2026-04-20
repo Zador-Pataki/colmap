@@ -26,22 +26,21 @@ COLMAP_ADD_LIBRARY(
         rotation_averaging.h rotation_averaging.cc
         # §10 global positioner.
         global_positioner.h global_positioner.cc
-        # §11 non-RA/non-GP estimators — ported into tree but NOT yet built.
-        # Reconciling fork↔colmap4 API divergences is nontrivial: colmap4's
-        # Image uses SetCamFromWorld() not `.cam_from_world=`, PosePrior
-        # has no IsValid(), Database lacks PairIdToImagePair, TwoViewGeometry
-        # wraps Rigid3d in std::optional, BundleAdjustmentOptions renamed
-        # refine_extrinsics→refine_extra_params, BundleAdjustmentSummary
-        # drops .termination_type. Wiring at §12 when run_* wrappers need them.
-        # relpose_estimation.h relpose_estimation.cc
-        # view_graph_calibration.h view_graph_calibration.cc
-        # bundle_adjustment.h bundle_adjustment.cc
-        # track_filter.h track_filter.cc
-        # track_establishment.h track_establishment.cc
+        # §11 non-RA/non-GP estimators (5/6 wired; retriangulation blocked).
+        relpose_estimation.h relpose_estimation.cc
+        view_graph_calibration.h view_graph_calibration.cc
+        bundle_adjustment.h bundle_adjustment.cc
+        track_filter.h track_filter.cc
+        track_establishment.h track_establishment.cc
+        # track_retriangulation needs colmap_converter.h which hits multiple
+        # colmap4 API divergences (SetCamFromWorld, PosePrior::IsValid,
+        # Database::PairIdToImagePair, std::optional<Rigid3d>) — wiring
+        # deferred until those are reconciled.
         # track_retriangulation.h track_retriangulation.cc
     PUBLIC_LINK_LIBS
         colmap_glomap
         colmap_estimators_cost_functions
+        PoseLib::PoseLib
         Ceres::ceres
         Eigen3::Eigen
 )

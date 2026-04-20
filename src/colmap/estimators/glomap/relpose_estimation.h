@@ -1,5 +1,6 @@
 #pragma once
 
+#include "colmap/glomap/camera.h"
 #include "colmap/glomap/image.h"
 #include "colmap/glomap/image_pair.h"
 #include "colmap/glomap/track.h"

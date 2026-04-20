@@ -33,9 +33,16 @@ int TrackFilter::FilterTracksByReprojection(
             (pt_reproj - feature_undist.head(2) / (feature_undist(2) + EPS))
                 .norm();
       } else {
-        Eigen::Vector2d pt_reproj = pt_calc.head(2) / pt_calc(2);
-        Eigen::Vector2d pt_dist;
-        pt_dist = cameras.at(image.camera_id).ImgFromCam(pt_reproj);
+        // colmap4's ImgFromCam takes Vector3d (camera-frame point) and
+        // returns std::optional<Vector2d>. Pass pt_calc directly (un-
+        // normalized camera point) — the camera model handles division.
+        const auto pt_dist_opt =
+            cameras.at(image.camera_id).camera.ImgFromCam(pt_calc);
+        const Eigen::Vector2d pt_dist =
+            pt_dist_opt.has_value()
+                ? *pt_dist_opt
+                : Eigen::Vector2d::Constant(
+                      std::numeric_limits<double>::infinity());
         
         reprojection_error = (pt_dist - image.features.at(feature_id)).norm();
       }
@@ -75,7 +82,7 @@ int TrackFilter::FilterTracksByAngle(
       if (pt_calc(2) < EPS) continue;
 
       pt_calc = pt_calc.normalized();
-      double thres_cam = (cameras.at(image.camera_id).has_prior_focal_length)
+      double thres_cam = (cameras.at(image.camera_id).camera.has_prior_focal_length)
                              ? thres
                              : thres_uncalib;
 

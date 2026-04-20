@@ -3,6 +3,7 @@
 #include "colmap/estimators/glomap/view_graph_calibrator_options.h"
 
 #include "colmap/estimators/glomap/optimization_base_options.h"
+#include "colmap/glomap/camera.h"
 #include "colmap/glomap/image.h"
 #include "colmap/glomap/image_pair.h"
 #include "colmap/glomap/track.h"

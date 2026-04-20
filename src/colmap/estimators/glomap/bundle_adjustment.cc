@@ -2,7 +2,8 @@
 
 #include "colmap/estimators/glomap/iteration_callback.h"
 
-#include <colmap/estimators/cost_functions.h>
+#include "colmap/estimators/cost_functions/alignment.h"
+#include "colmap/estimators/cost_functions/reprojection_error.h"
 #include <colmap/estimators/manifold.h>
 #include <colmap/sensor/models.h>
 
@@ -75,7 +76,7 @@ void BundleAdjuster::Reset() {
   ceres::Problem::Options problem_options;
   problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
   problem_ = std::make_unique<ceres::Problem>(problem_options);
-  loss_function_ = options_.CreateLossFunction();
+  loss_function_ = std::make_shared<ceres::HuberLoss>(options_.thres_loss_function);
 }
 
 void BundleAdjuster::AddPointToCameraConstraints(
@@ -93,7 +94,7 @@ void BundleAdjuster::AddPointToCameraConstraints(
 
       ceres::CostFunction* cost_function =
           colmap::CreateCameraCostFunction<colmap::ReprojErrorCostFunctor>(
-              cameras[image.camera_id].model_id,
+              cameras[image.camera_id].camera.model_id,
               image.features[observation.second]);
 
       if (cost_function != nullptr) {
@@ -103,11 +104,11 @@ void BundleAdjuster::AddPointToCameraConstraints(
             image.cam_from_world.rotation().coeffs().data(),
             image.cam_from_world.translation().data(),
             tracks[track_id].xyz.data(),
-            cameras[image.camera_id].params.data());
+            cameras[image.camera_id].camera.params.data());
       } else {
         LOG(ERROR) << "Camera model not supported: "
                    << colmap::CameraModelIdToName(
-                          cameras[image.camera_id].model_id);
+                          cameras[image.camera_id].camera.model_id);
       }
     }
   }
@@ -142,8 +143,8 @@ void BundleAdjuster::AddCamerasAndPointsToParameterGroups(
 
   // Add camera parameters to group 1.
   for (auto& [camera_id, camera] : cameras) {
-    if (problem_->HasParameterBlock(camera.params.data()))
-      parameter_ordering->AddElementToGroup(camera.params.data(), 1);
+    if (problem_->HasParameterBlock(camera.camera.params.data()))
+      parameter_ordering->AddElementToGroup(camera.camera.params.data(), 1);
   }
 }
 
@@ -184,22 +185,22 @@ void BundleAdjuster::ParameterizeVariables(
   // Parameterize the camera parameters, or set them to be constant if desired
   if (options_.optimize_intrinsics) {
     for (auto& [camera_id, camera] : cameras) {
-      if (problem_->HasParameterBlock(camera.params.data())) {
+      if (problem_->HasParameterBlock(camera.camera.params.data())) {
         std::vector<int> principal_point_idxs;
-        for (auto idx : camera.PrincipalPointIdxs()) {
+        for (auto idx : camera.camera.PrincipalPointIdxs()) {
           principal_point_idxs.push_back(idx);
         }
-        colmap::SetSubsetManifold(camera.params.size(),
+        colmap::SetSubsetManifold(camera.camera.params.size(),
                                   principal_point_idxs,
                                   problem_.get(),
-                                  camera.params.data());
+                                  camera.camera.params.data());
       }
     }
 
   } else {
     for (auto& [camera_id, camera] : cameras) {
-      if (problem_->HasParameterBlock(camera.params.data())) {
-        problem_->SetParameterBlockConstant(camera.params.data());
+      if (problem_->HasParameterBlock(camera.camera.params.data())) {
+        problem_->SetParameterBlockConstant(camera.camera.params.data());
       }
     }
   }

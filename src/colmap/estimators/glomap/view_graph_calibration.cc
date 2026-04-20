@@ -2,6 +2,8 @@
 
 #include "colmap/estimators/cost_functions/glomap_helpers.h"
 #include "colmap/glomap/math/two_view_geometry.h"
+#include "colmap/estimators/cost_functions/fetzer_focal_length_cost.h"
+#include "colmap/estimators/cost_functions/fetzer_focal_length_same_camera_cost.h"
 
 #include <colmap/scene/two_view_geometry.h>
 
@@ -19,9 +21,9 @@ bool ViewGraphCalibrator::Solve(ViewGraph& view_graph,
 
   // Set the solver options.
   if (cameras.size() < 50)
-    options_.solver_options.linear_solver_type = ceres::DENSE_NORMAL_CHOLESKY;
+    options_.solver_base.solver_options.linear_solver_type = ceres::DENSE_NORMAL_CHOLESKY;
   else
-    options_.solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+    options_.solver_base.solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
 
   // Add the image pairs into the problem
   AddImagePairsToProblem(view_graph, cameras, images);
@@ -36,8 +38,8 @@ bool ViewGraphCalibrator::Solve(ViewGraph& view_graph,
 
   // Solve the problem
   ceres::Solver::Summary summary;
-  options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
-  ceres::Solve(options_.solver_options, problem_.get(), &summary);
+  options_.solver_base.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+  ceres::Solve(options_.solver_base.solver_options, problem_.get(), &summary);
 
   VLOG(2) << summary.FullReport();
 
@@ -61,7 +63,7 @@ void ViewGraphCalibrator::Reset(
   ceres::Problem::Options problem_options;
   problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
   problem_ = std::make_unique<ceres::Problem>(problem_options);
-  loss_function_ = options_.CreateLossFunction();
+  loss_function_ = std::make_shared<ceres::CauchyLoss>(options_.solver_base.thres_loss_function);
 }
 
 void ViewGraphCalibrator::AddImagePairsToProblem(
@@ -110,7 +112,7 @@ size_t ViewGraphCalibrator::ParameterizeCameras(
 
     num_cameras++;
     problem_->SetParameterLowerBound(&(focals_[camera_id]), 0, 1e-3);
-    if (camera.has_prior_focal_length) {
+    if (camera.camera.has_prior_focal_length) {
       problem_->SetParameterBlockConstant(&(focals_[camera_id]));
       num_cameras--;
     }
@@ -140,8 +142,8 @@ void ViewGraphCalibrator::CopyBackResults(
     camera.has_refined_focal_length = true;
 
     // Update the focal length
-    for (const size_t idx : camera.FocalLengthIdxs()) {
-      camera.params[idx] = focals_[camera_id];
+    for (const size_t idx : camera.camera.FocalLengthIdxs()) {
+      camera.camera.params[idx] = focals_[camera_id];
     }
   }
   LOG(INFO) << counter << " cameras are rejected in view graph calibration";
@@ -149,7 +151,7 @@ void ViewGraphCalibrator::CopyBackResults(
 
 size_t ViewGraphCalibrator::FilterImagePairs(ViewGraph& view_graph) const {
   ceres::Problem::EvaluateOptions eval_options;
-  eval_options.num_threads = options_.solver_options.num_threads;
+  eval_options.num_threads = options_.solver_base.solver_options.num_threads;
   eval_options.apply_loss_function = false;
   std::vector<double> residuals;
   problem_->Evaluate(eval_options, nullptr, &residuals, nullptr, nullptr);
