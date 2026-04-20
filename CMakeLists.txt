@@ -397,6 +397,7 @@ set(COLMAP_EXPORT_LIBS
     colmap_controllers
     colmap_estimators
     colmap_estimators_cost_functions
+    colmap_estimators_glomap
     colmap_estimators_solvers
     colmap_exe
     colmap_feature_types
