@@ -30,6 +30,7 @@
 set(FOLDER_NAME "estimators")
 
 add_subdirectory(cost_functions)
+add_subdirectory(glomap)
 add_subdirectory(solvers)
 
 COLMAP_ADD_LIBRARY(
