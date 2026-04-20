@@ -26,8 +26,13 @@ COLMAP_ADD_LIBRARY(
         # EPS constant adds and colmap4 std::optional API adaptations
         # respectively. See §11 note in estimators/glomap/CMakeLists.txt.
         math/union_find.h
-        # math/two_view_geometry.h math/two_view_geometry.cc
-        # io/colmap_converter.h io/colmap_converter.cc
+        math/two_view_geometry.h math/two_view_geometry.cc
+        # io/colmap_converter.h io/colmap_converter.cc   # §14 deferred (API divergences)
+        # §14 processors (bound as module-level free functions in pycolmap).
+        processors/relpose_filter.h processors/relpose_filter.cc
+        processors/image_undistorter.h processors/image_undistorter.cc
+        processors/image_pair_inliers.h processors/image_pair_inliers.cc
+        processors/view_graph_manipulation.h processors/view_graph_manipulation.cc
     PUBLIC_LINK_LIBS
         colmap_util
         colmap_geometry

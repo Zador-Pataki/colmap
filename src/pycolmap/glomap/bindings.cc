@@ -11,6 +11,7 @@ void BindGlomapViewGraph(py::module& m);
 void BindGlomapOptions(py::module& m);
 void BindGlomapPipeline(py::module& m);
 void BindGlomapCostFunctions(py::module& m);
+void BindGlomapFreeFunctions(py::module& m);
 
 void BindGlomapSceneTypes(py::module& m_outer) {
   // Fork-style scene types live under pycolmap.glomap.* to avoid name
@@ -32,4 +33,5 @@ void BindGlomapSceneTypes(py::module& m_outer) {
   BindGlomapOptions(m);
   BindGlomapPipeline(m);         // 7 run_* free functions (§12)
   BindGlomapCostFunctions(m);    // §13 cost-functor factories (no-op)
+  BindGlomapFreeFunctions(m);    // §14 enums + 12 free functions
 }
