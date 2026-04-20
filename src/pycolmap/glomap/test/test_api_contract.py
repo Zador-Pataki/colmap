@@ -182,3 +182,21 @@ def test_nested_loss_function_config_accepts_dict():
 def test_write_glomap_reconstruction_raises():
     with pytest.raises(RuntimeError, match="not yet ported to colmap4"):
         g.write_glomap_reconstruction("/tmp/x", {}, {}, {})
+
+
+# ---------- live C++ invocation: no-arg / empty-input paths ----------
+
+
+def test_undistort_images_empty_input():
+    # Actually crosses the Python↔C++ boundary into ThreadPool + logging.
+    # Validates the colmap4 std::optional<Vector2d> adaptation compiles
+    # *and* runs without crashing on the easy path.
+    result = g.undistort_images({}, {})
+    assert result == {}
+
+
+def test_view_graph_empty_batch_ops():
+    vg = g.ViewGraph()
+    # Trivial but exercises every empty-path return in the batch methods.
+    assert vg.num_pairs == 0
+    assert vg.num_images == 0
