@@ -44,6 +44,7 @@ COLMAP_ADD_LIBRARY(
         utils.h
         weighted_reprojection_error.h
         # §06 glomap-ported cost functors (autodiff-only, Eigen+Ceres-only).
+        glomap_helpers.h
         bata_pairwise_direction_error.h
         bata_pairwise_direction_error_with_rotation.h
         direct_scale_regularization_error.h

@@ -6,7 +6,7 @@
 # bundle_adjustment, optimization_base. §07 lands the options structs;
 # implementations follow in §09-§11.
 
-set(FOLDER_NAME "estimators/glomap")
+set(FOLDER_NAME "estimators_glomap")
 
 COLMAP_ADD_LIBRARY(
     NAME colmap_estimators_glomap

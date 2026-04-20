@@ -22,9 +22,13 @@ void BindGlomapOptions(py::module& m) {
   py::classh<OptimizationBaseOptions> PyBase(m, "OptimizationBaseOptions");
   PyBase.def(py::init<>())
       .def_readwrite("thres_loss_function",
-                     &OptimizationBaseOptions::thres_loss_function)
-      .def_readwrite("solver_options",
-                     &OptimizationBaseOptions::solver_options);
+                     &OptimizationBaseOptions::thres_loss_function);
+  // Skip binding `solver_options` (ceres::Solver::Options) — that type is
+  // registered `py::module_local()` in ceres_bindings.cc so cross-TU
+  // `def_readwrite` triggers an AttributeError at module init. Callers that
+  // need to tweak ceres solver options can construct their own
+  // `pycolmap.SolverOptions()` and assign later via a separate setter if
+  // needed. TODO(§09/§10): expose read-only getter if any reader requires it.
   MakeDataclass(PyBase);
 
   // ----- GlobalPositionerOptions (nested LossFunctionConfig + 2 enums) -----
@@ -44,7 +48,7 @@ void BindGlomapOptions(py::module& m) {
 
   py::enum_<GlobalPositionerOptions::ConstraintType>(PyGP, "ConstraintType")
       .value("ONLY_POINTS", GlobalPositionerOptions::ConstraintType::ONLY_POINTS)
-      .export_values();
+      ;
 
   py::enum_<GlobalPositionerOptions::PointConstraintType>(PyGP,
                                                            "PointConstraintType")
@@ -52,7 +56,7 @@ void BindGlomapOptions(py::module& m) {
              GlobalPositionerOptions::PointConstraintType::GEOMETRY_ONLY)
       .value("SPLIT_METRIC_DEPTH",
              GlobalPositionerOptions::PointConstraintType::SPLIT_METRIC_DEPTH)
-      .export_values();
+      ;
 
   PyGP.def(py::init<>())
       .def_readwrite("solver_base", &GlobalPositionerOptions::solver_base)
@@ -145,13 +149,13 @@ void BindGlomapOptions(py::module& m) {
       .value("L1_IRLS", RotationEstimatorOptions::SolverType::L1_IRLS)
       .value("CERES_GRAVITY",
              RotationEstimatorOptions::SolverType::CERES_GRAVITY)
-      .export_values();
+      ;
 
   py::enum_<RotationEstimatorOptions::WeightType>(PyRA, "WeightType")
       .value("GEMAN_MCCLURE",
              RotationEstimatorOptions::WeightType::GEMAN_MCCLURE)
       .value("HALF_NORM", RotationEstimatorOptions::WeightType::HALF_NORM)
-      .export_values();
+      ;
 
   PyRA.def(py::init<>())
       .def_readwrite("solver_base", &RotationEstimatorOptions::solver_base)

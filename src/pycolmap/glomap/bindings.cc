@@ -27,5 +27,5 @@ void BindGlomapSceneTypes(py::module& m_outer) {
   BindGlomapTrack(m);        // uses Observation
   BindGlomapImage(m);        // uses GravityInfo
   BindGlomapViewGraph(m);    // uses ImagePair
-  BindGlomapOptions(m);      // 9 option structs + nested types (§07)
+  BindGlomapOptions(m);
 }

@@ -10,6 +10,7 @@
 #include <Eigen/LU>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
+#include "colmap/estimators/cost_functions/glomap_helpers.h"
 
 namespace colmap {
 
