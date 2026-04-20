@@ -17,12 +17,72 @@
 namespace py = pybind11;
 using namespace colmap::glomap;
 
+namespace {
+// Expose common ceres::Solver::Options fields as top-level properties on an
+// options class that carries `OptimizationBaseOptions solver_base`. Matches
+// fork's flat API (opts.max_num_iterations) instead of forcing callers through
+// opts.solver_base.solver_options.max_num_iterations.
+template <typename Cls>
+void BindCeresProperties(py::classh<Cls>& cls) {
+  cls.def_property(
+      "max_num_iterations",
+      [](const Cls& self) { return self.solver_base.solver_options.max_num_iterations; },
+      [](Cls& self, int v) { self.solver_base.solver_options.max_num_iterations = v; });
+  cls.def_property(
+      "function_tolerance",
+      [](const Cls& self) { return self.solver_base.solver_options.function_tolerance; },
+      [](Cls& self, double v) { self.solver_base.solver_options.function_tolerance = v; });
+  cls.def_property(
+      "gradient_tolerance",
+      [](const Cls& self) { return self.solver_base.solver_options.gradient_tolerance; },
+      [](Cls& self, double v) { self.solver_base.solver_options.gradient_tolerance = v; });
+  cls.def_property(
+      "parameter_tolerance",
+      [](const Cls& self) { return self.solver_base.solver_options.parameter_tolerance; },
+      [](Cls& self, double v) { self.solver_base.solver_options.parameter_tolerance = v; });
+  cls.def_property(
+      "num_threads",
+      [](const Cls& self) { return self.solver_base.solver_options.num_threads; },
+      [](Cls& self, int v) { self.solver_base.solver_options.num_threads = v; });
+  cls.def_property(
+      "minimizer_progress_to_stdout",
+      [](const Cls& self) { return self.solver_base.solver_options.minimizer_progress_to_stdout; },
+      [](Cls& self, bool v) { self.solver_base.solver_options.minimizer_progress_to_stdout = v; });
+  cls.def_property(
+      "thres_loss_function",
+      [](const Cls& self) { return self.solver_base.thres_loss_function; },
+      [](Cls& self, double v) { self.solver_base.thres_loss_function = v; });
+}
+
+// Same set, but for OptimizationBaseOptions itself (solver_options is a direct
+// member rather than nested under `solver_base`).
+void BindCeresPropertiesOnBase(py::classh<OptimizationBaseOptions>& cls) {
+  cls.def_property(
+      "max_num_iterations",
+      [](const OptimizationBaseOptions& self) { return self.solver_options.max_num_iterations; },
+      [](OptimizationBaseOptions& self, int v) { self.solver_options.max_num_iterations = v; });
+  cls.def_property(
+      "function_tolerance",
+      [](const OptimizationBaseOptions& self) { return self.solver_options.function_tolerance; },
+      [](OptimizationBaseOptions& self, double v) { self.solver_options.function_tolerance = v; });
+  cls.def_property(
+      "num_threads",
+      [](const OptimizationBaseOptions& self) { return self.solver_options.num_threads; },
+      [](OptimizationBaseOptions& self, int v) { self.solver_options.num_threads = v; });
+  cls.def_property(
+      "minimizer_progress_to_stdout",
+      [](const OptimizationBaseOptions& self) { return self.solver_options.minimizer_progress_to_stdout; },
+      [](OptimizationBaseOptions& self, bool v) { self.solver_options.minimizer_progress_to_stdout = v; });
+}
+}  // namespace
+
 void BindGlomapOptions(py::module& m) {
   // ----- OptimizationBaseOptions -----
   py::classh<OptimizationBaseOptions> PyBase(m, "OptimizationBaseOptions");
   PyBase.def(py::init<>())
       .def_readwrite("thres_loss_function",
                      &OptimizationBaseOptions::thres_loss_function);
+  BindCeresPropertiesOnBase(PyBase);
   // Skip binding `solver_options` (ceres::Solver::Options) — that type is
   // registered `py::module_local()` in ceres_bindings.cc so cross-TU
   // `def_readwrite` triggers an AttributeError at module init. Callers that
@@ -140,6 +200,7 @@ void BindGlomapOptions(py::module& m) {
                      &GlobalPositionerOptions::loss_normal_depth_trackstart)
       .def_readwrite("loss_relative_pose",
                      &GlobalPositionerOptions::loss_relative_pose);
+  BindCeresProperties(PyGP);
   MakeDataclass(PyGP);
 
   // ----- RotationEstimatorOptions (nested SolverType + WeightType enums) -----
@@ -217,6 +278,7 @@ void BindGlomapOptions(py::module& m) {
       .def_readwrite("update_rel_rotations",
                      &RotationEstimatorOptions::update_rel_rotations)
       .def_readwrite("min_weight", &RotationEstimatorOptions::min_weight);
+  BindCeresProperties(PyRA);
   MakeDataclass(PyRA);
 
   // ----- BundleAdjustmentOptions -----
@@ -235,6 +297,7 @@ void BindGlomapOptions(py::module& m) {
                      &BundleAdjustmentOptions::min_num_view_per_track)
       .def_readwrite("thres_loss_function",
                      &BundleAdjustmentOptions::thres_loss_function);
+  BindCeresProperties(PyBA);
   MakeDataclass(PyBA);
 
   // ----- ViewGraphCalibratorOptions -----
@@ -247,6 +310,7 @@ void BindGlomapOptions(py::module& m) {
                      &ViewGraphCalibratorOptions::thres_higher_ratio)
       .def_readwrite("thres_two_view_error",
                      &ViewGraphCalibratorOptions::thres_two_view_error);
+  BindCeresProperties(PyVGC);
   MakeDataclass(PyVGC);
 
   // ----- TriangulatorOptions -----
