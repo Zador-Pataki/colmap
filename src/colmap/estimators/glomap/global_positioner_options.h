@@ -2,7 +2,10 @@
 
 #include "colmap/estimators/glomap/optimization_base_options.h"
 
+#include <memory>
 #include <string>
+
+#include <ceres/loss_function.h>
 
 namespace colmap::glomap {
 
@@ -96,5 +99,18 @@ struct GlobalPositionerOptions {
   LossFunctionConfig loss_normal_depth_trackstart = {"huber", 1.0, 1.0};
   LossFunctionConfig loss_relative_pose = {"huber", 0.1, 1.0};
 };
+
+// Namespace-scope alias so ported fork code referencing unqualified
+// `LossFunctionConfig` keeps compiling.
+using LossFunctionConfig = GlobalPositionerOptions::LossFunctionConfig;
+
+// Free-function helper (fork had it as a static method on GlobalPositionerOptions).
+// Implementation lives in global_positioner.cc.
+std::shared_ptr<ceres::LossFunction> CreateLossFromConfig(
+    const LossFunctionConfig& config);
+
+// Namespace-scope alias so ported fork code that references the unqualified
+// name `LossFunctionConfig` keeps working.
+using LossFunctionConfig = GlobalPositionerOptions::LossFunctionConfig;
 
 }  // namespace colmap::glomap

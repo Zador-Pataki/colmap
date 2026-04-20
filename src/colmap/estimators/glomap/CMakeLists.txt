@@ -24,6 +24,8 @@ COLMAP_ADD_LIBRARY(
         # §09 rotation averaging + iteration callback.
         iteration_callback.h
         rotation_averaging.h rotation_averaging.cc
+        # §10 global positioner.
+        global_positioner.h global_positioner.cc
     PUBLIC_LINK_LIBS
         colmap_glomap
         colmap_estimators_cost_functions
