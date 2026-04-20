@@ -402,6 +402,7 @@ set(COLMAP_EXPORT_LIBS
     colmap_feature_types
     colmap_feature
     colmap_geometry
+    colmap_glomap
     colmap_image
     colmap_math
     colmap_optim

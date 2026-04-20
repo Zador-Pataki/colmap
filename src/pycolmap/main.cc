@@ -18,6 +18,7 @@ void BindEstimators(py::module& m);
 void BindFeatureTypes(py::module& m);
 void BindFeature(py::module& m);
 void BindGeometry(py::module& m);
+void BindGlomapSceneTypes(py::module& m);
 void BindImage(py::module& m);
 void BindOptim(py::module& m);
 void BindPipeline(py::module& m);
@@ -59,6 +60,7 @@ PYBIND11_MODULE(_core, m) {
   BindScene(m);
   BindImage(m);
   BindEstimators(m);
+  BindGlomapSceneTypes(m);
   BindRetrieval(m);
   BindSfm(m);
 #if defined(COLMAP_MVS_ENABLED)

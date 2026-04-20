@@ -51,12 +51,14 @@ TEST(ImagePair, ImagePairToPairId_Symmetric) {
 }
 
 TEST(ImagePair, PairIdToImagePair_InvertsImagePairToPairId) {
+  // Contract: ImagePairToPairId normalizes to (min, max) internally; the
+  // inverse PairIdToImagePair returns (max, min) — a=larger, b=smaller.
   const image_pair_t id = ImagePair::ImagePairToPairId(7, 13);
   image_t a = 0;
   image_t b = 0;
   ImagePair::PairIdToImagePair(id, a, b);
-  EXPECT_EQ(a, 7u);
-  EXPECT_EQ(b, 13u);
+  EXPECT_EQ(a, 13u);
+  EXPECT_EQ(b, 7u);
 }
 
 TEST(ImagePair, OstreamOperator_EmitsExpectedPrefix) {

@@ -1,5 +1,6 @@
 #include "colmap/glomap/gravity_info.h"
 
+#include <Eigen/LU>
 #include <Eigen/QR>
 
 namespace colmap::glomap {

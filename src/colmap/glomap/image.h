@@ -78,8 +78,8 @@ struct Image {
   std::vector<double> angular_stddevs_z;
 
   // --- Per-image scale parameters (optimizable) ---
-  double log_scale;
-  double log_scale_stddev;
+  double log_scale = 0;
+  double log_scale_stddev = 0;
 
   // --- Gravity prior uncertainty (radians; 0 = use option default) ---
   double gravity_sigma = 0;
