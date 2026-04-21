@@ -44,7 +44,9 @@ COLMAP_ADD_LIBRARY(
         generalized_pose.h generalized_pose.cc
         global_positioning.h global_positioning.cc
         gravity_refinement.h gravity_refinement.cc
+        loss_function_config.h loss_function_config.cc
         pose.h pose.cc
+        pose_graph_processors.h pose_graph_processors.cc
         rotation_averaging.h rotation_averaging.cc
         rotation_averaging_impl.h rotation_averaging_impl.cc
         triangulation.h triangulation.cc
@@ -127,9 +129,20 @@ COLMAP_ADD_TEST(
     SRCS gravity_refinement_test.cc
     LINK_LIBS colmap_estimators
 )
+COLMAP_ADD_TEST(
+    NAME pose_graph_processors_test
+    SRCS pose_graph_processors_test.cc
+    LINK_LIBS colmap_estimators
+)
 
 COLMAP_ADD_TEST(
     NAME global_positioning_test
     SRCS global_positioning_test.cc
+    LINK_LIBS colmap_estimators
+)
+
+COLMAP_ADD_TEST(
+    NAME options_test
+    SRCS options_test.cc
     LINK_LIBS colmap_estimators
 )

@@ -1,5 +1,6 @@
 #include "colmap/estimators/global_positioning.h"
 #include "colmap/estimators/gravity_refinement.h"
+#include "colmap/estimators/loss_function_config.h"
 #include "colmap/estimators/rotation_averaging.h"
 
 #include "pycolmap/helpers.h"
@@ -11,6 +12,34 @@
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
+
+void BindLossFunctionConfig(py::module& m) {
+  py::classh<LossFunctionConfig>(m, "LossFunctionConfig")
+      .def(py::init<>())
+      .def(py::init<const std::string&, double, double>(),
+           "name"_a,
+           "scale"_a = 1.0,
+           "weight"_a = 1.0)
+      .def_readwrite("name", &LossFunctionConfig::name)
+      .def_readwrite("scale", &LossFunctionConfig::scale)
+      .def_readwrite("weight", &LossFunctionConfig::weight)
+      .def("__repr__", [](const LossFunctionConfig& c) {
+        return "LossFunctionConfig(name='" + c.name + "', scale=" +
+               std::to_string(c.scale) + ", weight=" +
+               std::to_string(c.weight) + ")";
+      });
+
+  auto PyPointConstraintType =
+      py::enum_<PointConstraintType>(m, "PointConstraintType")
+          .value("GEOMETRY_ONLY", PointConstraintType::GEOMETRY_ONLY)
+          .value("SPLIT_METRIC_DEPTH", PointConstraintType::SPLIT_METRIC_DEPTH);
+  AddStringToEnumConstructor(PyPointConstraintType);
+
+  auto PyConstraintType = py::enum_<ConstraintType>(m, "ConstraintType")
+                              .value("ONLY_POINTS", ConstraintType::ONLY_POINTS)
+                              .value("ALL", ConstraintType::ALL);
+  AddStringToEnumConstructor(PyConstraintType);
+}
 
 void BindGlobalPositioner(py::module& m) {
   auto PyGlobalPositionerOptions =
@@ -56,7 +85,76 @@ void BindGlobalPositioner(py::module& m) {
                          "Scaling factor for the loss function.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
-                         "Whether to use custom parameter block ordering.");
+                         "Whether to use custom parameter block ordering.")
+          .def_readwrite("random_init_scale",
+                         &GlobalPositionerOptions::random_init_scale)
+          .def_readwrite("use_init", &GlobalPositionerOptions::use_init)
+          .def_readwrite("optimize_depth_map_scales",
+                         &GlobalPositionerOptions::optimize_depth_map_scales)
+          .def_readwrite("regularize_rotations",
+                         &GlobalPositionerOptions::regularize_rotations)
+          .def_readwrite("rotation_prior_sigma",
+                         &GlobalPositionerOptions::rotation_prior_sigma)
+          .def_readwrite("loss_rotation_prior",
+                         &GlobalPositionerOptions::loss_rotation_prior)
+          .def_readwrite("constraint_type",
+                         &GlobalPositionerOptions::constraint_type)
+          .def_readwrite("point_constraint_type",
+                         &GlobalPositionerOptions::point_constraint_type)
+          .def_readwrite("scale_regularization_sigma",
+                         &GlobalPositionerOptions::scale_regularization_sigma)
+          .def_readwrite("scale_prior_stddev",
+                         &GlobalPositionerOptions::scale_prior_stddev)
+          .def_readwrite("regularize_depth_map_scales",
+                         &GlobalPositionerOptions::regularize_depth_map_scales)
+          .def_readwrite("use_log_scale_for_depth_map_scales",
+                         &GlobalPositionerOptions::
+                             use_log_scale_for_depth_map_scales)
+          .def_readwrite("use_log_residual_for_depth",
+                         &GlobalPositionerOptions::use_log_residual_for_depth)
+          .def_readwrite("zero_residual_behind_camera",
+                         &GlobalPositionerOptions::zero_residual_behind_camera)
+          .def_readwrite("smooth_log_linear_transition",
+                         &GlobalPositionerOptions::smooth_log_linear_transition)
+          .def_readwrite("log_linear_threshold",
+                         &GlobalPositionerOptions::log_linear_threshold)
+          .def_readwrite("filter_depth_outliers",
+                         &GlobalPositionerOptions::filter_depth_outliers)
+          .def_readwrite("consecutive_trivial",
+                         &GlobalPositionerOptions::consecutive_trivial)
+          .def_readwrite("loss_normal_geometry",
+                         &GlobalPositionerOptions::loss_normal_geometry)
+          .def_readwrite("loss_normal_depth",
+                         &GlobalPositionerOptions::loss_normal_depth)
+          .def_readwrite("loss_lc_geometry",
+                         &GlobalPositionerOptions::loss_lc_geometry)
+          .def_readwrite("loss_lc_depth",
+                         &GlobalPositionerOptions::loss_lc_depth)
+          .def_readwrite("loss_scale_prior",
+                         &GlobalPositionerOptions::loss_scale_prior)
+          .def_readwrite("loss_normal_geometry_inlier",
+                         &GlobalPositionerOptions::loss_normal_geometry_inlier)
+          .def_readwrite("loss_normal_depth_inlier",
+                         &GlobalPositionerOptions::loss_normal_depth_inlier)
+          .def_readwrite("loss_normal_depth_outlier",
+                         &GlobalPositionerOptions::loss_normal_depth_outlier)
+          .def_readwrite(
+              "loss_normal_geometry_trackstart",
+              &GlobalPositionerOptions::loss_normal_geometry_trackstart)
+          .def_readwrite("loss_normal_depth_trackstart",
+                         &GlobalPositionerOptions::loss_normal_depth_trackstart)
+          .def_readwrite("loss_relative_pose",
+                         &GlobalPositionerOptions::loss_relative_pose)
+          .def_readwrite("use_relative_pose_constraints",
+                         &GlobalPositionerOptions::use_relative_pose_constraints)
+          .def_readwrite("use_fork_loss_dispatch",
+                         &GlobalPositionerOptions::use_fork_loss_dispatch)
+          .def_readwrite("use_depth_priors",
+                         &GlobalPositionerOptions::use_depth_priors)
+          .def_readwrite("use_lc_observations",
+                         &GlobalPositionerOptions::use_lc_observations)
+          .def_readwrite("use_fork_observation_exclusion",
+                         &GlobalPositionerOptions::use_fork_observation_exclusion);
   MakeDataclass(PyGlobalPositionerOptions);
 
   m.def(
@@ -165,7 +263,32 @@ void BindRotationEstimator(py::module& m) {
               "max_rotation_error_deg",
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
-              "(degrees).");
+              "(degrees).")
+          .def_readwrite("axis", &RotationEstimatorOptions::axis)
+          .def_readwrite("use_precomputed_weights",
+                         &RotationEstimatorOptions::use_precomputed_weights)
+          .def_readwrite("fix_non_lc_weights",
+                         &RotationEstimatorOptions::fix_non_lc_weights)
+          .def_readwrite("fixed_non_lc_weight",
+                         &RotationEstimatorOptions::fixed_non_lc_weight)
+          .def_readwrite("skip_risky_LC_pairs",
+                         &RotationEstimatorOptions::skip_risky_LC_pairs)
+          .def_readwrite("use_video_constraints",
+                         &RotationEstimatorOptions::use_video_constraints)
+          .def_readwrite("video_tracking_huber_scale",
+                         &RotationEstimatorOptions::video_tracking_huber_scale)
+          .def_readwrite("video_lc_cauchy_scale",
+                         &RotationEstimatorOptions::video_lc_cauchy_scale)
+          .def_readwrite("use_gravity_prior",
+                         &RotationEstimatorOptions::use_gravity_prior)
+          .def_readwrite("gravity_world",
+                         &RotationEstimatorOptions::gravity_world)
+          .def_readwrite("default_gravity_sigma",
+                         &RotationEstimatorOptions::default_gravity_sigma)
+          .def_readwrite("gravity_loss_scale",
+                         &RotationEstimatorOptions::gravity_loss_scale)
+          .def_readwrite("gravity_loss_type",
+                         &RotationEstimatorOptions::gravity_loss_type);
   MakeDataclass(PyRotationEstimatorOptions);
 
   m.def(
@@ -188,6 +311,7 @@ void BindRotationEstimator(py::module& m) {
 }
 
 void BindMotionAveraging(py::module& m) {
+  BindLossFunctionConfig(m);
   BindGravityRefiner(m);
   BindRotationEstimator(m);
   BindGlobalPositioner(m);

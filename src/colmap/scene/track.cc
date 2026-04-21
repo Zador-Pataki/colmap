@@ -50,6 +50,18 @@ void Track::DeleteElement(const image_t image_id, const point2D_t point2D_idx) {
       elements_.end());
 }
 
+void Track::DeleteLcElement(const image_t image_id,
+                            const point2D_t point2D_idx) {
+  lc_elements_.erase(
+      std::remove_if(lc_elements_.begin(),
+                     lc_elements_.end(),
+                     [image_id, point2D_idx](const TrackElement& el) {
+                       return el.image_id == image_id &&
+                              el.point2D_idx == point2D_idx;
+                     }),
+      lc_elements_.end());
+}
+
 std::ostream& operator<<(std::ostream& stream, const TrackElement& track_el) {
   stream << "TrackElement(image_id=" << track_el.image_id
          << ", point2D_idx=" << track_el.point2D_idx << ")";

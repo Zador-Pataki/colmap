@@ -79,9 +79,9 @@ void Image::SetPoints2D(const std::vector<Eigen::Vector2d>& points) {
   }
 }
 
-void Image::SetPoints2D(const std::vector<struct Point2D>& points) {
+void Image::SetPoints2D(std::vector<struct Point2D> points) {
   THROW_CHECK(points2D_.empty());
-  points2D_ = points;
+  points2D_ = std::move(points);
   num_points3D_ = 0;
   for (const auto& point2D : points2D_) {
     if (point2D.HasPoint3D()) {
@@ -146,6 +146,40 @@ std::optional<Eigen::Vector2d> Image::ProjectPoint(
   THROW_CHECK(HasCameraPtr());
   const Eigen::Vector3d point3D_in_cam = CamFromWorld() * point3D;
   return camera_ptr_->ImgFromCam(point3D_in_cam);
+}
+
+Eigen::Vector3d GravityInfo::GetGravity() const { return gravity_; }
+
+Eigen::Matrix3d GravityInfo::GetRAlign() const { return R_align_; }
+
+void GravityInfo::SetGravity(const Eigen::Vector3d& g) {
+  gravity_ = g;
+  // Compute orthonormal basis whose second column equals the gravity direction.
+  // Uses Householder QR to find two orthogonal complements.
+  Eigen::Vector3d v = g.normalized();
+  R_align_.col(1) = v;
+  Eigen::Matrix3d Q = v.householderQr().householderQ();
+  Eigen::Matrix<double, 3, 2> N = Q.rightCols(2);
+  R_align_.col(0) = N.col(0);
+  R_align_.col(2) = N.col(1);
+  if (R_align_.determinant() < 0) {
+    R_align_.col(2) = -R_align_.col(2);
+  }
+  has_gravity = true;
+}
+
+void Image::ResizeFeatureArrays(const size_t n) {
+  depth_priors.resize(n);
+  depth_prior_stddevs.resize(n);
+  depth_prior_validity.resize(n);
+  is_inlier.resize(n);
+  is_depth_outlier.resize(n);
+  is_track_anchor.resize(n);
+  is_excluded.resize(n);
+  angular_stddevs.resize(n);
+  angular_cholesky_xy.resize(n);
+  angular_stddevs_z.resize(n);
+  features_undist.resize(n);
 }
 
 std::ostream& operator<<(std::ostream& stream, const Image& image) {

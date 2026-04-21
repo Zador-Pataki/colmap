@@ -31,6 +31,7 @@ void BindSfm(py::module& m);
 void BindMvs(py::module& m);
 #endif
 void BindUtil(py::module& m);
+void BindGlomapExtPipeline(py::module& m);
 
 PYBIND11_MODULE(_core, m) {
   m.doc() = "COLMAP plugin";
@@ -67,6 +68,7 @@ PYBIND11_MODULE(_core, m) {
   BindMvs(m);
 #endif
   BindPipeline(m);
+  BindGlomapExtPipeline(m);
 
   m.def("set_random_seed",
         &SetPRNGSeed,

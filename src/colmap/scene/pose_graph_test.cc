@@ -367,5 +367,14 @@ TEST(PoseGraph, InvalidatePairsOutsideActiveImageIds) {
   EXPECT_FALSE(pose_graph.IsValid(ImagePairToPairId(2, 3)));
 }
 
+TEST(PoseGraphEdge, ForkFieldDefaults) {
+  PoseGraph::Edge edge;
+  EXPECT_EQ(edge.rel_depth_scale, 1.0);
+  EXPECT_EQ(edge.cov_t, Eigen::Matrix3d::Zero());
+  EXPECT_TRUE(edge.are_lc.empty());
+  EXPECT_FALSE(edge.is_LC);
+  EXPECT_EQ(edge.weight, 1.0);
+}
+
 }  // namespace
 }  // namespace colmap

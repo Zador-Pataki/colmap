@@ -6,6 +6,7 @@ CMakeUserPresets.json
 .clangd
 compile_commands.json
 .claude/settings.local.json
+uv.lock
 
 # Custom directories
 .idea/
@@ -15,6 +16,8 @@ compile_commands.json
 .cache
 build*/
 install*/
+local/
+dist/
 data/
 benchmark/reconstruction/data/
 benchmark/reconstruction/runs/

@@ -4,9 +4,16 @@
 #include "colmap/geometry/pose.h"
 #include "colmap/math/math.h"
 #include "colmap/math/spanning_tree.h"
+#include "colmap/scene/frame.h"
+#include "colmap/scene/image.h"
 
 #include <algorithm>
+#include <memory>
 #include <queue>
+
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
+#include <glog/logging.h>
 
 namespace colmap {
 namespace {
@@ -41,6 +48,273 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
   }
   return all_known;
 }
+
+// ─── Ceres cost functors ────────────────────────────────────────────────────
+
+// Relative rotation residual in angle-axis parameterisation.
+// Minimal so3 parameterisation; singularity at 2π-separated rotations is
+// ignored because MST init keeps parameters in-basin.
+struct RelativeRotationError {
+  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa)
+      : rel_rot_aa_(rel_rot_aa) {}
+
+  template <typename T>
+  bool operator()(const T* const r1_ptr,
+                  const T* const r2_ptr,
+                  T* residuals) const {
+    Eigen::Matrix<T, 3, 3> R1, R2, R_rel;
+    ceres::AngleAxisToRotationMatrix(r1_ptr, R1.data());
+    ceres::AngleAxisToRotationMatrix(r2_ptr, R2.data());
+    Eigen::Matrix<T, 3, 1> rel_aa_t = rel_rot_aa_.cast<T>();
+    ceres::AngleAxisToRotationMatrix(rel_aa_t.data(), R_rel.data());
+    Eigen::Matrix<T, 3, 3> R_err = R2.transpose() * R_rel * R1;
+    ceres::RotationMatrixToAngleAxis(R_err.data(), residuals);
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa) {
+    return new ceres::AutoDiffCostFunction<RelativeRotationError, 3, 3, 3>(
+        new RelativeRotationError(rel_rot_aa));
+  }
+
+  const Eigen::Vector3d rel_rot_aa_;
+};
+
+// Gravity alignment residual: (R @ g_world - g_cam) / sigma.
+// Constrains 2 DOF (roll + pitch); yaw is in the null space.
+struct GravityAlignmentError {
+  GravityAlignmentError(const Eigen::Vector3d& g_cam,
+                        const Eigen::Vector3d& g_world,
+                        double inv_sigma)
+      : g_cam_(g_cam), g_world_(g_world), inv_sigma_(inv_sigma) {}
+
+  template <typename T>
+  bool operator()(const T* const angle_axis, T* residuals) const {
+    Eigen::Matrix<T, 3, 3> R;
+    ceres::AngleAxisToRotationMatrix(angle_axis, R.data());
+    Eigen::Matrix<T, 3, 1> g_pred = R * g_world_.cast<T>();
+    for (int i = 0; i < 3; ++i)
+      residuals[i] = T(inv_sigma_) * (g_pred[i] - T(g_cam_[i]));
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& g_cam,
+                                     const Eigen::Vector3d& g_world,
+                                     double inv_sigma) {
+    return new ceres::AutoDiffCostFunction<GravityAlignmentError, 3, 3>(
+        new GravityAlignmentError(g_cam, g_world, inv_sigma));
+  }
+
+ private:
+  const Eigen::Vector3d g_cam_;
+  const Eigen::Vector3d g_world_;
+  const double inv_sigma_;
+};
+
+// ─── Ceres helper utilities ──────────────────────────────────────────────────
+
+// Build a Ceres loss function. Returns nullptr for "trivial" / unrecognised.
+std::shared_ptr<ceres::LossFunction> MakeLoss(const std::string& type,
+                                              double scale) {
+  if (type == "huber") return std::make_shared<ceres::HuberLoss>(scale);
+  if (type == "cauchy") return std::make_shared<ceres::CauchyLoss>(scale);
+  return nullptr;
+}
+
+// Count LC flags only among inlier-indexed matches.
+// Precondition: all entries of are_lc outside inliers are false.
+// DCHECK verifies this in debug builds.
+static int CountLcInliers(const PoseGraph::Edge& edge) {
+  if (edge.inliers.empty()) {
+    return static_cast<int>(
+        std::count(edge.are_lc.begin(), edge.are_lc.end(), true));
+  }
+  int lc_count = 0;
+  for (int inlier_idx : edge.inliers) {
+    if (inlier_idx >= 0 &&
+        static_cast<size_t>(inlier_idx) < edge.are_lc.size() &&
+        edge.are_lc[inlier_idx]) {
+      ++lc_count;
+    }
+  }
+#ifndef NDEBUG
+  // Verify precondition: non-inlier entries of are_lc must all be false.
+  {
+    std::unordered_set<int> inlier_set(edge.inliers.begin(),
+                                       edge.inliers.end());
+    for (size_t i = 0; i < edge.are_lc.size(); ++i) {
+      if (edge.are_lc[i]) {
+        DCHECK(inlier_set.count(static_cast<int>(i)))
+            << "are_lc[" << i << "] is true but not in inliers — "
+               "IsRiskyLcPair count semantics violated.";
+      }
+    }
+  }
+#endif
+  return lc_count;
+}
+
+static int CountInlierTotal(const PoseGraph::Edge& edge) {
+  return edge.inliers.empty() ? static_cast<int>(edge.are_lc.size())
+                              : static_cast<int>(edge.inliers.size());
+}
+
+// Returns true if most inliers are non-LC (tracking pair).
+// Falls back to !edge.is_LC when are_lc is empty.
+static bool IsTrackingPair(const PoseGraph::Edge& edge) {
+  if (edge.are_lc.empty()) return !edge.is_LC;
+  const int lc_count = CountLcInliers(edge);
+  const int total = CountInlierTotal(edge);
+  return (total - lc_count) >= lc_count;
+}
+
+// Returns true when LC inliers strictly exceed non-LC inliers (risky pair).
+static bool IsRiskyLcPair(const PoseGraph::Edge& edge) {
+  if (!edge.is_LC || edge.are_lc.empty()) return false;
+  const int lc_count = CountLcInliers(edge);
+  const int total = CountInlierTotal(edge);
+  return lc_count > (total - lc_count);
+}
+
+// ─── SolveCeresRotations ────────────────────────────────────────────────────
+
+// Ceres rotation averaging for video/gravity paths.
+// Builds angle-axis buffers from current reconstruction, solves, writes back.
+// Returns (success, {pair_id → weight}).
+static std::pair<bool, std::unordered_map<image_pair_t, double>>
+SolveCeresRotations(
+    const PoseGraph& pose_graph,
+    const RotationEstimatorOptions& opts,
+    const std::unordered_set<image_t>& active_image_ids,
+    Reconstruction& reconstruction) {
+  // Collect per-frame angle-axis buffers from current poses.
+  std::unordered_map<frame_t, std::vector<double>> angle_axis_map;
+  frame_t fixed_frame_id = kInvalidFrameId;
+
+  for (const auto& [image_id, image] : reconstruction.Images()) {
+    if (!image.HasPose()) continue;
+    if (!active_image_ids.empty() && !active_image_ids.count(image_id))
+      continue;
+    frame_t fid = image.FramePtr()->FrameId();
+    if (angle_axis_map.count(fid)) continue;
+
+    Eigen::Matrix3d R =
+        image.FramePtr()->RigFromWorld().rotation().toRotationMatrix();
+    std::vector<double> aa(3);
+    ceres::RotationMatrixToAngleAxis(R.data(), aa.data());
+    angle_axis_map.emplace(fid, std::move(aa));
+
+    if (fixed_frame_id == kInvalidFrameId) fixed_frame_id = fid;
+  }
+
+  if (angle_axis_map.empty()) {
+    LOG(WARNING) << "SolveCeresRotations: no posed images.";
+    return {false, {}};
+  }
+
+  // Build Ceres problem.
+  ceres::Problem::Options prob_opts;
+  prob_opts.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
+  ceres::Problem problem(prob_opts);
+
+  for (auto& [fid, aa] : angle_axis_map) {
+    problem.AddParameterBlock(aa.data(), 3);
+    if (fid == fixed_frame_id) problem.SetParameterBlockConstant(aa.data());
+  }
+
+  std::vector<std::shared_ptr<ceres::LossFunction>> losses;
+
+  for (const auto& [pair_id, edge] : pose_graph.Edges()) {
+    if (!edge.valid) continue;
+    if (opts.skip_risky_LC_pairs && IsRiskyLcPair(edge)) continue;
+
+    const auto [id1, id2] = PairIdToImagePair(pair_id);
+    if (!active_image_ids.empty() &&
+        (!active_image_ids.count(id1) || !active_image_ids.count(id2)))
+      continue;
+    if (!reconstruction.ExistsImage(id1) || !reconstruction.ExistsImage(id2))
+      continue;
+
+    frame_t fid1 = reconstruction.Image(id1).FramePtr()->FrameId();
+    frame_t fid2 = reconstruction.Image(id2).FramePtr()->FrameId();
+    if (!angle_axis_map.count(fid1) || !angle_axis_map.count(fid2)) continue;
+
+    Eigen::Vector3d rel_aa;
+    ceres::RotationMatrixToAngleAxis(
+        edge.cam2_from_cam1.rotation().toRotationMatrix().data(), rel_aa.data());
+
+    std::shared_ptr<ceres::LossFunction> loss;
+    if (IsTrackingPair(edge)) {
+      loss = std::make_shared<ceres::HuberLoss>(opts.video_tracking_huber_scale);
+    } else {
+      loss = std::make_shared<ceres::CauchyLoss>(opts.video_lc_cauchy_scale);
+    }
+    losses.push_back(loss);
+
+    problem.AddResidualBlock(RelativeRotationError::Create(rel_aa),
+                             loss.get(),
+                             angle_axis_map[fid1].data(),
+                             angle_axis_map[fid2].data());
+  }
+
+  if (opts.use_gravity_prior) {
+    auto grav_loss = MakeLoss(opts.gravity_loss_type, opts.gravity_loss_scale);
+    if (grav_loss) losses.push_back(grav_loss);
+
+    int grav_count = 0;
+    for (const auto& [image_id, image] : reconstruction.Images()) {
+      if (!image.HasPose() || !image.gravity_info.has_gravity) continue;
+      frame_t fid = image.FramePtr()->FrameId();
+      if (fid == fixed_frame_id || !angle_axis_map.count(fid)) continue;
+      if (!active_image_ids.empty() && !active_image_ids.count(image_id))
+        continue;
+
+      double sigma = image.gravity_sigma > 0 ? image.gravity_sigma
+                                             : opts.default_gravity_sigma;
+      problem.AddResidualBlock(
+          GravityAlignmentError::Create(
+              image.gravity_info.GetGravity(), opts.gravity_world, 1.0 / sigma),
+          grav_loss.get(),
+          angle_axis_map[fid].data());
+      ++grav_count;
+    }
+    LOG(INFO) << "Added " << grav_count << " gravity prior residuals.";
+  }
+
+  ceres::Solver::Options solver_opts;
+  solver_opts.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+  solver_opts.max_num_iterations = 100;
+  solver_opts.logging_type = ceres::SILENT;
+  ceres::Solver::Summary summary;
+  ceres::Solve(solver_opts, &problem, &summary);
+  LOG(INFO) << "Ceres RA: " << summary.BriefReport();
+  const bool ok = summary.IsSolutionUsable();
+
+  // Write solved rotations back to reconstruction (preserve translation).
+  for (const auto& [fid, aa] : angle_axis_map) {
+    Eigen::Matrix3d R;
+    ceres::AngleAxisToRotationMatrix(aa.data(), R.data());
+    Rigid3d current = reconstruction.Frame(fid).RigFromWorld();
+    reconstruction.Frame(fid).SetRigFromWorld(
+        Rigid3d(Eigen::Quaterniond(R), current.translation()));
+  }
+
+  // Build weights map.
+  std::unordered_map<image_pair_t, double> weights;
+  for (const auto& [pair_id, edge] : pose_graph.Edges()) {
+    if (opts.skip_risky_LC_pairs && IsRiskyLcPair(edge)) {
+      weights[pair_id] = 0.0;
+      continue;
+    }
+    double w = edge.weight;
+    if (opts.fix_non_lc_weights && !edge.is_LC) w = opts.fixed_non_lc_weight;
+    weights[pair_id] = w;
+  }
+
+  return {ok, std::move(weights)};
+}
+
+// ─── End Ceres helpers ───────────────────────────────────────────────────────
 
 // Compute maximum spanning tree of the pose graph weighted by inlier count.
 // Returns the root image_id and populates the parents map.
@@ -178,6 +452,11 @@ Reconstruction CreateExpandedReconstruction(
       Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
   const Rigid3d kUnknownPose(kUnknownRotation, kUnknownTranslation);
 
+  // First pass: build expanded frames with their data ids, and collect images
+  // to add afterwards.
+  std::vector<Image> expanded_images;
+  std::vector<Frame> expanded_frames;
+
   for (const auto& [frame_id, frame] : reconstruction.Frames()) {
     Frame frame_expanded;
     frame_expanded.SetFrameId(frame_id);
@@ -187,13 +466,8 @@ Reconstruction CreateExpandedReconstruction(
     } else {
       frame_expanded.SetRigFromWorld(kUnknownPose);
     }
-    recon_expanded.AddFrame(std::move(frame_expanded));
-  }
 
-  for (const auto& [frame_id, frame] : reconstruction.Frames()) {
-    Frame& frame_expanded = recon_expanded.Frame(frame_id);
     const Rig& original_rig = reconstruction.Rig(frame.RigId());
-
     for (const auto& data_id : frame.ImageIds()) {
       const auto& image = reconstruction.Image(data_id.id);
 
@@ -213,7 +487,7 @@ Reconstruction CreateExpandedReconstruction(
         // Camera belongs to this frame's rig.
         frame_expanded.AddDataId(image_expanded.DataId());
         image_expanded.SetFrameId(frame_id);
-        recon_expanded.AddImage(std::move(image_expanded));
+        expanded_images.push_back(std::move(image_expanded));
       } else {
         // Camera has its own singleton rig, create a new frame for it.
         const frame_t new_frame_id = next_frame_id++;
@@ -222,12 +496,21 @@ Reconstruction CreateExpandedReconstruction(
         new_frame.SetRigId(singleton_rig_ids.at(image.CameraId()));
         new_frame.AddDataId(image_expanded.DataId());
         new_frame.SetRigFromWorld(kUnknownPose);
-        recon_expanded.AddFrame(std::move(new_frame));
+        expanded_frames.push_back(std::move(new_frame));
 
         image_expanded.SetFrameId(new_frame_id);
-        recon_expanded.AddImage(std::move(image_expanded));
+        expanded_images.push_back(std::move(image_expanded));
       }
     }
+    expanded_frames.push_back(std::move(frame_expanded));
+  }
+
+  // Second pass: add all frames, then all images.
+  for (auto& frame : expanded_frames) {
+    recon_expanded.AddFrame(std::move(frame));
+  }
+  for (auto& image : expanded_images) {
+    recon_expanded.AddImage(std::move(image));
   }
 
   return recon_expanded;
@@ -271,23 +554,58 @@ bool RotationEstimator::EstimateRotations(
     const std::vector<PosePrior>& pose_priors,
     const std::unordered_set<image_t>& active_image_ids,
     Reconstruction& reconstruction) {
+  return EstimateRotationsWithWeights(
+             pose_graph, pose_priors, active_image_ids, reconstruction)
+      .first;
+}
+
+std::pair<bool, std::unordered_map<image_pair_t, double>>
+RotationEstimator::EstimateRotationsWithWeights(
+    const PoseGraph& pose_graph,
+    const std::vector<PosePrior>& pose_priors,
+    const std::unordered_set<image_t>& active_image_ids,
+    Reconstruction& reconstruction) {
   if (UseGravity(options_, pose_priors) &&
       !AllSensorsFromRigKnown(reconstruction.Rigs())) {
-    return false;
+    return {false, {}};
   }
 
+  // Ceres path: video constraints and/or gravity prior.
+  if (options_.use_video_constraints || options_.use_gravity_prior) {
+    if (options_.use_video_constraints && UseGravity(options_, pose_priors)) {
+      LOG(WARNING) << "use_video_constraints is incompatible with stratified "
+                      "1-DOF gravity solve; disabling stratified step.";
+    }
+    // MST initialisation so Ceres starts near a consistent solution.
+    if (!options_.skip_initialization) {
+      InitializeFromMaximumSpanningTree(
+          pose_graph, active_image_ids, reconstruction);
+    }
+    auto [ok, weights] =
+        SolveCeresRotations(pose_graph, options_, active_image_ids, reconstruction);
+    if (!ok) return {false, std::move(weights)};
+
+    for (const image_t image_id : active_image_ids) {
+      const frame_t frame_id = reconstruction.Image(image_id).FrameId();
+      THROW_CHECK(reconstruction.Frame(frame_id).HasPose());
+      reconstruction.RegisterFrame(frame_id);
+    }
+    return {true, std::move(weights)};
+  }
+
+  // IRLS path (upstream default).
   // Handle stratified solving for mixed gravity systems.
   if (UseGravity(options_, pose_priors) && options_.use_stratified) {
     if (!MaybeSolveGravityAlignedSubset(
             pose_graph, pose_priors, active_image_ids, reconstruction)) {
-      return false;
+      return {false, {}};
     }
   }
 
   // Solve the full system.
   if (!SolveRotationAveraging(
           pose_graph, pose_priors, active_image_ids, reconstruction)) {
-    return false;
+    return {false, {}};
   }
 
   // Register frames with computed poses.
@@ -297,7 +615,19 @@ bool RotationEstimator::EstimateRotations(
     reconstruction.RegisterFrame(frame_id);
   }
 
-  return true;
+  // Build weights map from edge metadata.
+  std::unordered_map<image_pair_t, double> weights;
+  for (const auto& [pair_id, edge] : pose_graph.Edges()) {
+    if (options_.skip_risky_LC_pairs && IsRiskyLcPair(edge)) {
+      weights[pair_id] = 0.0;
+      continue;
+    }
+    double w = edge.weight;
+    if (options_.fix_non_lc_weights && !edge.is_LC)
+      w = options_.fixed_non_lc_weight;
+    weights[pair_id] = w;
+  }
+  return {true, std::move(weights)};
 }
 
 bool RotationEstimator::MaybeSolveGravityAlignedSubset(
@@ -574,6 +904,78 @@ bool InitializeRigRotationsFromImages(
   }
 
   return true;
+}
+
+std::pair<bool, std::unordered_map<image_pair_t, double>>
+RunRotationAveragingWithWeights(const RotationEstimatorOptions& options,
+                                PoseGraph& pose_graph,
+                                Reconstruction& reconstruction,
+                                const std::vector<PosePrior>& pose_priors) {
+  std::unordered_set<image_t> active_image_ids;
+
+  if (!HasUnknownCamsFromRig(reconstruction)) {
+    active_image_ids = ComputeLargestConnectedComponentImageIds(
+        pose_graph, reconstruction, options.filter_unregistered);
+
+    if (active_image_ids.empty()) {
+      LOG(ERROR) << "No connected components found";
+      return {false, {}};
+    }
+
+    pose_graph.InvalidatePairsOutsideActiveImageIds(active_image_ids);
+
+    RotationEstimator rotation_estimator(options);
+    return rotation_estimator.EstimateRotationsWithWeights(
+        pose_graph, pose_priors, active_image_ids, reconstruction);
+  }
+
+  // Unknown cam_from_rig: expanded reconstruction first, then final solve.
+  LOG(INFO) << "Detected cameras with unknown cam_from_rig, "
+               "estimating rotations with these cameras as independent";
+
+  Reconstruction recon_expanded = CreateExpandedReconstruction(reconstruction);
+
+  std::unordered_set<image_t> expanded_active_image_ids =
+      ComputeLargestConnectedComponentImageIds(
+          pose_graph, recon_expanded, options.filter_unregistered);
+
+  if (expanded_active_image_ids.empty()) {
+    LOG(ERROR) << "No connected components found";
+    return {false, {}};
+  }
+
+  pose_graph.InvalidatePairsOutsideActiveImageIds(expanded_active_image_ids);
+
+  RotationEstimator rotation_estimator_expanded(options);
+  if (!rotation_estimator_expanded.EstimateRotations(
+          pose_graph, pose_priors, expanded_active_image_ids, recon_expanded)) {
+    return {false, {}};
+  }
+
+  std::unordered_map<image_t, Rigid3d> expanded_cams_from_world;
+  for (const auto& [image_id, image] : recon_expanded.Images()) {
+    if (!image.HasPose()) continue;
+    expanded_cams_from_world[image_id] = image.CamFromWorld();
+  }
+
+  InitializeRigRotationsFromImages(expanded_cams_from_world, reconstruction);
+
+  active_image_ids = ComputeLargestConnectedComponentImageIds(
+      pose_graph, reconstruction, options.filter_unregistered);
+
+  if (active_image_ids.empty()) {
+    LOG(ERROR) << "No connected components found";
+    return {false, {}};
+  }
+
+  pose_graph.InvalidatePairsOutsideActiveImageIds(active_image_ids);
+
+  RotationEstimatorOptions options_ra = options;
+  options_ra.skip_initialization = true;
+  options_ra.use_stratified = false;
+  RotationEstimator rotation_estimator(options_ra);
+  return rotation_estimator.EstimateRotationsWithWeights(
+      pose_graph, pose_priors, active_image_ids, reconstruction);
 }
 
 bool RunRotationAveraging(const RotationEstimatorOptions& options,

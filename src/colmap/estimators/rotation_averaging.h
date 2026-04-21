@@ -4,7 +4,10 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Core>
@@ -66,6 +69,39 @@ struct RotationEstimatorOptions {
   // If > 0, filter image pairs with rotation error exceeding this threshold
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
+
+  // --- Fork-only fields ---
+
+  // Fork's gravity axis (matches upstream gravity_dir default; kept separate
+  // to avoid renaming call sites in the fork subclass).
+  Eigen::Vector3d axis = Eigen::Vector3d(0, 1, 0);
+
+  // If true, use pre-computed weights from image pairs instead of IRLS.
+  bool use_precomputed_weights = false;
+
+  // If true, fix weights for non-LC pairs during IRLS at fixed_non_lc_weight.
+  bool fix_non_lc_weights = false;
+
+  // Fixed weight for non-LC pairs when fix_non_lc_weights is true.
+  // Default 138.0 is the theoretical maximum from Chatterjee et al.
+  double fixed_non_lc_weight = 138.0;
+
+  // If true, skip pairs where LC inliers > normal inliers (risky pairs).
+  bool skip_risky_LC_pairs = false;
+
+  // Enable video-aware Ceres solver with differential loss functions.
+  bool use_video_constraints = false;
+
+  // Loss scales for the video-aware Ceres solver.
+  double video_tracking_huber_scale = 0.1;  // radians (~5.7 degrees)
+  double video_lc_cauchy_scale = 0.05;      // radians (~2.8 degrees)
+
+  // Soft gravity prior for Ceres solver.
+  bool use_gravity_prior = false;
+  Eigen::Vector3d gravity_world = Eigen::Vector3d(0, -1, 0);
+  double default_gravity_sigma = 0.035;  // radians (~2 degrees)
+  double gravity_loss_scale = 0.05;      // radians (~2.87 degrees)
+  std::string gravity_loss_type = "cauchy";  // "cauchy" | "huber" | "trivial"
 };
 
 // High-level interface for rotation averaging.
@@ -76,15 +112,27 @@ class RotationEstimator {
  public:
   explicit RotationEstimator(const RotationEstimatorOptions& options)
       : options_(options) {}
+  virtual ~RotationEstimator() = default;
 
   // Estimates the global orientations of all views.
   // Solves rotation averaging and registers frames with computed poses.
   // active_image_ids defines which images to include.
   // Returns true on successful estimation.
-  bool EstimateRotations(const PoseGraph& pose_graph,
+  virtual bool EstimateRotations(const PoseGraph& pose_graph,
                          const std::vector<PosePrior>& pose_priors,
                          const std::unordered_set<image_t>& active_image_ids,
                          Reconstruction& reconstruction);
+
+  // Extended variant returning per-pair IRLS weights (or edge.weight for Ceres
+  // path). Weight map has one entry per edge in pose_graph.Edges().
+  // In the IRLS path, returns edge metadata weights; Ceres path returns
+  // edge.weight (with fix_non_lc_weights override when enabled).
+  std::pair<bool, std::unordered_map<image_pair_t, double>>
+  EstimateRotationsWithWeights(
+      const PoseGraph& pose_graph,
+      const std::vector<PosePrior>& pose_priors,
+      const std::unordered_set<image_t>& active_image_ids,
+      Reconstruction& reconstruction);
 
  private:
   // Maybe solves 1-DOF rotation averaging on the gravity-aligned subset.
@@ -126,5 +174,14 @@ bool RunRotationAveraging(const RotationEstimatorOptions& options,
                           PoseGraph& pose_graph,
                           Reconstruction& reconstruction,
                           const std::vector<PosePrior>& pose_priors);
+
+// Extended variant of RunRotationAveraging that returns per-pair weights.
+// Does NOT apply the post-solve edge filtering (max_rotation_error_deg) —
+// filtering is handled by the caller (glomap pipeline).
+std::pair<bool, std::unordered_map<image_pair_t, double>>
+RunRotationAveragingWithWeights(const RotationEstimatorOptions& options,
+                                PoseGraph& pose_graph,
+                                Reconstruction& reconstruction,
+                                const std::vector<PosePrior>& pose_priors = {});
 
 }  // namespace colmap

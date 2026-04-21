@@ -72,6 +72,19 @@ void BindTrack(py::module& m) {
            &Track::Reserve,
            "num_elements"_a,
            "Reserve capacity for elements.")
-      .def("compress", &Track::Compress, "Shrink capacity to fit size.");
+      .def("compress", &Track::Compress, "Shrink capacity to fit size.")
+      .def_property(
+          "lc_observations",
+          [](const Track& t) -> std::vector<TrackElement> {
+            return t.LcElements();
+          },
+          [](Track& t, const std::vector<TrackElement>& v) {
+            t.LcElements() = v;
+          },
+          "Loop-closure observations for this track.")
+      .def_property("is_initialized",
+                    &Track::IsInitialized,
+                    &Track::SetInitialized,
+                    "Whether this track has been initialized.");
   MakeDataclass(PyTrack);
 }

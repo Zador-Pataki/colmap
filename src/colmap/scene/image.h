@@ -42,8 +42,26 @@
 #include <vector>
 
 #include <Eigen/Core>
+#include <Eigen/QR>
 
 namespace colmap {
+
+// Gravity direction and alignment rotation for a single image.
+// Second column of R_align_ equals the gravity direction.
+struct GravityInfo {
+ public:
+  bool has_gravity = false;
+
+  Eigen::Vector3d GetGravity() const;
+  Eigen::Matrix3d GetRAlign() const;
+
+  // Sets gravity direction and recomputes R_align_ (second col = normalized g).
+  void SetGravity(const Eigen::Vector3d& g);
+
+ private:
+  Eigen::Vector3d gravity_ = Eigen::Vector3d::Zero();
+  Eigen::Matrix3d R_align_ = Eigen::Matrix3d::Identity();
+};
 
 // Class that holds information about an image. An image is the product of one
 // camera exposure at a certain location (parameterized as the pose). An image
@@ -118,7 +136,7 @@ class Image {
   inline const std::vector<struct Point2D>& Points2D() const;
   inline std::vector<struct Point2D>& Points2D();
   void SetPoints2D(const std::vector<Eigen::Vector2d>& points);
-  void SetPoints2D(const std::vector<struct Point2D>& points);
+  void SetPoints2D(std::vector<struct Point2D> points);
 
   // Return point3D IDs for all points2D (kInvalidPoint3DId for untriangulated).
   std::vector<point3D_t> Point3DIds() const;
@@ -153,6 +171,37 @@ class Image {
 
   inline bool operator==(const Image& other) const;
   inline bool operator!=(const Image& other) const;
+
+  // Resize all per-feature parallel arrays to length n. Preserves existing
+  // values; default-initializes new slots. Does NOT resize points2D_.
+  void ResizeFeatureArrays(size_t n);
+
+  // --- Monocular Depth Priors (per-feature, parallel to points2D_) ---
+  std::vector<double> depth_priors;
+  std::vector<double> depth_prior_stddevs;
+  std::vector<bool> depth_prior_validity;
+
+  // --- Classification flags (per-feature) ---
+  std::vector<bool> is_inlier;        // second-GP trivial-loss flag
+  std::vector<bool> is_depth_outlier; // MDRP robust-loss depth flag
+  std::vector<bool> is_track_anchor;  // loss_normal_geometry_trackstart flag
+  std::vector<bool> is_excluded;      // hard exclusion: skip observation entirely
+
+  // --- Angular uncertainties (per-feature) ---
+  std::vector<Eigen::Vector2d> angular_stddevs;     // (sigma_x, sigma_y) radians
+  std::vector<Eigen::Vector3d> angular_cholesky_xy; // Cholesky of 2x2 XY precision
+  std::vector<double> angular_stddevs_z;            // Z-component stddev
+
+  // --- Per-image scale (optimizable) ---
+  double log_scale = 0.0;
+  double log_scale_stddev = 0.0;
+
+  // --- Gravity ---
+  double gravity_sigma = 0.0;  // per-image override; 0 = use default
+  GravityInfo gravity_info;
+
+  // --- Undistorted bearing vectors (per-feature; z=1 canonical plane) ---
+  std::vector<Eigen::Vector3d> features_undist;
 
  private:
   // The name of the image, i.e. the relative path.

@@ -170,5 +170,49 @@ TEST(Track, Compress) {
   EXPECT_EQ(track.Elements().capacity(), 2);
 }
 
+TEST(Track, DefaultLcStateIsEmpty) {
+  Track track;
+  EXPECT_EQ(track.LcLength(), 0);
+  EXPECT_FALSE(track.IsInitialized());
+  EXPECT_TRUE(track.LcElements().empty());
+}
+
+TEST(Track, AddLcElementGrowsLcElements) {
+  Track track;
+  track.AddLcElement(TrackElement(1, 5));
+  track.AddLcElement(2, 3);
+  EXPECT_EQ(track.LcLength(), 2);
+  EXPECT_EQ(track.LcElements().at(0).image_id, 1u);
+  EXPECT_EQ(track.LcElements().at(0).point2D_idx, 5u);
+  EXPECT_EQ(track.LcElements().at(1).image_id, 2u);
+  EXPECT_EQ(track.LcElements().at(1).point2D_idx, 3u);
+}
+
+TEST(Track, DeleteLcElementRemovesMatching) {
+  Track track;
+  track.AddLcElement(1, 5);
+  track.AddLcElement(2, 3);
+  track.AddLcElement(1, 5);  // duplicate — removes all
+  track.DeleteLcElement(1, 5);
+  EXPECT_EQ(track.LcLength(), 1);
+  EXPECT_EQ(track.LcElements().at(0).image_id, 2u);
+}
+
+TEST(Track, DeleteLcElementNoMatchIsNoOp) {
+  Track track;
+  track.AddLcElement(1, 5);
+  track.DeleteLcElement(9, 9);
+  EXPECT_EQ(track.LcLength(), 1);
+}
+
+TEST(Track, SetInitializedRoundTrip) {
+  Track track;
+  EXPECT_FALSE(track.IsInitialized());
+  track.SetInitialized(true);
+  EXPECT_TRUE(track.IsInitialized());
+  track.SetInitialized(false);
+  EXPECT_FALSE(track.IsInitialized());
+}
+
 }  // namespace
 }  // namespace colmap

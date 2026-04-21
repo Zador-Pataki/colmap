@@ -66,18 +66,6 @@ struct PointCameraAnisotropicRangeError {
     // Transform residual to camera frame (still unitless)
     const Eigen::Matrix<T, 3, 1> r_cam = rotation_.cast<T>() * r_world;
 
-    // DEBUG: Print first evaluation to verify units and weights
-    static bool first_eval = true;
-    if (first_eval && std::is_same<T, double>::value) {
-      first_eval = false;
-      LOG(INFO) << "DEBUG First anisotropic cost eval:"
-                << "\n  r_world=" << r_world.transpose()
-                << "\n  r_cam=" << r_cam.transpose()
-                << "\n  rotation=" << rotation_.coeffs().transpose()
-                << "\n  inv_sigmas=[" << inv_sigma_x_ << ", " << inv_sigma_y_
-                << ", " << inv_sigma_z_ << "]";
-    }
-
     // --- Apply anisotropic whitening in camera frame (unitless residual) ---
     // X/Y: use angular stddevs (radians) directly: 1 / sigma_angle
     // Z: use relative depth stddev sigma_z / range -> weight = range / sigma_z

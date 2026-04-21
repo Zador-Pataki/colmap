@@ -3,10 +3,15 @@
 #include "colmap/geometry/rigid3.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/reconstruction.h"
+#include "colmap/scene/two_view_geometry.h"
 #include "colmap/util/types.h"
 
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
+
+#include <Eigen/Core>
 
 namespace colmap {
 
@@ -28,8 +33,66 @@ class PoseGraph {
     // Whether this edge is valid for reconstruction.
     bool valid = true;
 
+    // MDRP-derived relative depth scale.
+    double rel_depth_scale = 1.0;
+
+    // Translation covariance matrix.
+    Eigen::Matrix3d cov_t = Eigen::Matrix3d::Zero();
+
+    // Feature correspondences: matches[i] = {feat_idx_in_image1, feat_idx_in_image2}.
+    // Populated for LC edges by the caller before ProcessLoopClosurePairs.
+    std::vector<Eigen::Vector2i> matches;
+
+    // Per-match loop-closure flag (parallel to matches).
+    std::vector<bool> are_lc;
+
+    // Whole-edge loop-closure flag.
+    bool is_LC = false;
+
+    // Edge weight for rotation averaging.
+    double weight = 1.0;
+
+    // Two-view geometry matrices (populated by DecomposeRelPose).
+    std::optional<Eigen::Matrix3d> E;
+    std::optional<Eigen::Matrix3d> F;
+    std::optional<Eigen::Matrix3d> H;
+
+    // TwoViewGeometry::ConfigurationType value; 0 = UNDEFINED.
+    int config = 0;
+
+    // Total feature correspondences (used for FilterInlierRatio).
+    // num_matches holds the inlier count; total_matches holds the full count.
+    int total_matches = 0;
+
+    // Image IDs for the two endpoints (set by AddEdge; derive from pair_id key
+    // on read). Stored here so Python callers can access them without the key.
+    image_t image_id1 = kInvalidImageId;
+    image_t image_id2 = kInvalidImageId;
+
+    // Inlier indices into matches (parallel to matches[i]).
+    std::vector<int> inliers;
+
     // Invert the geometry to match swapped image order.
     void Invert() { cam2_from_cam1 = Inverse(cam2_from_cam1); }
+  };
+
+  // Input record for AssignMdrpResults.
+  struct MDRPResult {
+    bool is_valid = false;
+    Rigid3d cam2_from_cam1;
+    double weight = 1.0;
+    double rel_depth_scale = 1.0;
+    std::vector<int> inliers;
+    Eigen::Matrix3d cov_t = Eigen::Matrix3d::Zero();
+  };
+
+  // Output record for ExtractValidPairData.
+  struct ValidPairData {
+    std::vector<image_pair_t> pair_ids;
+    std::vector<image_t> image_ids1;
+    std::vector<image_t> image_ids2;
+    std::vector<int> inlier_counts;
+    std::vector<std::vector<bool>> are_lc;
   };
 
   PoseGraph() = default;
@@ -88,6 +151,28 @@ class PoseGraph {
                               std::unordered_map<frame_t, int>& cluster_ids,
                               int min_num_images = -1) const;
 
+  // Batch-assign MDRP results to matching edges.
+  // Returns (num_valid_assigned, num_invalid_assigned).
+  std::pair<int, int> AssignMdrpResults(
+      const std::unordered_map<image_pair_t, MDRPResult>& results,
+      double metric_scale_stddev);
+
+  // Return per-edge data arrays for all currently valid edges.
+  // All output arrays are aligned by index.
+  ValidPairData ExtractValidPairData() const;
+
+  // Invalidate edges with inlier count (num_matches) strictly below threshold.
+  void FilterInlierNum(int min_inliers);
+
+  // Invalidate edges with inlier_ratio = num_matches / total_matches strictly
+  // below min_ratio. total_matches must be pre-populated on each edge.
+  void FilterInlierRatio(double min_ratio);
+
+  // Keep the top-k connected components (by image count) of valid edges.
+  // Components smaller than min_component_size are dropped even if in top-k.
+  // Invalidates edges belonging to dropped components.
+  void KeepLargestConnectedComponents(size_t k, size_t min_component_size);
+
  private:
   // Map from pair ID to edge data. The pair ID is computed from the
   // two image IDs using ImagePairToPairId, with the smaller ID first.
@@ -116,9 +201,12 @@ void PoseGraph::Clear() { edges_.clear(); }
 PoseGraph::Edge& PoseGraph::AddEdge(image_t image_id1,
                                     image_t image_id2,
                                     PoseGraph::Edge edge) {
-  if (ShouldSwapImagePair(image_id1, image_id2)) {
+  const bool swapped = ShouldSwapImagePair(image_id1, image_id2);
+  if (swapped) {
     edge.Invert();
   }
+  edge.image_id1 = swapped ? image_id2 : image_id1;
+  edge.image_id2 = swapped ? image_id1 : image_id2;
   const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
   auto [it, inserted] = edges_.emplace(pair_id, std::move(edge));
   if (!inserted) {

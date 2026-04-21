@@ -5,6 +5,7 @@
 #include "colmap/scene/projection.h"
 #include "colmap/sfm/incremental_mapper.h"
 #include "colmap/sfm/observation_manager.h"
+#include "colmap/sfm/track_establishment.h"
 #include "colmap/util/logging.h"
 #include "colmap/util/misc.h"
 #include "colmap/util/timer.h"
@@ -243,6 +244,11 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
 
   LOG(INFO) << "Before filtering: " << candidate_points3D.size()
             << ", after filtering: " << reconstruction_->NumPoints3D();
+
+  // Append LC observations to Point3D tracks.
+  // No-op if no LC edges exist in the pose graph.
+  TrackEngine track_engine;
+  track_engine.ProcessLoopClosurePairs(*pose_graph_, *reconstruction_);
 }
 
 bool GlobalMapper::GlobalPositioning(const GlobalPositionerOptions& options,

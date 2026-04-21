@@ -38,6 +38,7 @@ COLMAP_ADD_LIBRARY(
         incremental_mapper.h incremental_mapper.cc
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
+        track_establishment.h track_establishment.cc
     PUBLIC_LINK_LIBS
         colmap_scene
         colmap_estimators
@@ -69,5 +70,10 @@ COLMAP_ADD_TEST(
 COLMAP_ADD_TEST(
     NAME incremental_mapper_test
     SRCS incremental_mapper_test.cc
+    LINK_LIBS colmap_sfm
+)
+COLMAP_ADD_TEST(
+    NAME track_establishment_test
+    SRCS track_establishment_test.cc
     LINK_LIBS colmap_sfm
 )

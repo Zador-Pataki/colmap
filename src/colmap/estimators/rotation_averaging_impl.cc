@@ -5,12 +5,40 @@
 #include "colmap/math/random.h"
 #include "colmap/optim/least_absolute_deviations.h"
 
+#include <algorithm>
 #include <limits>
 
 #include <Eigen/CholmodSupport>
 
 namespace colmap {
 namespace {
+
+// Returns true when LC inliers strictly exceed non-LC inliers (risky pair).
+// Precondition: non-inlier entries of are_lc must be false (checked in debug).
+static bool IsRiskyLcPair(const PoseGraph::Edge& edge) {
+  if (!edge.is_LC || edge.are_lc.empty()) return false;
+  // Count LC flags only among inlier-indexed matches.
+  auto count_lc_inliers = [&]() -> int {
+    if (edge.inliers.empty()) {
+      return static_cast<int>(
+          std::count(edge.are_lc.begin(), edge.are_lc.end(), true));
+    }
+    int lc_count = 0;
+    for (int inlier_idx : edge.inliers) {
+      if (inlier_idx >= 0 &&
+          static_cast<size_t>(inlier_idx) < edge.are_lc.size() &&
+          edge.are_lc[inlier_idx]) {
+        ++lc_count;
+      }
+    }
+    return lc_count;
+  };
+  const int lc_count = count_lc_inliers();
+  const int total = edge.inliers.empty()
+                        ? static_cast<int>(edge.are_lc.size())
+                        : static_cast<int>(edge.inliers.size());
+  return lc_count > (total - lc_count);
+}
 
 // Computes the 1-DOF residual for gravity-aligned rotation constraints.
 // Returns (angle_2 - angle_1) - angle_12, wrapped to [-π, π] with jitter
@@ -229,6 +257,9 @@ void RotationAveragingProblem::BuildPairConstraints(
   int gravity_aligned_count = 0;
 
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+    // M6: skip risky LC pairs (LC inliers > non-LC inliers) when requested.
+    if (options_.skip_risky_LC_pairs && IsRiskyLcPair(edge)) continue;
+
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const auto& image1 = reconstruction.Image(image_id1);
     const auto& image2 = reconstruction.Image(image_id2);

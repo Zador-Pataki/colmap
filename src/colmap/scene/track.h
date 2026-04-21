@@ -85,8 +85,23 @@ class Track {
   inline bool operator==(const Track& other) const;
   inline bool operator!=(const Track& other) const;
 
+  // Loop-closure observations (parallel to elements_; populated by
+  // ProcessLoopClosurePairs).
+  inline const std::vector<TrackElement>& LcElements() const;
+  inline std::vector<TrackElement>& LcElements();
+  inline size_t LcLength() const;
+  inline void AddLcElement(const TrackElement& element);
+  inline void AddLcElement(image_t image_id, point2D_t point2D_idx);
+  void DeleteLcElement(image_t image_id, point2D_t point2D_idx);
+
+  // Whether the track has been initialized (e.g. triangulated) during GP.
+  inline bool IsInitialized() const;
+  inline void SetInitialized(bool initialized);
+
  private:
   std::vector<TrackElement> elements_;
+  std::vector<TrackElement> lc_elements_;
+  bool is_initialized_ = false;
 };
 
 std::ostream& operator<<(std::ostream& stream, const TrackElement& track_el);
@@ -149,9 +164,31 @@ void Track::Reserve(const size_t num_elements) {
 void Track::Compress() { elements_.shrink_to_fit(); }
 
 bool Track::operator==(const Track& other) const {
-  return elements_ == other.elements_;
+  return elements_ == other.elements_ && lc_elements_ == other.lc_elements_;
 }
 
 bool Track::operator!=(const Track& other) const { return !(*this == other); }
+
+const std::vector<TrackElement>& Track::LcElements() const {
+  return lc_elements_;
+}
+
+std::vector<TrackElement>& Track::LcElements() { return lc_elements_; }
+
+size_t Track::LcLength() const { return lc_elements_.size(); }
+
+void Track::AddLcElement(const TrackElement& element) {
+  lc_elements_.push_back(element);
+}
+
+void Track::AddLcElement(const image_t image_id, const point2D_t point2D_idx) {
+  lc_elements_.emplace_back(image_id, point2D_idx);
+}
+
+bool Track::IsInitialized() const { return is_initialized_; }
+
+void Track::SetInitialized(const bool initialized) {
+  is_initialized_ = initialized;
+}
 
 }  // namespace colmap

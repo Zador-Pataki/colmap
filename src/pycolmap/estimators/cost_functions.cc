@@ -205,10 +205,4 @@ void BindCostFunctions(py::module& m_parent) {
         &LogScaledDepthErrorCostFunctor::Create<double>,
         "depth"_a,
         "Log-space depth prior");
-  m.def("HeightPriorCost",
-        &HeightPriorCostFunctor::Create<double, double, int>,
-        "inv_sigma"_a,
-        "target_height"_a,
-        "axis"_a = 1,
-        "Height prior on camera world position");
 }

@@ -39,7 +39,14 @@ std::shared_ptr<Image> MakeImage(const std::string& name,
 }
 
 void BindSceneImage(py::module& m) {
-  py::classh<Image> PyImage(m, "Image");
+  py::classh<GravityInfo>(m, "GravityInfo")
+      .def(py::init<>())
+      .def_readwrite("has_gravity", &GravityInfo::has_gravity)
+      .def("GetGravity", &GravityInfo::GetGravity)
+      .def("GetRAlign", &GravityInfo::GetRAlign)
+      .def("SetGravity", &GravityInfo::SetGravity, "g"_a);
+
+  py::classh<Image> PyImage(m, "Image", py::dynamic_attr());
   PyImage.def(py::init<>())
       .def(py::init(&MakeImage<Point2D>),
            "name"_a = "",
@@ -100,12 +107,11 @@ void BindSceneImage(py::module& m) {
            "frame (rig).")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
-      .def_property(
-          "points2D",
-          py::overload_cast<>(&Image::Points2D),
-          py::overload_cast<const Point2DVector&>(&Image::SetPoints2D),
-          py::return_value_policy::reference_internal,
-          "Array of Points2D (=keypoints).")
+      .def_property("points2D",
+                    py::overload_cast<>(&Image::Points2D),
+                    py::overload_cast<Point2DVector>(&Image::SetPoints2D),
+                    py::return_value_policy::reference_internal,
+                    "Array of Points2D (=keypoints).")
       .def("point2D",
            py::overload_cast<camera_t>(&Image::Point2D),
            py::return_value_policy::reference_internal,
@@ -209,6 +215,61 @@ void BindSceneImage(py::module& m) {
             return points2D;
           },
           "Get the 2D points that observe a 3D point.");
+  PyImage.def("resize_feature_arrays",
+           &Image::ResizeFeatureArrays,
+           "n"_a,
+           "Resize all per-feature parallel arrays to length n.")
+      .def_readwrite("depth_priors",
+                     &Image::depth_priors,
+                     "Monocular depth priors, parallel to points2D.")
+      .def_readwrite("depth_prior_stddevs",
+                     &Image::depth_prior_stddevs,
+                     "Depth prior standard deviations, parallel to points2D.")
+      .def_readwrite("depth_prior_validity",
+                     &Image::depth_prior_validity,
+                     "Depth prior validity mask, parallel to points2D.")
+      .def_readwrite("is_inlier",
+                     &Image::is_inlier,
+                     "Second-GP trivial-loss flag, parallel to points2D.")
+      .def_readwrite(
+          "is_depth_outlier",
+          &Image::is_depth_outlier,
+          "MDRP robust-loss depth outlier flag, parallel to points2D.")
+      .def_readwrite(
+          "is_track_anchor",
+          &Image::is_track_anchor,
+          "Loss_normal_geometry trackstart flag, parallel to points2D.")
+      .def_readwrite("is_excluded",
+                     &Image::is_excluded,
+                     "Hard exclusion flag: skip observation entirely.")
+      .def_readwrite(
+          "angular_stddevs",
+          &Image::angular_stddevs,
+          "Per-feature (sigma_x, sigma_y) in radians, parallel to points2D.")
+      .def_readwrite(
+          "angular_cholesky_xy",
+          &Image::angular_cholesky_xy,
+          "Cholesky of 2x2 XY precision matrix, parallel to points2D.")
+      .def_readwrite(
+          "angular_stddevs_z",
+          &Image::angular_stddevs_z,
+          "Z-component stddev, parallel to points2D.")
+      .def_readwrite("log_scale",
+                     &Image::log_scale,
+                     "Per-image log depth scale (optimizable).")
+      .def_readwrite("log_scale_stddev",
+                     &Image::log_scale_stddev,
+                     "Standard deviation of log_scale prior.")
+      .def_readwrite(
+          "gravity_sigma",
+          &Image::gravity_sigma,
+          "Per-image gravity prior sigma; 0 = use global default.")
+      .def_readwrite("gravity_info",
+                     &Image::gravity_info,
+                     "Gravity direction and alignment rotation.")
+      .def_readwrite("features_undist",
+                     &Image::features_undist,
+                     "Undistorted bearing vectors (z=1 plane).");
   MakeDataclass(PyImage);
 
   py::bind_map<ImageMap>(m, "ImageMap");
