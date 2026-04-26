@@ -45,6 +45,8 @@ COLMAP_ADD_LIBRARY(
         l1_solver_glomap.h
         track_establishment_glomap.h track_establishment_glomap.cc
         union_find_glomap.h
+        image_pair_inliers_glomap.h image_pair_inliers_glomap.cc
+        two_view_geometry_glomap.h two_view_geometry_glomap.cc
         view_graph_manipulation.h view_graph_manipulation.cc
     PUBLIC_LINK_LIBS
         colmap_scene
