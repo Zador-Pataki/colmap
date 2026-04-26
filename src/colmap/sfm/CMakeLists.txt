@@ -43,6 +43,8 @@ COLMAP_ADD_LIBRARY(
         rigid3d_glomap.h rigid3d_glomap.cc
         tree_glomap.h tree_glomap.cc
         l1_solver_glomap.h
+        track_establishment_glomap.h track_establishment_glomap.cc
+        union_find_glomap.h
         view_graph_manipulation.h view_graph_manipulation.cc
     PUBLIC_LINK_LIBS
         colmap_scene
