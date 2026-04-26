@@ -66,6 +66,35 @@ struct RotationEstimatorOptions {
   // If > 0, filter image pairs with rotation error exceeding this threshold
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
+
+  // --- glomap-fork additions (consumed by EstimateRotationsGlomap in
+  //     colmap/sfm/rotation_averaging_glomap.h) ---
+
+  // If true, use pre-computed weights from image_pair.weight in a weighted
+  // least-squares pass instead of dynamic IRLS reweighting.
+  bool use_precomputed_weights = false;
+
+  // If true, fix non-loop-closure pair weights at fixed_non_lc_weight during
+  // IRLS (do not reweight them across iterations). Currently disabled at the
+  // call site — kept for option-surface parity with the glomap fork.
+  bool fix_non_lc_weights = false;
+
+  // Fixed weight value for non-LC pairs when fix_non_lc_weights is true.
+  // 138.0 ≈ theoretical Geman-McClure max.
+  double fixed_non_lc_weight = 138.0;
+
+  // If true, drop pairs whose loop-closure inlier count exceeds non-LC
+  // inliers — prevents LC-contaminated pairs from breaking RA.
+  bool skip_risky_LC_pairs = false;
+
+  // If true, switch from L1 + IRLS to a Ceres-based solver with differential
+  // loss functions (Huber for tracking pairs, Cauchy for LC pairs). Required
+  // for the video-aware variant; mutually exclusive with use_gravity.
+  bool use_video_constraints = false;
+
+  // Loss scales for the video-aware Ceres solver.
+  double video_tracking_huber_scale = 0.1;  // ~5.7 degrees
+  double video_lc_cauchy_scale = 0.05;      // ~2.8 degrees
 };
 
 // High-level interface for rotation averaging.

@@ -7,6 +7,7 @@ void BindIncrementalTriangulator(py::module& m);
 void BindIncrementalMapper(py::module& m);
 void BindViewGraphManipulation(py::module& m);
 void BindRelativePoseEstimation(py::module& m);
+void BindRotationAveragingGlomap(py::module& m);
 
 void BindSfm(py::module& m) {
   BindObservationManager(m);
@@ -14,4 +15,5 @@ void BindSfm(py::module& m) {
   BindIncrementalMapper(m);
   BindViewGraphManipulation(m);
   BindRelativePoseEstimation(m);
+  BindRotationAveragingGlomap(m);
 }

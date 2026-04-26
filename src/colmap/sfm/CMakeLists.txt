@@ -39,6 +39,10 @@ COLMAP_ADD_LIBRARY(
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
         relative_pose_estimation.h relative_pose_estimation.cc
+        rotation_averaging_glomap.h rotation_averaging_glomap.cc
+        rigid3d_glomap.h rigid3d_glomap.cc
+        tree_glomap.h tree_glomap.cc
+        l1_solver_glomap.h
         view_graph_manipulation.h view_graph_manipulation.cc
     PUBLIC_LINK_LIBS
         colmap_scene

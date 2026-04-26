@@ -165,7 +165,41 @@ void BindRotationEstimator(py::module& m) {
               "max_rotation_error_deg",
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
-              "(degrees).");
+              "(degrees).")
+          // --- glomap-fork additions (consumed by EstimateRotationsGlomap)
+          .def_readwrite(
+              "use_precomputed_weights",
+              &RotationEstimatorOptions::use_precomputed_weights,
+              "Use pre-computed weights from image_pair.weight in a weighted "
+              "least-squares pass instead of dynamic IRLS reweighting.")
+          .def_readwrite(
+              "fix_non_lc_weights",
+              &RotationEstimatorOptions::fix_non_lc_weights,
+              "Fix non-LC pair weights at fixed_non_lc_weight during IRLS. "
+              "Currently disabled at the call site.")
+          .def_readwrite(
+              "fixed_non_lc_weight",
+              &RotationEstimatorOptions::fixed_non_lc_weight,
+              "Fixed weight value for non-LC pairs when fix_non_lc_weights "
+              "is true.")
+          .def_readwrite(
+              "skip_risky_LC_pairs",
+              &RotationEstimatorOptions::skip_risky_LC_pairs,
+              "Drop pairs whose LC inliers exceed non-LC inliers.")
+          .def_readwrite(
+              "use_video_constraints",
+              &RotationEstimatorOptions::use_video_constraints,
+              "Use Ceres video-aware solver with differential loss "
+              "functions. Mutually exclusive with use_gravity.")
+          .def_readwrite(
+              "video_tracking_huber_scale",
+              &RotationEstimatorOptions::video_tracking_huber_scale,
+              "Huber loss scale for tracking pairs in the video solver.")
+          .def_readwrite(
+              "video_lc_cauchy_scale",
+              &RotationEstimatorOptions::video_lc_cauchy_scale,
+              "Cauchy loss scale for loop-closure pairs in the video "
+              "solver.");
   MakeDataclass(PyRotationEstimatorOptions);
 
   m.def(
