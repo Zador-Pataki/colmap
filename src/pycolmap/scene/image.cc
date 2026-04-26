@@ -93,11 +93,27 @@ void BindSceneImage(py::module& m) {
                     py::overload_cast<>(&Image::Name),
                     &Image::SetName,
                     "Name of the image.")
-      .def("cam_from_world",
-           &Image::CamFromWorld,
-           "The pose of the image, defined as the transformation from world to "
-           "camera space. This method is read-only and support non-trivial "
-           "frame (rig).")
+      // Pose accessor that prefers the Frame-derived pose (so Images loaded
+      // from disk via Reconstruction.read() return the correct value) and
+      // falls back to the public glomap-fork override field for standalone
+      // pipeline Images that have no Frame attached. Setter writes the field.
+      // Note: writing to an Image with a Frame leaves the Frame's pose
+      // unchanged; if both views are needed, use Reconstruction-level APIs.
+      .def_property(
+          "cam_from_world",
+          [](const Image& self) -> Rigid3d {
+            return self.HasPose() ? self.CamFromWorld() : self.cam_from_world;
+          },
+          [](Image& self, const Rigid3d& value) {
+            self.cam_from_world = value;
+            if (self.HasFramePtr() && self.FramePtr()->HasPose()) {
+              self.FramePtr()->SetRigFromWorld(value);
+            }
+          },
+          "Pose of the image (cam_from_world). Reads the Frame-derived pose "
+          "when available, else the glomap-fork override field. Setter writes "
+          "the override field and, if a Frame is attached and posed, also "
+          "updates the Frame's rig_from_world.")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
       .def_property(
@@ -129,6 +145,118 @@ void BindSceneImage(py::module& m) {
       .def("has_pixel_covariances",
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
+      // glomap-fork per-feature/per-image fields. Bound as def_property with
+      // Eigen-typed getters/setters (matching pyglomap.Image semantics) so
+      // Python sees numpy.ndarray rather than list — the existing videosfm
+      // code does numpy fancy-indexing on these (e.g. depth_priors[matches]).
+      .def_property(
+          "depth_priors",
+          [](const Image& self) -> Eigen::VectorXd {
+            return Eigen::Map<const Eigen::VectorXd>(self.depth_priors.data(),
+                                                     self.depth_priors.size());
+          },
+          [](Image& self, const Eigen::VectorXd& v) {
+            self.depth_priors.assign(v.data(), v.data() + v.size());
+          })
+      .def_property(
+          "depth_prior_stddevs",
+          [](const Image& self) -> Eigen::VectorXd {
+            return Eigen::Map<const Eigen::VectorXd>(
+                self.depth_prior_stddevs.data(),
+                self.depth_prior_stddevs.size());
+          },
+          [](Image& self, const Eigen::VectorXd& v) {
+            self.depth_prior_stddevs.assign(v.data(), v.data() + v.size());
+          })
+      .def_property(
+          "depth_prior_validity",
+          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
+            Eigen::Array<bool, Eigen::Dynamic, 1> arr(
+                self.depth_prior_validity.size());
+            for (size_t i = 0; i < self.depth_prior_validity.size(); ++i)
+              arr[i] = self.depth_prior_validity[i];
+            return arr;
+          },
+          [](Image& self,
+             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
+            self.depth_prior_validity.assign(v.size(), false);
+            for (Eigen::Index i = 0; i < v.size(); ++i)
+              self.depth_prior_validity[i] = v[i];
+          })
+      .def_property(
+          "is_inlier",
+          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
+            Eigen::Array<bool, Eigen::Dynamic, 1> arr(self.is_inlier.size());
+            for (size_t i = 0; i < self.is_inlier.size(); ++i)
+              arr[i] = self.is_inlier[i];
+            return arr;
+          },
+          [](Image& self,
+             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
+            self.is_inlier.assign(v.size(), false);
+            for (Eigen::Index i = 0; i < v.size(); ++i)
+              self.is_inlier[i] = v[i];
+          })
+      .def_property(
+          "is_depth_outlier",
+          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
+            Eigen::Array<bool, Eigen::Dynamic, 1> arr(
+                self.is_depth_outlier.size());
+            for (size_t i = 0; i < self.is_depth_outlier.size(); ++i)
+              arr[i] = self.is_depth_outlier[i];
+            return arr;
+          },
+          [](Image& self,
+             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
+            self.is_depth_outlier.assign(v.size(), false);
+            for (Eigen::Index i = 0; i < v.size(); ++i)
+              self.is_depth_outlier[i] = v[i];
+          })
+      .def_property(
+          "is_track_anchor",
+          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
+            Eigen::Array<bool, Eigen::Dynamic, 1> arr(
+                self.is_track_anchor.size());
+            for (size_t i = 0; i < self.is_track_anchor.size(); ++i)
+              arr[i] = self.is_track_anchor[i];
+            return arr;
+          },
+          [](Image& self,
+             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
+            self.is_track_anchor.assign(v.size(), false);
+            for (Eigen::Index i = 0; i < v.size(); ++i)
+              self.is_track_anchor[i] = v[i];
+          })
+      .def_property(
+          "is_excluded",
+          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
+            Eigen::Array<bool, Eigen::Dynamic, 1> arr(self.is_excluded.size());
+            for (size_t i = 0; i < self.is_excluded.size(); ++i)
+              arr[i] = self.is_excluded[i];
+            return arr;
+          },
+          [](Image& self,
+             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
+            self.is_excluded.assign(v.size(), false);
+            for (Eigen::Index i = 0; i < v.size(); ++i)
+              self.is_excluded[i] = v[i];
+          })
+      .def_readwrite("angular_stddevs", &Image::angular_stddevs)
+      .def_readwrite("angular_cholesky_xy", &Image::angular_cholesky_xy)
+      .def_property(
+          "angular_stddevs_z",
+          [](const Image& self) -> Eigen::VectorXd {
+            return Eigen::Map<const Eigen::VectorXd>(
+                self.angular_stddevs_z.data(), self.angular_stddevs_z.size());
+          },
+          [](Image& self, const Eigen::VectorXd& v) {
+            self.angular_stddevs_z.assign(v.data(), v.data() + v.size());
+          })
+      .def_readwrite("log_scale", &Image::log_scale)
+      .def_readwrite("log_scale_stddev", &Image::log_scale_stddev)
+      .def_readwrite("is_registered", &Image::is_registered)
+      .def_readwrite("features", &Image::features)
+      .def_readwrite("features_undist", &Image::features_undist)
       .def(
           "set_point3D_for_point2D",
           &Image::SetPoint3DForPoint2D,
