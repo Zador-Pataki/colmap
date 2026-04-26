@@ -38,14 +38,17 @@ COLMAP_ADD_LIBRARY(
         incremental_mapper.h incremental_mapper.cc
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
+        relative_pose_estimation.h relative_pose_estimation.cc
         view_graph_manipulation.h view_graph_manipulation.cc
     PUBLIC_LINK_LIBS
         colmap_scene
         colmap_estimators
+        colmap_estimators_solvers
         colmap_util
     PRIVATE_LINK_LIBS
         colmap_geometry
         colmap_image
+        PoseLib
 )
 
 if(MSVC)
