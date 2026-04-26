@@ -61,4 +61,14 @@ void DecomposeRelPose(CorrespondenceGraph& view_graph,
                       std::unordered_map<camera_t, Camera>& cameras,
                       std::unordered_map<image_t, Image>& images);
 
+// Mark pairs invalid (is_valid=false) when their inlier count is below
+// ``min_inlier_num``. Mirrors glomap::RelPoseFilter::FilterInlierNum.
+void FilterPairsByInlierNum(CorrespondenceGraph& view_graph,
+                            int min_inlier_num);
+
+// Mark pairs invalid when their inlier ratio (inliers / total matches) is
+// below ``min_inlier_ratio``. Mirrors glomap::RelPoseFilter::FilterInlierRatio.
+void FilterPairsByInlierRatio(CorrespondenceGraph& view_graph,
+                              double min_inlier_ratio);
+
 }  // namespace colmap
