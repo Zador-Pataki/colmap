@@ -32,12 +32,12 @@
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/point3d.h"
-#include "colmap/sfm/track_establishment_glomap.h"
 #include "colmap/util/types.h"
 
 #include <algorithm>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Core>
@@ -293,71 +293,109 @@ Point3D MakePoint3DFromElements(
   return p;
 }
 
-// LengthFilter: with ``min_num_view_per_track=10`` every track here is too
-// short, so FindTracksForProblem returns empty. Loosening to 2 surfaces
-// every input track (assuming the per-view greedy quota is satisfied).
+// Project an ``images`` test fixture into the three dict inputs SubsampleTracks
+// consumes: registered_image_ids, depth_priors, depth_prior_validity.
+struct SubsampleInputs {
+  std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
+};
+
+SubsampleInputs MakeSubsampleInputs(
+    const std::unordered_map<image_t, Image>& images) {
+  SubsampleInputs inputs;
+  for (const auto& [image_id, image] : images) {
+    if (image.is_registered) {
+      inputs.registered_image_ids.insert(image_id);
+    }
+    inputs.depth_priors.emplace(image_id, image.depth_priors);
+    inputs.depth_prior_validity.emplace(image_id, image.depth_prior_validity);
+  }
+  return inputs;
+}
+
+// LengthFilter: with ``min_num_views_per_track=10`` every track here is too
+// short, so SubsampleTracks returns empty. Loosening to 2 surfaces every input
+// track (assuming the per-view greedy quota is satisfied).
+//
+// Drives SubsampleTracks (post-TrackEngine-dedup).
 TEST(FindTracksForProblem, LengthFilter) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeRegisteredImage(1, 5));
   images.emplace(2, MakeRegisteredImage(2, 5));
   images.emplace(3, MakeRegisteredImage(3, 5));
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 5; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  CorrespondenceGraph corr_graph;
+  const auto inputs = MakeSubsampleInputs(images);
+
   // High-min variant: tracks have length 3, demand 10.
   {
-    sfm_ext::TrackEstablishmentOptions options;
-    options.min_num_view_per_track = 10;
-    options.min_num_tracks_per_view = 1000;  // never saturate
-    sfm_ext::TrackEngine engine(corr_graph, images, options);
-    std::unordered_map<sfm_ext::track_t, Point3D> selected;
-    EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+    TrackSubsampleOptions options;
+    options.min_num_views_per_track = 10;
+    options.required_tracks_per_view = 1000;  // never saturate
+    const auto selected = SubsampleTracks(options,
+                                          inputs.registered_image_ids,
+                                          inputs.depth_priors,
+                                          inputs.depth_prior_validity,
+                                          tracks_full);
+    EXPECT_EQ(selected.size(), 0u);
     EXPECT_TRUE(selected.empty());
   }
 
   // Low-min variant: every length-3 track survives.
   {
-    sfm_ext::TrackEstablishmentOptions options;
-    options.min_num_view_per_track = 2;
-    options.min_num_tracks_per_view = 1000;
-    sfm_ext::TrackEngine engine(corr_graph, images, options);
-    std::unordered_map<sfm_ext::track_t, Point3D> selected;
-    EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 5u);
+    TrackSubsampleOptions options;
+    options.min_num_views_per_track = 2;
+    options.required_tracks_per_view = 1000;
+    const auto selected = SubsampleTracks(options,
+                                          inputs.registered_image_ids,
+                                          inputs.depth_priors,
+                                          inputs.depth_prior_validity,
+                                          tracks_full);
+    EXPECT_EQ(selected.size(), 5u);
   }
 }
 
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
+//
+// Drives SubsampleTracks (post-TrackEngine-dedup).
 TEST(FindTracksForProblem, MaxLengthFilter) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 5; ++i) {
     images.emplace(i, MakeRegisteredImage(i, 3));
   }
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 3; ++f) {
     tracks_full.emplace(
         f, MakePoint3DFromElements(
                {{1, f}, {2, f}, {3, f}, {4, f}, {5, f}}));
   }
 
-  CorrespondenceGraph corr_graph;
-  sfm_ext::TrackEstablishmentOptions options;
-  options.min_num_view_per_track = 2;
-  options.max_num_view_per_track = 4;
-  options.min_num_tracks_per_view = 1000;
-  sfm_ext::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<sfm_ext::track_t, Point3D> selected;
-  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.max_num_views_per_track = 4;
+  options.required_tracks_per_view = 1000;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_EQ(selected.size(), 0u);
   EXPECT_TRUE(selected.empty());
 }
 
 // TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
 // valid depth prior is dropped by the fork-unique 2-view gate.
+//
+// Drives SubsampleTracks (post-TrackEngine-dedup).
 TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   std::unordered_map<image_t, Image> images;
   // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
@@ -367,23 +405,30 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   images.emplace(1, std::move(img1));
   images.emplace(2, MakeRegisteredImage(2, 3));  // all valid
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
 
-  CorrespondenceGraph corr_graph;
-  sfm_ext::TrackEstablishmentOptions options;
-  options.min_num_view_per_track = 2;
-  options.min_num_tracks_per_view = 1000;
-  sfm_ext::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<sfm_ext::track_t, Point3D> selected;
-  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_EQ(selected.size(), 0u);
   EXPECT_TRUE(selected.empty());
 }
 
 // TwoViewDepthGate_Keep: both endpoints have valid depth -> track kept.
 // Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
 // uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
+//
+// Drives SubsampleTracks (post-TrackEngine-dedup).
 TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeRegisteredImage(1, 3);
@@ -393,85 +438,102 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   images.emplace(1, std::move(img1));
   images.emplace(2, MakeRegisteredImage(2, 3));
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
   tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
 
-  CorrespondenceGraph corr_graph;
-  sfm_ext::TrackEstablishmentOptions options;
-  options.min_num_view_per_track = 2;
-  options.min_num_tracks_per_view = 1000;
-  sfm_ext::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<sfm_ext::track_t, Point3D> selected;
-  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 1u);
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_EQ(selected.size(), 1u);
   ASSERT_EQ(selected.count(0), 1u);
   EXPECT_EQ(selected.count(1), 0u);
 }
 
-// GreedyQuota: 5 length-3 tracks across 3 images, ``min_num_tracks_per_view=2``
+// GreedyQuota: 5 length-3 tracks across 3 images, ``required_tracks_per_view=2``
 // per-view quota. Greedy keeps as soon as every image is satisfied -> 2
 // tracks suffice (each contributes to all 3 images at once).
+//
+// Drives SubsampleTracks (post-TrackEngine-dedup).
 TEST(FindTracksForProblem, GreedyQuota) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
     images.emplace(i, MakeRegisteredImage(i, 5));
   }
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 5; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  CorrespondenceGraph corr_graph;
-  sfm_ext::TrackEstablishmentOptions options;
-  options.min_num_view_per_track = 2;
-  options.min_num_tracks_per_view = 2;
-  sfm_ext::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<sfm_ext::track_t, Point3D> selected;
-  const size_t n_selected = engine.FindTracksForProblem(tracks_full, selected);
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 2;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  const size_t n_selected = selected.size();
 
   // Each track touches all 3 images so 2 tracks fully satisfy the per-view
   // quota of 2. Bound: at most all 5 input tracks; at least 2 (the quota).
   EXPECT_GE(n_selected, 2u);
   EXPECT_LE(n_selected, 5u);
-  EXPECT_EQ(n_selected, selected.size());
 }
 
 // MinTracksPerViewBugDocumentation: enshrines the actual behaviour of the
-// fork-default ``min_num_tracks_per_view = -1``.
+// fork-default ``required_tracks_per_view = INT_MAX``.
 //
-// The greedy gate compares an *unsigned* per-camera counter against the
-// signed ``-1`` option:
-//   ``if (track_per_camera > options_.min_num_tracks_per_view) continue;``
-// Signed/unsigned promotion converts ``-1`` to ``uint32_t::max()``, so the
-// gate is *never* taken (the counter cannot exceed UINT_MAX). Symmetrically
-// ``cameras_left`` is never decremented, so the loop only stops on
-// ``max_num_tracks``. Net effect: with the default, the greedy quota is
-// disabled entirely and every length+depth-filtered track is selected.
+// In the post-dedup native API the per-view quota is a signed ``int`` and
+// the default is ``std::numeric_limits<int>::max()``. The greedy gate
+// compares an ``int`` per-camera counter against this value; with INT_MAX
+// as the bar the counter can never exceed it (we'd overflow first), so the
+// gate is *never* taken. Symmetrically the cameras-left bookkeeping never
+// fires, so the loop only stops on ``max_num_tracks``. Net effect: with
+// the default, the greedy quota is disabled entirely and every length+
+// depth-filtered track is selected.
+//
+// (Historical note: the prior fork-side TrackEngine API used a signed
+// ``-1`` default that promoted to ``UINT_MAX`` via signed/unsigned mixing
+// — same observable behaviour, different mechanism.)
 //
 // Documented as a test so future refactors that "fix" the default to a
-// non-negative number trip this and force a conscious update.
+// finite non-max number trip this and force a conscious update.
 TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
     images.emplace(i, MakeRegisteredImage(i, 3));
   }
 
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
+  std::unordered_map<point3D_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 3; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  CorrespondenceGraph corr_graph;
-  sfm_ext::TrackEstablishmentOptions options;
-  options.min_num_view_per_track = 2;
-  // options.min_num_tracks_per_view stays at default = -1.
-  sfm_ext::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<sfm_ext::track_t, Point3D> selected;
-  // All 3 tracks are kept — the quota gate is disabled by the unsigned cmp.
-  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 3u);
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  // options.required_tracks_per_view stays at default = INT_MAX.
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  // All 3 tracks are kept — the quota gate is disabled by INT_MAX bar.
   EXPECT_EQ(selected.size(), 3u);
 }
 
@@ -479,17 +541,20 @@ TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
 // ProcessLoopClosurePairs (fork second pass over LC-marked inlier matches)
 // ============================================================================
 //
-// These tests drive ``TrackEngine::EstablishFullTracks`` (which invokes
-// ``ProcessLoopClosurePairs`` after the native UF + grouping pass). Setup:
+// These tests now drive the two-step ``EstablishTracksFromCorrGraph`` (with
+// ``MakeLoopClosureMatchPredicate`` filtering LC matches out of the union-
+// find pass) followed by ``AppendLoopClosureObservations`` (which adds LC
+// observations as parallel ``Track::lc_elements``). Setup:
 //   * Regular matches (``are_lc[idx]=false``) drive native track construction.
-//   * LC matches (``are_lc[idx]=true``) are skipped by the native pass via
-//     ``ignore_match`` and consumed by the LC second pass.
+//   * LC matches (``are_lc[idx]=true``) are skipped by
+//     ``MakeLoopClosureMatchPredicate`` and consumed by
+//     ``AppendLoopClosureObservations``.
 // The post-condition tracks dict is what we assert on.
 
 // Variant of ``AddImagePair`` that also populates ``are_lc``. Each
 // ``lc_match_indices`` entry is a row index into ``matches`` (NOT an index
 // into ``inliers``); matching the indexing convention used inside
-// ``ProcessLoopClosurePairs``.
+// ``AppendLoopClosureObservations``.
 void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
                         image_t image_id1,
                         image_t image_id2,
@@ -512,20 +577,6 @@ void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
   corr_graph.MutableImagePairs().emplace(pair_id, std::move(image_pair));
 }
 
-// Build the ``images`` map TrackEngine consumes (only ``features`` is read
-// inside EstablishFullTracks).
-std::unordered_map<image_t, Image> MakeFeatureOnlyImages(
-    const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& kps) {
-  std::unordered_map<image_t, Image> images;
-  for (const auto& [image_id, features] : kps) {
-    Image image;
-    image.SetImageId(image_id);
-    image.features = features;
-    images.emplace(image_id, std::move(image));
-  }
-  return images;
-}
-
 // Helper: track contains (image_id, p2d_idx) as a regular element.
 bool TrackHasElement(const Track& track,
                      image_t image_id,
@@ -546,6 +597,21 @@ bool TrackHasLCElement(const Track& track,
   return false;
 }
 
+// Run the native + LC two-step end-to-end and return the populated tracks
+// dict. Mirrors what TrackEngine::EstablishFullTracks did pre-dedup.
+std::unordered_map<point3D_t, Point3D> EstablishFullTracks(
+    const CorrespondenceGraph& corr_graph,
+    const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& keypoints,
+    const TrackEstablishmentOptions& options) {
+  const auto pair_ids = CollectPairIds(corr_graph);
+  const auto ignore_lc =
+      MakeLoopClosureMatchPredicate(pair_ids, corr_graph);
+  auto tracks = EstablishTracksFromCorrGraph(
+      pair_ids, corr_graph, keypoints, options, ignore_lc);
+  AppendLoopClosureObservations(pair_ids, corr_graph, tracks);
+  return tracks;
+}
+
 // Both endpoints of the LC match already lie on existing native tracks, but
 // on DIFFERENT tracks. Expect reciprocal lc_elements added to both; tracks
 // stay separate (no merge).
@@ -554,6 +620,8 @@ bool TrackHasLCElement(const Track& track,
 // regular pair (3,4) extending each feature-i track to image 4 -> 5 native
 // tracks of length 4. LC pair (1,4) with one match (img1:feat=0 <->
 // img4:feat=1): feat-0 chain holds img1:0; feat-1 chain holds img4:1.
+//
+// Drives EstablishTracksFromCorrGraph + AppendLoopClosureObservations.
 TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 4; ++i) corr_graph.AddImage(i, 5);
@@ -573,23 +641,20 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   AddImagePairWithLC(corr_graph, 1, 4, {{0, 1}}, {0}, {0});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
-  auto images = MakeFeatureOnlyImages(kps);
 
-  sfm_ext::TrackEstablishmentOptions opts;
-  opts.min_num_view_per_track = 3;
-  opts.thres_inconsistency = 10.0;
-  sfm_ext::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
-  engine.EstablishFullTracks(tracks);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 3;
+  opts.intra_image_consistency_threshold = 10.0;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
   // Native pass yields 5 tracks; LC pass adds reciprocal lc_elements
   // without minting any new track.
   EXPECT_EQ(tracks.size(), 5u);
 
   // Locate the two native tracks the LC match's endpoints fall on.
-  const auto kInvalid = std::numeric_limits<sfm_ext::track_t>::max();
-  sfm_ext::track_t tid_a = kInvalid;
-  sfm_ext::track_t tid_b = kInvalid;
+  const auto kInvalid = std::numeric_limits<point3D_t>::max();
+  point3D_t tid_a = kInvalid;
+  point3D_t tid_b = kInvalid;
   for (const auto& [tid, p3d] : tracks) {
     if (TrackHasElement(p3d.track, 1, 0)) tid_a = tid;
     if (TrackHasElement(p3d.track, 4, 1)) tid_b = tid;
@@ -610,6 +675,8 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
 // Exactly one LC endpoint lies on an existing native track; the other side
 // is orphan. Expect lc_element added to the existing track; no new track is
 // minted.
+//
+// Drives EstablishTracksFromCorrGraph + AppendLoopClosureObservations.
 TEST(ProcessLoopClosurePairs, OneExistingTrack) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 5);
@@ -630,14 +697,11 @@ TEST(ProcessLoopClosurePairs, OneExistingTrack) {
   AddImagePairWithLC(corr_graph, 1, 4, {{0, 0}}, {0}, {0});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
-  auto images = MakeFeatureOnlyImages(kps);
 
-  sfm_ext::TrackEstablishmentOptions opts;
-  opts.min_num_view_per_track = 3;
-  opts.thres_inconsistency = 10.0;
-  sfm_ext::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
-  engine.EstablishFullTracks(tracks);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 3;
+  opts.intra_image_consistency_threshold = 10.0;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
   // 5 native tracks; no new track minted (one side already on a track).
   EXPECT_EQ(tracks.size(), 5u);
@@ -657,6 +721,8 @@ TEST(ProcessLoopClosurePairs, OneExistingTrack) {
 // Both LC endpoints are orphan (neither lives on a native track). Expect 2
 // new tracks minted, each with 1 regular element + the other side as
 // lc_element. Ids land at sequential positions past the native max.
+//
+// Drives EstablishTracksFromCorrGraph + AppendLoopClosureObservations.
 TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 5);
@@ -678,21 +744,18 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   AddImagePairWithLC(corr_graph, 4, 5, {{2, 3}}, {0}, {0});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 5);
-  auto images = MakeFeatureOnlyImages(kps);
 
-  sfm_ext::TrackEstablishmentOptions opts;
-  opts.min_num_view_per_track = 3;
-  opts.thres_inconsistency = 10.0;
-  sfm_ext::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
-  engine.EstablishFullTracks(tracks);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 3;
+  opts.intra_image_consistency_threshold = 10.0;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
   // 5 native tracks + 2 minted = 7.
   EXPECT_EQ(tracks.size(), 7u);
 
-  const auto kInvalid = std::numeric_limits<sfm_ext::track_t>::max();
-  sfm_ext::track_t tid_for_4_2 = kInvalid;
-  sfm_ext::track_t tid_for_5_3 = kInvalid;
+  const auto kInvalid = std::numeric_limits<point3D_t>::max();
+  point3D_t tid_for_4_2 = kInvalid;
+  point3D_t tid_for_5_3 = kInvalid;
   for (const auto& [tid, p3d] : tracks) {
     if (TrackHasElement(p3d.track, 4, 2)) tid_for_4_2 = tid;
     if (TrackHasElement(p3d.track, 5, 3)) tid_for_5_3 = tid;
@@ -703,8 +766,8 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   EXPECT_GE(tid_for_4_2, 5u);
   EXPECT_GE(tid_for_5_3, 5u);
   // Sequential — they differ by exactly 1.
-  const sfm_ext::track_t lo = std::min(tid_for_4_2, tid_for_5_3);
-  const sfm_ext::track_t hi = std::max(tid_for_4_2, tid_for_5_3);
+  const point3D_t lo = std::min(tid_for_4_2, tid_for_5_3);
+  const point3D_t hi = std::max(tid_for_4_2, tid_for_5_3);
   EXPECT_EQ(hi, lo + 1);
 
   // Each minted track has exactly 1 regular element + 1 lc_element.
@@ -729,6 +792,8 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
 // observation (img5:feat=0). Whichever pair runs first mints a track for
 // (img5:feat=0); the second pair must hit "OneExistingTrack" via that
 // observation rather than re-mint.
+//
+// Drives EstablishTracksFromCorrGraph + AppendLoopClosureObservations.
 TEST(ProcessLoopClosurePairs, MultipleLCMatchesAcrossPairs) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 6; ++i) corr_graph.AddImage(i, 5);
@@ -747,14 +812,11 @@ TEST(ProcessLoopClosurePairs, MultipleLCMatchesAcrossPairs) {
   AddImagePairWithLC(corr_graph, 5, 6, {{0, 0}}, {0}, {0});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5, 6}, 5);
-  auto images = MakeFeatureOnlyImages(kps);
 
-  sfm_ext::TrackEstablishmentOptions opts;
-  opts.min_num_view_per_track = 3;
-  opts.thres_inconsistency = 10.0;
-  sfm_ext::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
-  engine.EstablishFullTracks(tracks);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 3;
+  opts.intra_image_consistency_threshold = 10.0;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
   // 5 native + (2 minted from first LC pair processed) + (0 minted from
   // second LC pair, "OneExistingTrack" branch on img5:feat=0) = 7.
@@ -773,6 +835,8 @@ TEST(ProcessLoopClosurePairs, MultipleLCMatchesAcrossPairs) {
 
 // Smoke test: native produces 10 dense tracks (ids in [0, 10)); minted ids
 // must start >= 10 and never collide with a native id.
+//
+// Drives EstablishTracksFromCorrGraph + AppendLoopClosureObservations.
 TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 10);
@@ -791,14 +855,11 @@ TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
   AddImagePairWithLC(corr_graph, 4, 5, {{0, 0}}, {0}, {0});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 10);
-  auto images = MakeFeatureOnlyImages(kps);
 
-  sfm_ext::TrackEstablishmentOptions opts;
-  opts.min_num_view_per_track = 3;
-  opts.thres_inconsistency = 10.0;
-  sfm_ext::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
-  engine.EstablishFullTracks(tracks);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 3;
+  opts.intra_image_consistency_threshold = 10.0;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
   EXPECT_EQ(tracks.size(), 12u);  // 10 native + 2 minted
 

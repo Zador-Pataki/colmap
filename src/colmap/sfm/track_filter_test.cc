@@ -95,7 +95,7 @@ TEST(TrackFilter, FilterByAngle_AlignedRaysKept) {
   CorrespondenceGraph view_graph;
   std::unordered_map<camera_t, Camera> cameras;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   cameras.emplace(1, MakePinholeCamera(1, /*has_prior=*/true));
 
@@ -130,7 +130,7 @@ TEST(TrackFilter, FilterByAngle_MisalignedRaysDropped) {
   CorrespondenceGraph view_graph;
   std::unordered_map<camera_t, Camera> cameras;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   cameras.emplace(1, MakePinholeCamera(1, /*has_prior=*/true));
 
@@ -165,7 +165,7 @@ TEST(TrackFilter, FilterByAngle_UncalibratedCameraDoubleThreshold) {
   CorrespondenceGraph view_graph;
   std::unordered_map<camera_t, Camera> cameras;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   // Uncalibrated camera => threshold becomes 2 * max_angle_error.
   cameras.emplace(1, MakePinholeCamera(1, /*has_prior=*/false));
@@ -199,7 +199,7 @@ TEST(TrackFilter, FilterByAngle_UncalibratedCameraDoubleThreshold) {
   // Sanity: same setup, but now flip the camera to calibrated => 5deg drops.
   std::unordered_map<camera_t, Camera> cameras_calib;
   cameras_calib.emplace(1, MakePinholeCamera(1, /*has_prior=*/true));
-  std::unordered_map<track_t, Point3D> tracks_calib;
+  std::unordered_map<point3D_t, Point3D> tracks_calib;
   tracks_calib.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
   const int touched_calib = TrackFilter::FilterTracksByAngle(
       view_graph, cameras_calib, images, tracks_calib,
@@ -215,7 +215,7 @@ TEST(TrackFilter, FilterByAngle_PointBehindCameraSkipped) {
   CorrespondenceGraph view_graph;
   std::unordered_map<camera_t, Camera> cameras;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   cameras.emplace(1, MakePinholeCamera(1, /*has_prior=*/true));
 
@@ -254,7 +254,7 @@ TEST(TrackFilter, FilterByAngle_PointBehindCameraSkipped) {
 TEST(TrackFilter, FilterTriAngle_ParallelRaysDropped) {
   CorrespondenceGraph view_graph;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   // Two cameras both at origin, identity orientation => same projection center.
   Image img1 = MakeImage(1, 1, Rigid3d(), 1);
@@ -278,7 +278,7 @@ TEST(TrackFilter, FilterTriAngle_ParallelRaysDropped) {
 TEST(TrackFilter, FilterTriAngle_PerpendicularRaysKept) {
   CorrespondenceGraph view_graph;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   // Cam1 center at (-5, 0, 0), Cam2 center at (5, 0, 0). Point at (0, 0, 5).
   // Rays from point: (5, 0, -5)/|.| and (-5, 0, -5)/|.|. Dot product = 0
@@ -310,7 +310,7 @@ TEST(TrackFilter, FilterTriAngle_PerpendicularRaysKept) {
 TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
   CorrespondenceGraph view_graph;
   std::unordered_map<image_t, Image> images;
-  std::unordered_map<track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
 
   // Place camera centers at C1=(-d, 0, 0), C2=(d, 0, 0); point at P=(0, 0, h).
   // Triangulation angle theta = 2 * atan2(d, h).
@@ -333,7 +333,7 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
 
   // min_angle below theta => kept.
   {
-    std::unordered_map<track_t, Point3D> tracks_kept;
+    std::unordered_map<point3D_t, Point3D> tracks_kept;
     tracks_kept.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
     const int touched = TrackFilter::FilterTrackTriangulationAngle(
         view_graph, images, tracks_kept, theta_deg - 0.1);
@@ -343,7 +343,7 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
 
   // min_angle above theta => dropped.
   {
-    std::unordered_map<track_t, Point3D> tracks_dropped;
+    std::unordered_map<point3D_t, Point3D> tracks_dropped;
     tracks_dropped.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
     const int touched = TrackFilter::FilterTrackTriangulationAngle(
         view_graph, images, tracks_dropped, theta_deg + 0.1);

@@ -8,7 +8,6 @@
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/point3d.h"
-#include "colmap/sfm/track_establishment_glomap.h"  // track_t typedef
 #include "colmap/util/types.h"
 
 #include "pycolmap/helpers.h"
@@ -41,10 +40,10 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
     images.emplace(py::cast<image_t>(item.first),
                    py::cast<Image>(item.second));
   }
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
   tracks.reserve(tracks_py.size());
   for (auto item : tracks_py) {
-    tracks.emplace(py::cast<sfm_ext::track_t>(item.first),
+    tracks.emplace(py::cast<point3D_t>(item.first),
                    py::cast<Point3D>(item.second));
   }
 
@@ -75,10 +74,10 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
     images.emplace(py::cast<image_t>(item.first),
                    py::cast<Image>(item.second));
   }
-  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
+  std::unordered_map<point3D_t, Point3D> tracks;
   tracks.reserve(tracks_py.size());
   for (auto item : tracks_py) {
-    tracks.emplace(py::cast<sfm_ext::track_t>(item.first),
+    tracks.emplace(py::cast<point3D_t>(item.first),
                    py::cast<Point3D>(item.second));
   }
 

@@ -16,7 +16,7 @@ int TrackFilter::FilterTracksByAngle(
     ViewGraph& view_graph,
     const std::unordered_map<camera_t, Camera>& cameras,
     const std::unordered_map<image_t, Image>& images,
-    std::unordered_map<track_t, Point3D>& tracks,
+    std::unordered_map<point3D_t, Point3D>& tracks,
     double max_angle_error) {
   int counter = 0;
   double thres = std::cos(DegToRad(max_angle_error));
@@ -52,7 +52,7 @@ int TrackFilter::FilterTracksByAngle(
 int TrackFilter::FilterTrackTriangulationAngle(
     ViewGraph& view_graph,
     const std::unordered_map<image_t, Image>& images,
-    std::unordered_map<track_t, Point3D>& tracks,
+    std::unordered_map<point3D_t, Point3D>& tracks,
     double min_angle) {
   // Mirrors ObservationManager::FindPoints3DWithSmallTriangulationAngle but
   // operates on the dict-of-tracks state used here instead of a

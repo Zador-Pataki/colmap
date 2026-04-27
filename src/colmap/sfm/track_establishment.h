@@ -36,6 +36,7 @@
 #include <functional>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Core>
@@ -89,5 +90,74 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
         image_id_to_keypoints,
     const TrackEstablishmentOptions& options,
     const MatchPredicate& ignore_match = MatchPredicate());
+
+// Build a ``MatchPredicate`` that excludes inliers flagged as
+// loop-closure observations (``ImagePair::are_lc[idx] == true``). Pre-
+// computes the LC-match set in O(num inliers); the returned predicate is
+// O(log N) per call (set lookup). Pass this to
+// ``EstablishTracksFromCorrGraph`` to keep LC matches out of the
+// union-find pass — they are then re-added as parallel
+// ``Track::lc_elements`` by ``AppendLoopClosureObservations``.
+MatchPredicate MakeLoopClosureMatchPredicate(
+    const std::vector<image_pair_t>& valid_pair_ids,
+    const CorrespondenceGraph& corr_graph);
+
+// Append loop-closure observations to an existing track dict (4-branch
+// logic; mutates ``tracks`` in place):
+//   * neither side has a track → mint two new tracks (sequential ids
+//     starting at ``max(track_id) + 1``); each gets the regular
+//     observation as a ``Track`` element and the other side as a
+//     parallel ``Track::lc_elements`` entry.
+//   * both sides have tracks with distinct ids → append reciprocal
+//     ``lc_elements`` to each side; tracks are NOT merged.
+//   * both sides have tracks with the same id → no-op.
+//   * exactly one side has a track → append the missing-side
+//     observation to that track's ``lc_elements``.
+// New track ids are minted sequentially from ``max(track_id) + 1`` to
+// guarantee no collision with the dense [0, N) ids written by
+// ``EstablishTracksFromCorrGraph``.
+void AppendLoopClosureObservations(
+    const std::vector<image_pair_t>& valid_pair_ids,
+    const CorrespondenceGraph& corr_graph,
+    std::unordered_map<point3D_t, Point3D>& tracks);
+
+// Options for ``SubsampleTracks``.
+struct TrackSubsampleOptions {
+  // Lower bound on track length, computed as
+  // ``Track::Length() + Track::lc_elements.size()``. Tracks below this
+  // are dropped.
+  int min_num_views_per_track = 3;
+  // Upper bound on track length, computed as ``Track::Length()`` only
+  // (LC observations not counted). Tracks above this are dropped.
+  int max_num_views_per_track = std::numeric_limits<int>::max();
+  // Greedy quota target: per-image counter that throttles selection
+  // once an image has accumulated this many tracks. ``INT_MAX`` (the
+  // default) makes the subsample a near-no-op.
+  int required_tracks_per_view = std::numeric_limits<int>::max();
+  // Hard cap on selected track count. When the count exceeds this the
+  // greedy walk stops.
+  int max_num_tracks = std::numeric_limits<int>::max();
+  // 2-view depth-validity gate: if true, drop any track with exactly two
+  // distinct images unless both observations satisfy
+  // ``depth_prior_validity[idx] && depth_priors[idx] > 1e-6``.
+  // Tracks with three or more distinct images bypass the gate.
+  bool two_view_depth_gate = false;
+};
+
+// Greedy length-sorted subsample. Walks tracks in descending
+// ``Track::Length()`` order; for each, increments per-image counters
+// for every observation regardless of whether the track is kept, and
+// inserts the track if any observation's pre-increment count was within
+// the ``required_tracks_per_view`` quota. The 2-view depth gate
+// requires ``depth_priors`` and ``depth_prior_validity`` to be
+// populated for both images of a 2-view track; pass empty maps to
+// disable the gate (or set ``two_view_depth_gate=false``). Returns the
+// selected subset.
+std::unordered_map<point3D_t, Point3D> SubsampleTracks(
+    const TrackSubsampleOptions& options,
+    const std::unordered_set<image_t>& registered_image_ids,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
+    const std::unordered_map<point3D_t, Point3D>& tracks_full);
 
 }  // namespace colmap
