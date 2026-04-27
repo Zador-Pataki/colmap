@@ -58,13 +58,13 @@ struct LossConfig {
   double scale = 1.0;
   double weight = 1.0;
 
-  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
+  std::unique_ptr<ceres::LossFunction> CreateLossFunction() const {
     auto loss = colmap::CreateLossFunction(type, scale);
     if (weight != 1.0) {
       loss.reset(new ceres::ScaledLoss(
           loss.release(), weight, ceres::TAKE_OWNERSHIP));
     }
-    return std::shared_ptr<ceres::LossFunction>(loss.release());
+    return loss;
   }
 };
 
