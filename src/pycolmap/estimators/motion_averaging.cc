@@ -152,6 +152,19 @@ void BindGlobalPositioner(py::module& m) {
                          "If true, skip random init for both camera centers "
                          "AND track xyz (collapses fork's split flags).")
           .def_readwrite(
+              "use_observation_exclusions",
+              &GlobalPositionerOptions::use_observation_exclusions,
+              "Gate G-1: when true, observations with "
+              "image.is_excluded[idx]=true are skipped. Default OFF "
+              "preserves vanilla colmap4 behavior.")
+          .def_readwrite(
+              "use_lc_observations",
+              &GlobalPositionerOptions::use_lc_observations,
+              "Gate G-2 (GP-side LC config): when true, "
+              "AddPoint3DToProblem also iterates track.lc_elements. "
+              "Default OFF matches vanilla colmap4 GP. Pairs with RA's "
+              "skip_risky_LC_pairs.")
+          .def_readwrite(
               "random_init_scale",
               &GlobalPositionerOptions::random_init_scale,
               "Cube size for random init of camera centers / points (linear).")
@@ -389,6 +402,13 @@ void BindRotationEstimator(py::module& m) {
               "skip_risky_LC_pairs",
               &RotationEstimatorOptions::skip_risky_LC_pairs,
               "Drop pairs whose LC inliers exceed non-LC inliers.")
+          .def_readwrite(
+              "prioritize_tracking_in_mst",
+              &RotationEstimatorOptions::prioritize_tracking_in_mst,
+              "Gate R-1: when true, ComputeMaximumPoseGraphSpanningTree "
+              "penalizes LC-dominated edges (M10). Default OFF; videosfm "
+              "sets this true alongside use_video_constraints to keep "
+              "the existing combined behavior.")
           .def_readwrite(
               "use_video_constraints",
               &RotationEstimatorOptions::use_video_constraints,

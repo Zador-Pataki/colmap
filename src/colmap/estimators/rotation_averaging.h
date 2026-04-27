@@ -68,13 +68,21 @@ struct RotationEstimatorOptions {
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
 
-  // --- glomap-fork additions ---
+  // --- glomap-fork additions (default OFF — vanilla call = vanilla RA) ---
 
   // If true, drop pairs whose loop-closure inlier count exceeds non-LC
   // inliers — prevents LC-contaminated pairs from breaking RA. Consumed by
   // BuildPairConstraints in rotation_averaging_impl.cc when a
   // CorrespondenceGraph& is plumbed through (M9 of the glomap_ra port).
   bool skip_risky_LC_pairs = false;
+
+  // Gate R-1: when true, ``ComputeMaximumPoseGraphSpanningTree`` penalizes
+  // LC-dominated edges (subtracts kLCPenalty=1e9 from edge weight) so the
+  // MST routes through tracking pairs first. Decoupled from
+  // ``use_video_constraints`` (M10 was previously coupled to M11);
+  // videosfm sets this true alongside ``use_video_constraints`` to keep
+  // the existing combined behavior.
+  bool prioritize_tracking_in_mst = false;
 
   // If true, switch from L1 + IRLS to a Ceres-based solver with differential
   // loss functions (Huber for tracking pairs, Cauchy for LC pairs). Required

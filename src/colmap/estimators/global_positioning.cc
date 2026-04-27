@@ -23,12 +23,10 @@ Eigen::Vector3d RandVector3d(double low, double high) {
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
     : options_(options) {
-  // TODO(reproduce-fork, M2/Decision-9, Q8): native colmap4 only honors
-  // options_.random_seed >= 0. The GP_SEED env-var fallback is a
-  // transition crutch so the documented Tier-2 byte-identity recipe
-  // (CLAUDE.md § "ATE byte-identity") works without patching every
-  // caller. Drop this branch once all callers set random_seed
-  // explicitly.
+  // ``options_.random_seed >= 0`` wins; otherwise honor the GP_SEED env
+  // var (documented escape for Tier-2 byte-identity, see CLAUDE.md);
+  // otherwise leave the global PRNG alone (upstream colmap4 default
+  // is non-deterministic ``random_device``).
   if (options_.random_seed >= 0) {
     SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
   } else if (const char* env_seed = std::getenv("GP_SEED")) {
@@ -306,12 +304,18 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                             random_initialization,
                             reconstruction);
   }
-  for (const auto& observation : point3D.track.lc_elements) {
-    AddObservationToProblem(point3D_id,
-                            observation,
-                            /*is_lc_observation=*/true,
-                            random_initialization,
-                            reconstruction);
+  // Gate G-2: only emit LC observation residuals when the caller opted
+  // in. Vanilla colmap4 GP knows nothing about ``track.lc_elements``,
+  // so default-OFF preserves vanilla behavior even on Reconstructions
+  // that happen to carry populated ``lc_elements``.
+  if (options_.use_lc_observations) {
+    for (const auto& observation : point3D.track.lc_elements) {
+      AddObservationToProblem(point3D_id,
+                              observation,
+                              /*is_lc_observation=*/true,
+                              random_initialization,
+                              reconstruction);
+    }
   }
 }
 
@@ -326,8 +330,13 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     Image& image = reconstruction.Image(observation.image_id);
     if (!image.HasPose()) return;
 
-    // --- Glomap-fork is_excluded skip (M5) ---
-    if (observation.point2D_idx < image.is_excluded.size() &&
+    // Gate G-1: per-observation skip via ``image.is_excluded`` only
+    // honored when the caller opted in. Default OFF preserves vanilla
+    // colmap4 behavior on Reconstructions that may carry stale
+    // exclusion flags (videosfm sets ``use_observation_exclusions=true``
+    // via ``_to_native_gp_options``).
+    if (options_.use_observation_exclusions &&
+        observation.point2D_idx < image.is_excluded.size() &&
         image.is_excluded[observation.point2D_idx]) {
       return;
     }
@@ -859,19 +868,21 @@ void GlobalPositioner::FilterDepthOutliers(
             {observation.image_id, observation.point2D_idx});
       }
     }
-    // LC observations
-    for (const auto& observation : point3D.track.lc_elements) {
-      if (!reconstruction.ExistsImage(observation.image_id)) continue;
-      const Image& image = reconstruction.Image(observation.image_id);
-      if (!image.HasPose()) continue;
-      if (DepthOutlierFlag(image,
-                           observation.point2D_idx,
-                           point3D.xyz,
-                           options_.use_log_scale_for_depth_map_scales,
-                           dmap_scales_,
-                           observation.image_id)) {
-        depth_outliers_.insert(
-            {observation.image_id, observation.point2D_idx});
+    // LC observations — Gate G-2 paired: only sweep when caller opted in.
+    if (options_.use_lc_observations) {
+      for (const auto& observation : point3D.track.lc_elements) {
+        if (!reconstruction.ExistsImage(observation.image_id)) continue;
+        const Image& image = reconstruction.Image(observation.image_id);
+        if (!image.HasPose()) continue;
+        if (DepthOutlierFlag(image,
+                             observation.point2D_idx,
+                             point3D.xyz,
+                             options_.use_log_scale_for_depth_map_scales,
+                             dmap_scales_,
+                             observation.image_id)) {
+          depth_outliers_.insert(
+              {observation.image_id, observation.point2D_idx});
+        }
       }
     }
   }

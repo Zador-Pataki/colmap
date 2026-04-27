@@ -46,15 +46,14 @@ struct GlobalPositionerOptions {
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
-  // PRNG seed for random initialization.
-  // TODO(reproduce-fork, M2/Decision-9): upstream colmap4 default is -1
-  // (non-deterministic random_device). Pinned to 1 so the documented
-  // Tier-2 byte-identity recipe (CLAUDE.md § "ATE byte-identity")
-  // works without per-call-site updates. Explicit -1 then falls back
-  // to the GP_SEED env var (transition crutch — see ctor in
-  // global_positioning.cc). Restore upstream default once all callers
-  // set random_seed explicitly.
-  int random_seed = 1;
+  // PRNG seed for random initialization. Upstream colmap4 default
+  // (-1) keeps non-deterministic ``random_device``. videosfm sets
+  // ``random_seed = 1`` explicitly via ``_to_native_gp_options`` for
+  // the documented Tier-2 byte-identity recipe (CLAUDE.md §
+  // "ATE byte-identity"). The ctor also honors a ``GP_SEED`` env var
+  // when ``random_seed == -1`` so the recipe still works when running
+  // legacy code that doesn't set the seed explicitly.
+  int random_seed = -1;
 
   // Scaling factor for the loss function
   double loss_function_scale = 0.1;
@@ -66,13 +65,27 @@ struct GlobalPositionerOptions {
   // The options for the solver
   ceres::Solver::Options solver_options;
 
-  // --- glomap-fork additions ---
+  // --- glomap-fork additions (default OFF — vanilla call = vanilla GP) ---
 
   // Selects per-observation residual structure (see PointConstraintType
   // enum). ``BATA`` keeps native pre-port behavior; ``SPLIT_METRIC_DEPTH``
   // emits an extra ``MetricDepthError`` residual when depth priors are
   // available.
   PointConstraintType point_constraint_type = PointConstraintType::BATA;
+
+  // Gate G-1: when true, observations whose
+  // ``image.is_excluded[point2D_idx]`` is true are skipped in
+  // ``AddObservationToProblem``. Default OFF preserves vanilla colmap4
+  // behavior on Reconstructions that may carry stale exclusion flags.
+  // videosfm sets true via ``_to_native_gp_options``.
+  bool use_observation_exclusions = false;
+
+  // Gate G-2 (GP-side LC config): when true, ``AddPoint3DToProblem``
+  // also iterates ``track.lc_elements`` (loop-closure observations) on
+  // top of ``track.Elements()``. Default OFF matches vanilla colmap4 GP
+  // (which doesn't know about LC observations). Pairs with RA's
+  // ``skip_risky_LC_pairs`` to give two complementary LC controls.
+  bool use_lc_observations = false;
 
   // If true, skip random-init for both camera centers AND track xyz (collapses
   // ``generate_random_positions`` + ``generate_random_points`` short-circuit).

@@ -480,7 +480,7 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
       pose_graph,
       active_image_ids,
       parents,
-      /*prioritize_tracking=*/options_.use_video_constraints,
+      /*prioritize_tracking=*/options_.prioritize_tracking_in_mst,
       correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
