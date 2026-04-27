@@ -131,10 +131,14 @@ class RotationEstimator {
       const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   // Initializes rotations from maximum spanning tree.
+  // ``correspondence_graph`` (in, optional): when non-null and
+  // ``options_.use_video_constraints`` is true, MST construction
+  // penalises LC-dominated edges (M10 prioritize_tracking).
   void InitializeFromMaximumSpanningTree(
       const PoseGraph& pose_graph,
       const std::unordered_set<image_t>& active_image_ids,
-      Reconstruction& reconstruction);
+      Reconstruction& reconstruction,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   const RotationEstimatorOptions options_;
 };

@@ -47,7 +47,9 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
 image_t ComputeMaximumPoseGraphSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& image_ids,
-    std::unordered_map<image_t, image_t>& parents) {
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    const CorrespondenceGraph* correspondence_graph) {
   // Build mapping between image_id and contiguous indices.
   std::unordered_map<image_t, int> image_id_to_idx;
   std::vector<image_t> idx_to_image_id;
@@ -65,6 +67,18 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   edges.reserve(pose_graph.NumEdges());
   weights.reserve(pose_graph.NumEdges());
 
+  // M10: when prioritize_tracking is enabled (typically alongside
+  // options_.use_video_constraints), penalize LC-dominated edges so the
+  // spanning tree picks tracking-dominated edges as parents. Native MST
+  // maximises weights, so we SUBTRACT a large penalty from LC-dominated
+  // weights (fork's "+1e9 to weights_boost" maps to "-1e9 to weight"
+  // here since the convention is inverted).
+  constexpr float kLCPenalty = 1e9f;
+  const auto* cg_map_ptr =
+      (prioritize_tracking && correspondence_graph != nullptr)
+          ? &correspondence_graph->ImagePairsMap()
+          : nullptr;
+
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const auto it1 = image_id_to_idx.find(image_id1);
@@ -73,7 +87,25 @@ image_t ComputeMaximumPoseGraphSpanningTree(
       continue;
     }
     edges.emplace_back(it1->second, it2->second);
-    weights.push_back(static_cast<float>(edge.num_matches));
+    float w = static_cast<float>(edge.num_matches);
+    if (cg_map_ptr != nullptr) {
+      auto cg_pair_it = cg_map_ptr->find(pair_id);
+      if (cg_pair_it != cg_map_ptr->end()) {
+        const auto& cg_pair = cg_pair_it->second;
+        if (!cg_pair.inliers.empty() && !cg_pair.are_lc.empty()) {
+          size_t lc_count = 0;
+          for (const auto idx : cg_pair.inliers) {
+            if (idx < cg_pair.are_lc.size() && cg_pair.are_lc[idx]) {
+              ++lc_count;
+            }
+          }
+          if (lc_count > cg_pair.inliers.size() - lc_count) {
+            w -= kLCPenalty;
+          }
+        }
+      }
+    }
+    weights.push_back(w);
   }
 
   // Compute spanning tree using generic algorithm.
@@ -410,7 +442,7 @@ bool RotationEstimator::SolveRotationAveraging(
   // flips by 180deg.
   if (!options_.skip_initialization) {
     InitializeFromMaximumSpanningTree(
-        pose_graph, active_image_ids, reconstruction);
+        pose_graph, active_image_ids, reconstruction, correspondence_graph);
   }
 
   // Build the optimization problem.
@@ -440,11 +472,16 @@ bool RotationEstimator::SolveRotationAveraging(
 void RotationEstimator::InitializeFromMaximumSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    const CorrespondenceGraph* correspondence_graph) {
   // Compute maximum spanning tree over active images.
   std::unordered_map<image_t, image_t> parents;
   const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      pose_graph, active_image_ids, parents);
+      pose_graph,
+      active_image_ids,
+      parents,
+      /*prioritize_tracking=*/options_.use_video_constraints,
+      correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
   // Iterate through the tree to initialize the rotation.
