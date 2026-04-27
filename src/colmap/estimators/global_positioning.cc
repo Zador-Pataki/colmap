@@ -180,6 +180,34 @@ void GlobalPositioner::AddPointToCameraConstraints(
   dmap_scales_.clear();
   dmap_scale_observation_counts_.clear();
 
+  // --- Glomap-fork initial_dmap_scales seeding + filter pre-pass (M6) ---
+  // When the caller supplied initial_dmap_scales (e.g. GP2 receiving GP1's
+  // solved scales), seed dmap_scales_ before FilterDepthOutliers so the
+  // log-space residual check uses the right per-image scale. Lazy-insert
+  // in AddObservationToProblem then skips these images. observation_count
+  // starts at 0 and is incremented per observation processed.
+  if (options_.point_constraint_type ==
+          PointConstraintType::SPLIT_METRIC_DEPTH &&
+      options_.initial_dmap_scales.has_value()) {
+    for (const auto& [image_id, linear_scale] :
+         *options_.initial_dmap_scales) {
+      const double init_value = options_.use_log_scale_for_depth_map_scales
+                                    ? std::log(std::max(linear_scale, 1e-9))
+                                    : linear_scale;
+      dmap_scales_[image_id] = init_value;
+      dmap_scale_observation_counts_[image_id] = 0;
+    }
+  }
+
+  // Pre-Solve depth outlier filter. Populates depth_outliers_ which the
+  // M5 depth-loss cascade reads.
+  depth_outliers_.clear();
+  if (options_.point_constraint_type ==
+          PointConstraintType::SPLIT_METRIC_DEPTH &&
+      options_.filter_depth_outliers) {
+    FilterDepthOutliers(reconstruction);
+  }
+
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     if (point3D.track.Length() <
         static_cast<size_t>(options_.min_num_view_per_track)) {
@@ -708,6 +736,98 @@ void GlobalPositioner::ConvertBackResults(Reconstruction& reconstruction) {
       break;
     }
   }
+}
+
+// --- Glomap-fork FilterDepthOutliers (M6) ---
+// Sweep regular + LC observations per track. For each, compute estimated
+// camera-frame z-depth via the WORLD pose (not the in-Solve flipped
+// frame_centers_ convention — Solve is about to start, frame_centers_ is
+// raw initial-cam-position). Flag |log(z_est) - log(scale*prior)| >= 3 sigma_log
+// where sigma_log = std::log(1 + relative_stddev). Insert (image_id,
+// point2D_idx) into depth_outliers_. M5 cascade routes flagged observations
+// to soft fallback (non-LC) or skip-residual (LC).
+namespace {
+
+// Helper: per-observation outlier check. Returns true to insert into
+// depth_outliers_.
+inline bool DepthOutlierFlag(
+    const Image& image,
+    point2D_t feature_id,
+    const Eigen::Vector3d& point3D_xyz,
+    bool use_log_scale,
+    const std::unordered_map<image_t, double>& dmap_scales,
+    image_t image_id) {
+  if (feature_id >= image.depth_prior_validity.size() ||
+      !image.depth_prior_validity[feature_id]) {
+    return false;
+  }
+  if (feature_id >= image.depth_priors.size() ||
+      feature_id >= image.depth_prior_stddevs.size()) {
+    return false;
+  }
+  const double depth_prior_raw = image.depth_priors[feature_id];
+  const double stddev_rel = image.depth_prior_stddevs[feature_id];
+  if (depth_prior_raw <= 1e-6 || stddev_rel <= 1e-9) return false;
+
+  // Apply per-image dmap_scale if available (else use raw prior).
+  double depth_prior = depth_prior_raw;
+  auto scale_it = dmap_scales.find(image_id);
+  if (scale_it != dmap_scales.end()) {
+    const double dmap_scale =
+        use_log_scale ? std::exp(scale_it->second) : scale_it->second;
+    depth_prior = dmap_scale * depth_prior_raw;
+  }
+
+  // z_est = (cam_from_world * X_world)[2]
+  const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D_xyz;
+  const double z_est = point_cam[2];
+  if (z_est <= 1e-6) return false;
+
+  const double log_z_est = std::log(std::max(z_est, 1e-6));
+  const double log_depth_prior = std::log(std::max(depth_prior, 1e-6));
+  const double log_diff = std::abs(log_z_est - log_depth_prior);
+  const double threshold = 3.0 * std::log(1.0 + std::max(stddev_rel, 1e-6));
+  return log_diff >= threshold;
+}
+
+}  // namespace
+
+void GlobalPositioner::FilterDepthOutliers(
+    const Reconstruction& reconstruction) {
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    // Regular observations
+    for (const auto& observation : point3D.track.Elements()) {
+      if (!reconstruction.ExistsImage(observation.image_id)) continue;
+      const Image& image = reconstruction.Image(observation.image_id);
+      if (!image.HasPose()) continue;
+      if (DepthOutlierFlag(image,
+                           observation.point2D_idx,
+                           point3D.xyz,
+                           options_.use_log_scale_for_depth_map_scales,
+                           dmap_scales_,
+                           observation.image_id)) {
+        depth_outliers_.insert(
+            {observation.image_id, observation.point2D_idx});
+      }
+    }
+    // LC observations
+    for (const auto& observation : point3D.track.lc_elements) {
+      if (!reconstruction.ExistsImage(observation.image_id)) continue;
+      const Image& image = reconstruction.Image(observation.image_id);
+      if (!image.HasPose()) continue;
+      if (DepthOutlierFlag(image,
+                           observation.point2D_idx,
+                           point3D.xyz,
+                           options_.use_log_scale_for_depth_map_scales,
+                           dmap_scales_,
+                           observation.image_id)) {
+        depth_outliers_.insert(
+            {observation.image_id, observation.point2D_idx});
+      }
+    }
+  }
+  VLOG(2) << "FilterDepthOutliers: flagged " << depth_outliers_.size()
+          << " observations as depth outliers.";
 }
 
 bool RunGlobalPositioning(const GlobalPositionerOptions& options,

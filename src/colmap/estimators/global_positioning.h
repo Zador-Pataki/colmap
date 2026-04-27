@@ -160,6 +160,15 @@ class GlobalPositioner {
                                bool random_initialization,
                                Reconstruction& reconstruction);
 
+  // Glomap-fork pre-Solve depth-outlier filter (M6). When
+  // ``options_.filter_depth_outliers=true`` (and SPLIT_METRIC_DEPTH active),
+  // sweep both regular and LC observations per track. Flag observations whose
+  // ``|log(z_est) - log(scale * depth_prior)|`` exceeds 3 sigma in log-space
+  // by inserting ``(image_id, point2D_idx)`` into ``depth_outliers_``. The
+  // M5 depth-loss cascade then routes flagged observations to the soft
+  // fallback (or skips them entirely on LC pairs).
+  void FilterDepthOutliers(const Reconstruction& reconstruction);
+
   // Set the parameter groups
   void AddCamerasAndPointsToParameterGroups(Reconstruction& reconstruction);
 
