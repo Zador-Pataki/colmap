@@ -1,6 +1,6 @@
 #pragma once
 
-#include "colmap/estimators/bundle_adjustment_ceres.h"
+#include "colmap/estimators/ceres_loss.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
@@ -32,8 +32,7 @@ enum class PointConstraintType {
 // ``{name: str, scale, weight}`` dicts; videosfm maps the string name
 // to the enum at the boundary (see _to_native_gp_options).
 struct LossConfig {
-  CeresBundleAdjustmentOptions::LossFunctionType type =
-      CeresBundleAdjustmentOptions::LossFunctionType::TRIVIAL;
+  LossFunctionType type = LossFunctionType::TRIVIAL;
   double scale = 1.0;
   double weight = 1.0;
 
@@ -73,8 +72,13 @@ struct GlobalPositionerOptions {
   // honors a GP_SEED env var when this is -1.
   int random_seed = -1;
 
-  // Scaling factor for the loss function
+  // Top-level robust loss applied to the BATA direction residual.
+  // Upstream colmap GP hardcoded ``HuberLoss(loss_function_scale)``;
+  // this surface mirrors ``CeresBundleAdjustmentOptions`` so callers can
+  // pick a different kernel without touching the GP body.
+  LossFunctionType loss_function_type = LossFunctionType::HUBER;
   double loss_function_scale = 0.1;
+  double loss_function_weight = 1.0;
 
   // Whether to use custom parameter block ordering for Schur-based solvers.
   // Disable for deterministic behavior when using a fixed random seed.
@@ -145,8 +149,14 @@ struct GlobalPositionerOptions {
     solver_options.function_tolerance = 1e-5;
   }
 
-  std::shared_ptr<ceres::LossFunction> CreateLossFunction() {
-    return std::make_shared<ceres::HuberLoss>(loss_function_scale);
+  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
+    auto loss = colmap::CreateLossFunction(loss_function_type,
+                                           loss_function_scale);
+    if (loss_function_weight != 1.0) {
+      loss.reset(new ceres::ScaledLoss(
+          loss.release(), loss_function_weight, ceres::TAKE_OWNERSHIP));
+    }
+    return std::shared_ptr<ceres::LossFunction>(loss.release());
   }
 };
 

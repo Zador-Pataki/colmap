@@ -66,9 +66,18 @@ void BindGlobalPositioner(py::module& m) {
                          "colmap4). When -1 the ctor honors a GP_SEED env "
                          "var as a documented escape for byte-identity "
                          "recipes; set explicitly (>=0) to override.")
+          .def_readwrite("loss_function_type",
+                         &GlobalPositionerOptions::loss_function_type,
+                         "Top-level robust loss kernel applied to the BATA "
+                         "direction residual. Default HUBER (was hardcoded "
+                         "in upstream colmap GP).")
           .def_readwrite("loss_function_scale",
                          &GlobalPositionerOptions::loss_function_scale,
                          "Scaling factor for the loss function.")
+          .def_readwrite("loss_function_weight",
+                         &GlobalPositionerOptions::loss_function_weight,
+                         "Multiplicative weight; wraps the loss in "
+                         "ceres::ScaledLoss when != 1.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
                          "Whether to use custom parameter block ordering.")

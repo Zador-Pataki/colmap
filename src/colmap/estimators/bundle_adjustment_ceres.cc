@@ -66,22 +66,6 @@ BundleAdjustmentTerminationType CeresTerminationTypeToTerminationType(
 
 }  // namespace
 
-std::unique_ptr<ceres::LossFunction> CreateLossFunction(
-    CeresBundleAdjustmentOptions::LossFunctionType loss_function_type,
-    double loss_function_scale) {
-  switch (loss_function_type) {
-    case CeresBundleAdjustmentOptions::LossFunctionType::TRIVIAL:
-      return std::make_unique<ceres::TrivialLoss>();
-    case CeresBundleAdjustmentOptions::LossFunctionType::SOFT_L1:
-      return std::make_unique<ceres::SoftLOneLoss>(loss_function_scale);
-    case CeresBundleAdjustmentOptions::LossFunctionType::CAUCHY:
-      return std::make_unique<ceres::CauchyLoss>(loss_function_scale);
-    case CeresBundleAdjustmentOptions::LossFunctionType::HUBER:
-      return std::make_unique<ceres::HuberLoss>(loss_function_scale);
-  }
-  return nullptr;
-}
-
 std::shared_ptr<CeresBundleAdjustmentSummary>
 CeresBundleAdjustmentSummary::Create(ceres::Solver::Summary ceres_summary) {
   auto summary = std::make_shared<CeresBundleAdjustmentSummary>();

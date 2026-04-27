@@ -30,6 +30,7 @@
 #pragma once
 
 #include "colmap/estimators/bundle_adjustment.h"
+#include "colmap/estimators/ceres_loss.h"
 #include "colmap/math/math.h"
 #include "colmap/optim/ransac.h"
 
@@ -39,8 +40,8 @@ namespace colmap {
 
 // Ceres-specific bundle adjustment options.
 struct CeresBundleAdjustmentOptions {
-  // Loss function types: Trivial (non-robust) and robust loss functions.
-  enum class LossFunctionType { TRIVIAL, SOFT_L1, CAUCHY, HUBER };
+  // Back-compat alias for the now-public ``colmap::LossFunctionType``.
+  using LossFunctionType = colmap::LossFunctionType;
   LossFunctionType loss_function_type = LossFunctionType::TRIVIAL;
 
   // Scaling factor determines residual at which robustification takes place.
@@ -91,13 +92,6 @@ struct CeresBundleAdjustmentOptions {
 
   bool Check() const;
 };
-
-// Free factory mirroring the dispatch in
-// CeresBundleAdjustmentOptions::CreateLossFunction(). Reused by other
-// per-block loss factories (e.g. GlobalPositioner's loss cascade).
-std::unique_ptr<ceres::LossFunction> CreateLossFunction(
-    CeresBundleAdjustmentOptions::LossFunctionType loss_function_type,
-    double loss_function_scale);
 
 // Ceres-specific bundle adjustment summary with access to full solver details.
 struct CeresBundleAdjustmentSummary : public BundleAdjustmentSummary {
