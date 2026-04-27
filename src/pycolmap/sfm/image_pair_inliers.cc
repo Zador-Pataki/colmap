@@ -61,7 +61,7 @@ py::dict RunImagePairsInlierCount(
 
 }  // namespace
 
-void BindImagePairInliersGlomap(py::module& m) {
+void BindImagePairInliers(py::module& m) {
   auto PyOpts =
       py::classh<InlierThresholdOptions>(
           m, "InlierThresholdOptions")

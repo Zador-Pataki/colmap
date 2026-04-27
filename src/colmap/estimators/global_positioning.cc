@@ -149,9 +149,17 @@ void GlobalPositioner::AddPointToCameraConstraints(
           << " point to camera constraints were added to the position "
              "estimation problem.";
 
-  // Down-weight uncalibrated cameras.
-  loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
-      loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  // Down-weight uncalibrated cameras (cameras whose focal length was
+  // estimated by view-graph calibration rather than an EXIF prior).
+  // Gated by ``apply_uncalibrated_loss_downweight`` so callers
+  // calibrated against the glomap-fork (full-weight) behavior can
+  // disable it.
+  if (options_.apply_uncalibrated_loss_downweight) {
+    loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
+        loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  } else {
+    loss_function_ptcam_uncalibrated_ = loss_function_;
+  }
   loss_function_ptcam_calibrated_ = loss_function_;
 
   // Pre-warm the 10 cascade losses; default trivial/1/1 gives unweighted

@@ -84,6 +84,15 @@ struct GlobalPositionerOptions {
   // Disable for deterministic behavior when using a fixed random seed.
   bool use_parameter_block_ordering = true;
 
+  // Whether to apply a 0.5x ScaledLoss to BATA residuals from cameras
+  // whose focal length came from view-graph calibration rather than an
+  // EXIF prior (``Camera::has_prior_focal_length == false``). Mainline
+  // colmap heuristic: less-confident bearings get half-weight. The
+  // glomap fork did not apply this and treated all bearings as full
+  // weight; videosfm callers calibrated against fork behavior should
+  // set this to false.
+  bool apply_uncalibrated_loss_downweight = true;
+
   // The options for the solver
   ceres::Solver::Options solver_options;
 

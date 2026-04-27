@@ -81,6 +81,12 @@ void BindGlobalPositioner(py::module& m) {
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
                          "Whether to use custom parameter block ordering.")
+          .def_readwrite(
+              "apply_uncalibrated_loss_downweight",
+              &GlobalPositionerOptions::apply_uncalibrated_loss_downweight,
+              "Apply 0.5x ScaledLoss to BATA residuals from cameras whose "
+              "focal length lacks an EXIF prior. Default true (mainline "
+              "colmap heuristic). Set false for fork-faithful behavior.")
           // --- Pass-through to ceres::Solver::Options sub-fields ---
           .def_property(
               "num_threads",
