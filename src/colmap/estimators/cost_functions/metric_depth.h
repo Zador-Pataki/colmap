@@ -174,73 +174,10 @@ struct MetricDepthError {
   const double threshold_;
 };
 
-// Glomap-fork cost functor: soft prior pulling a per-image scale toward a
-// linear-space ``prior`` value. Used by ``GlobalPositioner`` after the
-// per-track loop to anchor the gauge in the metric-depth path.
-//
-// Residual: ``(scale - prior) / stddev``. AutoDiff ``<1, 1>`` on ``scale``.
-struct ScalePriorError {
-  ScalePriorError(double prior, double stddev)
-      : prior_(prior), weight_(1.0 / std::max(1e-6, stddev)) {
-    if (stddev <= 1e-9) {
-      throw std::invalid_argument(
-          "ScalePriorError: Standard deviation must be positive.");
-    }
-  }
-
-  template <typename T>
-  bool operator()(const T* const scale, T* residuals) const {
-    residuals[0] = (scale[0] - T(prior_)) * T(weight_);
-    return true;
-  }
-
-  static ceres::CostFunction* Create(double prior, double stddev) {
-    if (stddev <= 1e-9) {
-      LOG(ERROR) << "Cannot create ScalePriorError: Standard deviation must "
-                    "be positive.";
-      return nullptr;
-    }
-    return new ceres::AutoDiffCostFunction<ScalePriorError, 1, 1>(
-        new ScalePriorError(prior, stddev));
-  }
-
- private:
-  const double prior_;
-  const double weight_;
-};
-
-// Glomap-fork cost functor: soft prior pulling a log-space scale parameter
-// toward ``log(1) = 0`` (i.e. linear scale of 1.0). Use this variant when
-// ``GlobalPositionerOptions::use_log_scale_for_depth_map_scales=true``.
-//
-// Residual: ``log_scale / sigma_log``. AutoDiff ``<1, 1>`` on ``log_scale``.
-struct LogScalePriorError {
-  explicit LogScalePriorError(double sigma_log)
-      : inv_sigma_log_(1.0 / std::max(1e-6, sigma_log)) {
-    if (sigma_log <= 1e-9) {
-      throw std::invalid_argument(
-          "LogScalePriorError: Standard deviation must be positive.");
-    }
-  }
-
-  template <typename T>
-  bool operator()(const T* const log_scale, T* residuals) const {
-    residuals[0] = log_scale[0] * T(inv_sigma_log_);
-    return true;
-  }
-
-  static ceres::CostFunction* Create(double sigma_log) {
-    if (sigma_log <= 1e-9) {
-      LOG(ERROR) << "Cannot create LogScalePriorError: Standard deviation "
-                    "must be positive.";
-      return nullptr;
-    }
-    return new ceres::AutoDiffCostFunction<LogScalePriorError, 1, 1>(
-        new LogScalePriorError(sigma_log));
-  }
-
- private:
-  const double inv_sigma_log_;
-};
+// ScalePriorError + LogScalePriorError were dropped in favor of native
+// CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(cov, prior)
+// in cost_functions/utils.h. See the call site in global_positioning.cc
+// where the linear/log branch collapses to a single Create() with
+// prior=1.0 (linear) or 0.0 (log) and cov=stddev^2.
 
 }  // namespace colmap

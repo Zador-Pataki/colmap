@@ -4,6 +4,7 @@
 
 #include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
+#include "colmap/estimators/cost_functions/utils.h"
 #include "colmap/math/random.h"
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"
@@ -222,14 +223,16 @@ void GlobalPositioner::AddPointToCameraConstraints(
               ? static_cast<double>(count_it->second)
               : 1.0;
 
-      ceres::CostFunction* scale_prior_cost = nullptr;
-      if (options_.use_log_scale_for_depth_map_scales) {
-        scale_prior_cost =
-            LogScalePriorError::Create(options_.scale_prior_stddev);
-      } else {
-        scale_prior_cost =
-            ScalePriorError::Create(1.0, options_.scale_prior_stddev);
-      }
+      // The dmap_scale parameter is in log-space when
+      // ``use_log_scale_for_depth_map_scales=true`` (prior pulls log_s
+      // toward 0), in linear space otherwise (prior pulls s toward 1).
+      const Eigen::Matrix<double, 1, 1> prior_vec(
+          options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0);
+      const Eigen::Matrix<double, 1, 1> cov_1x1(
+          options_.scale_prior_stddev * options_.scale_prior_stddev);
+      ceres::CostFunction* scale_prior_cost =
+          CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(
+              cov_1x1, prior_vec);
       if (scale_prior_cost == nullptr) continue;
 
       // Wrap cached_loss_scale_prior_ with a ScaledLoss(obs_count) so
