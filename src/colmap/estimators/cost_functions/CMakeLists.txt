@@ -37,6 +37,7 @@ COLMAP_ADD_LIBRARY(
         calibration.h
         depth_prior.h
         manifold.h
+        metric_depth.h
         motion_averaging.h
         pose_prior.h
         reprojection_error.h

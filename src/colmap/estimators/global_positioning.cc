@@ -346,11 +346,17 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
       }
     }
   }
-  // Set the first scale to be constant to remove the gauge ambiguity.
-  for (double& scale : scales_) {
-    if (problem_->HasParameterBlock(&scale)) {
-      problem_->SetParameterBlockConstant(&scale);
-      break;
+  // Set the first scale to be constant to remove the gauge ambiguity. Skip
+  // when the metric-depth path is active: ``ScalePriorError`` (M4) plus the
+  // depth-prior observations themselves anchor the gauge, and the redundant
+  // pin would over-constrain the system. (Q1 / R10 — gating preserves native
+  // colmap GP unit tests under default ``BATA`` mode.)
+  if (options_.point_constraint_type != PointConstraintType::SPLIT_METRIC_DEPTH) {
+    for (double& scale : scales_) {
+      if (problem_->HasParameterBlock(&scale)) {
+        problem_->SetParameterBlockConstant(&scale);
+        break;
+      }
     }
   }
 

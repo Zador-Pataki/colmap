@@ -166,22 +166,7 @@ void BindRotationEstimator(py::module& m) {
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
               "(degrees).")
-          // --- glomap-fork additions (consumed by EstimateRotationsGlomap)
-          .def_readwrite(
-              "use_precomputed_weights",
-              &RotationEstimatorOptions::use_precomputed_weights,
-              "Use pre-computed weights from image_pair.weight in a weighted "
-              "least-squares pass instead of dynamic IRLS reweighting.")
-          .def_readwrite(
-              "fix_non_lc_weights",
-              &RotationEstimatorOptions::fix_non_lc_weights,
-              "Fix non-LC pair weights at fixed_non_lc_weight during IRLS. "
-              "Currently disabled at the call site.")
-          .def_readwrite(
-              "fixed_non_lc_weight",
-              &RotationEstimatorOptions::fixed_non_lc_weight,
-              "Fixed weight value for non-LC pairs when fix_non_lc_weights "
-              "is true.")
+          // --- glomap-fork additions ---
           .def_readwrite(
               "skip_risky_LC_pairs",
               &RotationEstimatorOptions::skip_risky_LC_pairs,

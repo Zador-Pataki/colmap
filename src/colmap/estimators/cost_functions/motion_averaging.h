@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include "colmap/util/logging.h"
+
 #include <Eigen/Core>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -125,6 +127,66 @@ struct RigBATAPairwiseDirectionCostFunctor {
 
   const Eigen::Vector3d cam_from_point3D_dir_;
   const Eigen::Quaterniond world_from_rig_rot_;
+};
+
+// Glomap-fork addition. Like ``BATAPairwiseDirectionCostFunctor`` but
+// rotates the residual into camera frame via constant ``rotation`` and
+// applies anisotropic per-axis weighting ``(1/sigma_x, 1/sigma_y,
+// 1/sigma_z)``. ``GlobalPositioner`` substitutes this for the unweighted
+// variant whenever ``image.angular_stddevs[fid]`` is populated. Caller
+// computes ``sigma_z = (sigma_x + sigma_y) / 2`` (or pulls from
+// ``image.angular_stddevs_z[fid]``) when constructing.
+struct WeightedBATADirectionalError {
+  WeightedBATADirectionalError(const Eigen::Vector3d& translation_obs,
+                               const Eigen::Quaterniond& rotation,
+                               double sigma_x,
+                               double sigma_y,
+                               double sigma_z)
+      : translation_obs_(translation_obs),
+        rotation_(rotation),
+        inv_sigma_x_(1.0 / sigma_x),
+        inv_sigma_y_(1.0 / sigma_y),
+        inv_sigma_z_(1.0 / sigma_z) {
+    THROW_CHECK_GT(sigma_x, 0.0);
+    THROW_CHECK_GT(sigma_y, 0.0);
+    THROW_CHECK_GT(sigma_z, 0.0);
+  }
+
+  template <typename T>
+  bool operator()(const T* position1,
+                  const T* position2,
+                  const T* scale,
+                  T* residuals) const {
+    using Vec3T = Eigen::Matrix<T, 3, 1>;
+    const Vec3T r_world = translation_obs_.cast<T>() -
+                          scale[0] * (Eigen::Map<const Vec3T>(position2) -
+                                      Eigen::Map<const Vec3T>(position1));
+    const Vec3T r_cam = rotation_.cast<T>() * r_world;
+    residuals[0] = T(inv_sigma_x_) * r_cam[0];
+    residuals[1] = T(inv_sigma_y_) * r_cam[1];
+    residuals[2] = T(inv_sigma_z_) * r_cam[2];
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& translation_obs,
+                                     const Eigen::Quaterniond& rotation,
+                                     double sigma_x,
+                                     double sigma_y,
+                                     double sigma_z) {
+    return new ceres::AutoDiffCostFunction<WeightedBATADirectionalError,
+                                           3,
+                                           3,
+                                           3,
+                                           1>(
+        new WeightedBATADirectionalError(
+            translation_obs, rotation, sigma_x, sigma_y, sigma_z));
+  }
+
+  const Eigen::Vector3d translation_obs_;
+  const Eigen::Quaterniond rotation_;
+  const double inv_sigma_x_;
+  const double inv_sigma_y_;
+  const double inv_sigma_z_;
 };
 
 }  // namespace colmap

@@ -21,53 +21,6 @@ using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 
 
-int TrackFilter::FilterTracksByReprojection(
-    ViewGraph& view_graph,
-    const std::unordered_map<camera_t, Camera>& cameras,
-    const std::unordered_map<image_t, Image>& images,
-    std::unordered_map<track_t, Track>& tracks,
-    double max_reprojection_error,
-    bool in_normalized_image) {
-  int counter = 0;
-  for (auto& [track_id, track] : tracks) {
-    std::vector<Observation> observation_new;
-    for (auto& [image_id, feature_id] : track.observations) {
-      const Image& image = images.at(image_id);
-      Eigen::Vector3d pt_calc = image.cam_from_world * track.xyz;
-      if (pt_calc(2) < EPS) continue;
-
-      double reprojection_error = max_reprojection_error;
-      if (in_normalized_image) {
-        const Eigen::Vector3d& feature_undist =
-            image.features_undist.at(feature_id);
-
-        Eigen::Vector2d pt_reproj = pt_calc.head(2) / pt_calc(2);
-        reprojection_error =
-            (pt_reproj - feature_undist.head(2) / (feature_undist(2) + EPS))
-                .norm();
-      } else {
-        Eigen::Vector2d pt_reproj = pt_calc.head(2) / pt_calc(2);
-        Eigen::Vector2d pt_dist;
-        pt_dist = *cameras.at(image.CameraId()).ImgFromCam(pt_calc);
-        
-        reprojection_error = (pt_dist - image.features.at(feature_id)).norm();
-      }
-
-      // If the reprojection error is smaller than the threshold, then keep it
-      if (reprojection_error < max_reprojection_error) {
-        observation_new.emplace_back(image_id, feature_id);
-      }
-    }
-    if (observation_new.size() != track.observations.size()) {
-      counter++;
-      track.observations = observation_new;
-    }
-  }
-  LOG(INFO) << "Filtered " << counter << " / " << tracks.size()
-            << " tracks by reprojection error";
-  return counter;
-}
-
 int TrackFilter::FilterTracksByAngle(
     ViewGraph& view_graph,
     const std::unordered_map<camera_t, Camera>& cameras,

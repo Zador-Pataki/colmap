@@ -191,14 +191,7 @@ RotationEstimator::EstimateRotations(
       }
     }
 
-    if (options_.use_precomputed_weights) {
-      auto wls_result = SolveWeightedLS(view_graph, images);
-      final_weights = wls_result.second;
-      if (!wls_result.first) {
-        LOG(WARNING) << "Weighted LS failed.";
-        return final_weights;
-      }
-    } else if (options_.max_num_irls_iterations > 0) {
+    if (options_.max_num_irls_iterations > 0) {
       auto irls_result = SolveIRLS(view_graph, images);
       final_weights = irls_result.second;
       if (!irls_result.first) {
@@ -570,13 +563,6 @@ RotationEstimator::SolveIRLS(ViewGraph& view_graph,
     weights_irls[sparse_matrix_.rows() - 1] = 1;
   else
     weights_irls.segment(sparse_matrix_.rows() - 3, 3).setConstant(1);
-
-  // Note: fix_non_lc_weights feature is disabled since is_LC is no longer used.
-  // If needed, pairs can be identified by checking are_lc[inliers] ratios.
-  if (options_.fix_non_lc_weights) {
-    LOG(WARNING) << "fix_non_lc_weights is enabled but is_LC is no longer "
-                    "available. This feature is disabled.";
-  }
 
   ComputeResiduals(view_graph, images);
   int iteration = 0;

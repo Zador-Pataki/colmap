@@ -1,13 +1,29 @@
 #pragma once
 
+#include "colmap/estimators/loss_config.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <optional>
+#include <set>
 #include <string>
+#include <unordered_map>
+#include <utility>
 
 #include <ceres/ceres.h>
 
 namespace colmap {
+
+// Selects which residual structure ``GlobalPositioner`` adds per
+// observation. Mirrors the glomap-fork enum.
+enum class PointConstraintType {
+  // Standard BATA direction residual only (native colmap default).
+  BATA = 0,
+  // Two residuals per observation: BATA direction + 1-D ``MetricDepthError``
+  // against per-image ``dmap_scale * depth_prior``. Requires
+  // ``image.depth_prior_validity[fid]`` populated.
+  SPLIT_METRIC_DEPTH = 1,
+};
 
 struct GlobalPositionerOptions {
   // Whether to initialize the camera and track positions randomly.
@@ -29,10 +45,10 @@ struct GlobalPositionerOptions {
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
-  // PRNG seed for random initialization.
-  // If -1 (default), uses non-deterministic random_device seeding.
-  // If >= 0, uses deterministic seeding with the given value.
-  int random_seed = -1;
+  // PRNG seed for random initialization. Default 1 to preserve byte-identity
+  // across runs out-of-the-box; explicit ``-1`` falls back to GP_SEED env var
+  // for one transition cycle (Q8), then to non-deterministic random_device.
+  int random_seed = 1;
 
   // Scaling factor for the loss function
   double loss_function_scale = 0.1;
@@ -43,6 +59,59 @@ struct GlobalPositionerOptions {
 
   // The options for the solver
   ceres::Solver::Options solver_options;
+
+  // --- glomap-fork additions ---
+
+  // Selects per-observation residual structure (see PointConstraintType
+  // enum). ``BATA`` keeps native pre-port behavior; ``SPLIT_METRIC_DEPTH``
+  // emits an extra ``MetricDepthError`` residual when depth priors are
+  // available.
+  PointConstraintType point_constraint_type = PointConstraintType::BATA;
+
+  // If true, skip random-init for both camera centers AND track xyz (collapses
+  // ``generate_random_positions`` + ``generate_random_points`` short-circuit).
+  // Used for GP2 (continues from GP1) and the
+  // ``init_first_gp_from_mdrp`` path. Also gates
+  // ``InitializeDepthMapScalesFromObservations``.
+  bool use_init = false;
+
+  // Cube size for random-init of camera centers / points, replaces fork's
+  // hardcoded 100.0.
+  double random_init_scale = 100.0;
+
+  // --- Metric-depth path toggles (only consulted when
+  //     point_constraint_type == SPLIT_METRIC_DEPTH) ---
+  bool use_log_scale_for_depth_map_scales = false;
+  bool use_log_residual_for_depth = false;
+  bool zero_residual_behind = false;
+  bool smooth_log_linear_transition = false;
+  double log_linear_threshold = 1.0;
+  double scale_prior_stddev = 1.0;
+
+  // Pre-Solve depth-outlier filter (3-sigma log-space residual). Populates
+  // a per-observation outlier set that switches the depth-loss cascade to a
+  // hardcoded soft fallback.
+  bool filter_depth_outliers = false;
+
+  // Caller-supplied (image_id -> linear scale) seed for ``dmap_scales_``.
+  // Used by GP2 to continue from GP1's solved scales. ``std::nullopt`` →
+  // either ``InitializeDepthMapScalesFromObservations`` (when
+  // ``use_init=true``) or constant init (1.0 linear / 0.0 log).
+  std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
+
+  // --- 10-bucket per-observation loss routing (mirrors glomap-fork field
+  //     names verbatim — the 10 LossFunctionConfig fields exposed via
+  //     glomap_ra port at colmap/sfm/global_positioning_glomap.h:140-167) ---
+  LossFunctionConfig loss_normal_geometry;
+  LossFunctionConfig loss_normal_depth;
+  LossFunctionConfig loss_lc_geometry;
+  LossFunctionConfig loss_lc_depth;
+  LossFunctionConfig loss_normal_geometry_inlier;
+  LossFunctionConfig loss_normal_depth_inlier;
+  LossFunctionConfig loss_normal_depth_outlier;
+  LossFunctionConfig loss_normal_geometry_trackstart;
+  LossFunctionConfig loss_normal_depth_trackstart;
+  LossFunctionConfig loss_scale_prior;
 
   GlobalPositionerOptions() {
     solver_options.num_threads = -1;
@@ -111,6 +180,46 @@ class GlobalPositioner {
   // Temporary storage for camera-in-rig positions when cam_from_rig is unknown
   // and needs to be estimated.
   std::unordered_map<sensor_t, Eigen::Vector3d> cams_in_rig_;
+
+  // --- glomap-fork additions ---
+
+  // Per-image depth-map scale parameter blocks. Only populated when
+  // ``point_constraint_type == SPLIT_METRIC_DEPTH``. Lazily inserted on the
+  // first valid depth-prior observation per image. Keyed by ``image_t``
+  // (matches fork; trivial-rig case has ``image_t == frame_t`` numerically).
+  std::unordered_map<image_t, double> dmap_scales_;
+
+  // Per-image observation count for scale-prior weighting. Each observation
+  // that contributes a ``MetricDepthError`` residual increments the count;
+  // the per-image ``ScalePriorError`` block scales its loss by this count
+  // so dense-depth images get proportionally stronger priors.
+  std::unordered_map<image_t, int> dmap_scale_observation_counts_;
+
+  // Pre-pass-flagged depth outliers (only populated when
+  // ``filter_depth_outliers=true``). Switches the depth-loss cascade to a
+  // hardcoded soft fallback for non-LC outliers, or skip-depth-residual
+  // for LC outliers.
+  std::set<std::pair<image_t, point2D_t>> depth_outliers_;
+
+  // 10 cached loss buckets corresponding to the option struct's
+  // ``loss_*`` fields. Pre-warmed at the start of
+  // ``AddPointToCameraConstraints`` and reused per observation. Lifetime
+  // mirrors the ``loss_function_*`` members above.
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_lc_geometry_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_lc_depth_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_inlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_inlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_outlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_trackstart_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_trackstart_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_scale_prior_;
+
+  // Hardcoded ScaledLoss(HuberLoss(1), 1) for non-LC depth outliers flagged
+  // by the M6 filter pre-pass. Allocated on first use in
+  // ``AddPointToCameraConstraints``.
+  std::shared_ptr<ceres::LossFunction> soft_outlier_fallback_loss_;
 };
 
 // Solve global positioning using point-to-camera constraints.

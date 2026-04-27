@@ -43,6 +43,7 @@ COLMAP_ADD_LIBRARY(
         generalized_pose.h generalized_pose.cc
         global_positioning.h global_positioning.cc
         gravity_refinement.h gravity_refinement.cc
+        loss_config.h
         pose.h pose.cc
         rotation_averaging.h rotation_averaging.cc
         rotation_averaging_impl.h rotation_averaging_impl.cc
