@@ -377,15 +377,11 @@ void BindRotationEstimator(py::module& m) {
               &RotationEstimatorOptions::skip_risky_LC_pairs,
               "Drop pairs whose LC inliers exceed non-LC inliers.")
           .def_readwrite(
-              "prioritize_tracking_in_mst",
-              &RotationEstimatorOptions::prioritize_tracking_in_mst,
-              "If true, ComputeMaximumPoseGraphSpanningTree penalizes "
-              "LC-dominated edges so the MST routes through tracking pairs.")
-          .def_readwrite(
               "use_video_constraints",
               &RotationEstimatorOptions::use_video_constraints,
               "Use Ceres video-aware solver with differential loss "
-              "functions. Mutually exclusive with use_gravity.")
+              "functions. Mutually exclusive with use_gravity. Also gates "
+              "the LC-penalty branch in the MST initializer.")
           .def_readwrite(
               "video_tracking_huber_scale",
               &RotationEstimatorOptions::video_tracking_huber_scale,

@@ -341,13 +341,12 @@ TEST(RotationAveraging, GravityWithUnknownRigSensorsReturnsFalse) {
                                            data.reconstruction));
 }
 
-// ---- Backward-compat gate: prioritize_tracking_in_mst.
+// ---- LC-penalty gate inside ComputeMaximumPoseGraphSpanningTree.
 //
-// Default-constructed ``RotationEstimatorOptions`` keeps
-// ``prioritize_tracking_in_mst=false`` so vanilla pycolmap callers get the
-// vanilla maximum-spanning-tree initialisation. With the gate ON the MST
-// subtracts ``kLCPenalty=1e9`` from edges whose ``are_lc`` true count exceeds
-// non-LC inliers, routing the tree away from LC-dominated pairs.
+// With ``prioritize_tracking=false`` the MST runs vanilla maximum-weight
+// Kruskal. With ``prioritize_tracking=true`` it subtracts
+// ``kLCPenalty=1e9`` from edges whose ``are_lc`` true count exceeds non-LC
+// inliers, routing the tree away from LC-dominated pairs.
 //
 // We construct a minimal three-image graph where the highest-weight edge is
 // LC-dominated and verify the parent map flips between the two modes.

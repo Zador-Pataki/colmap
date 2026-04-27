@@ -73,15 +73,12 @@ struct RotationEstimatorOptions {
   // CorrespondenceGraph& is plumbed through.
   bool skip_risky_LC_pairs = false;
 
-  // When true, ``ComputeMaximumPoseGraphSpanningTree`` penalizes
-  // LC-dominated edges (subtracts kLCPenalty=1e9 from edge weight) so the
-  // MST routes through tracking pairs first. Independent of
-  // ``use_video_constraints`` and of ``skip_risky_LC_pairs``.
-  bool prioritize_tracking_in_mst = false;
-
   // If true, switch from L1 + IRLS to a Ceres-based solver with differential
-  // loss functions (Huber for tracking pairs, Cauchy for LC pairs). Required
-  // for the video-aware variant; mutually exclusive with use_gravity.
+  // loss functions (Huber for tracking pairs, Cauchy for LC pairs). Mutually
+  // exclusive with use_gravity. Also gates the MST initializer's LC-edge
+  // penalty: when true, ``ComputeMaximumPoseGraphSpanningTree`` subtracts
+  // kLCPenalty=1e9 from LC-dominated edges so the tree routes through
+  // tracking pairs first.
   bool use_video_constraints = false;
 
   // Loss scales for the video-aware Ceres solver.
@@ -135,7 +132,7 @@ class RotationEstimator {
 
   // Initializes rotations from maximum spanning tree.
   // ``correspondence_graph`` (in, optional): when non-null and
-  // ``options_.prioritize_tracking_in_mst`` is true, MST construction
+  // ``options_.use_video_constraints`` is true, MST construction
   // penalises LC-dominated edges.
   void InitializeFromMaximumSpanningTree(
       const PoseGraph& pose_graph,
@@ -181,8 +178,8 @@ bool RunRotationAveraging(
 // them. Vanilla colmap behaviour is recovered with
 // ``prioritize_tracking=false`` (or a null correspondence_graph).
 //
-// Exposed in the public header to support unit tests of the
-// ``RotationEstimatorOptions::prioritize_tracking_in_mst`` gate.
+// Exposed in the public header to support unit tests of the LC-penalty
+// branch.
 image_t ComputeMaximumPoseGraphSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& image_ids,

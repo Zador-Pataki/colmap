@@ -704,8 +704,8 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
   // Video-Ceres path: mutually exclusive with use_gravity. Replaces
   // L1+IRLS with a Ceres optimization over per-frame 3-DOF angle-axis
-  // blocks. The prioritize_tracking_in_mst MST initialization (when
-  // enabled) runs before this solve.
+  // blocks. The LC-penalty MST initialization (also gated on
+  // use_video_constraints) runs before this solve.
   if (options_.use_video_constraints && !options_.use_gravity) {
     VLOG(2) << "Solving video-aware Ceres rotation averaging";
     return SolveCeres(problem);
@@ -911,8 +911,9 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
 // angle-axis blocks. Activated by use_video_constraints (and gated to
 // !use_gravity in Solve). Each pair's residual is a relative-rotation
 // error wrapped in Huber (tracking-dominated) or Cauchy (LC-dominated)
-// loss. Initialized rotations come from the prioritize_tracking_in_mst
-// MST (or the L1+IRLS warm-start if MST init was skipped).
+// loss. Initialized rotations come from the LC-penalty MST (also gated
+// on use_video_constraints) or the L1+IRLS warm-start if MST init was
+// skipped.
 bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   THROW_CHECK(!options_.use_gravity)
       << "SolveCeres is gated on !use_gravity; gravity-aware video-Ceres "

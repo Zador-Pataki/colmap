@@ -46,8 +46,8 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
 // Returns the root image_id and populates the parents map.
 //
 // Defined in the enclosing colmap namespace (matching the public declaration
-// in rotation_averaging.h) so unit tests can exercise the
-// ``prioritize_tracking_in_mst`` gate directly.
+// in rotation_averaging.h) so unit tests can exercise the LC-penalty branch
+// directly.
 }  // namespace
 
 image_t ComputeMaximumPoseGraphSpanningTree(
@@ -485,7 +485,7 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
       pose_graph,
       active_image_ids,
       parents,
-      /*prioritize_tracking=*/options_.prioritize_tracking_in_mst,
+      /*prioritize_tracking=*/options_.use_video_constraints,
       correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
