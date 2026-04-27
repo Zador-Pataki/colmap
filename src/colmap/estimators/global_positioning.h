@@ -36,8 +36,7 @@ struct GlobalPositionerOptions {
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
-  // PRNG seed; -1 = non-deterministic random_device. The ctor also
-  // honors a GP_SEED env var when this is -1.
+  // PRNG seed; -1 = non-deterministic random_device.
   int random_seed = -1;
 
   // Top-level robust loss applied to the BATA direction residual.

@@ -25,8 +25,6 @@ GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
     : options_(options) {
   if (options_.random_seed >= 0) {
     SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
-  } else if (const char* env_seed = std::getenv("GP_SEED")) {
-    SetPRNGSeed(static_cast<unsigned>(std::atoi(env_seed)));
   }
 }
 
@@ -50,12 +48,8 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
   // Also, convert the camera pose translation to be the camera center.
   InitializeRandomPositions(pose_graph, reconstruction);
 
-  // Seed dmap_scales_ from per-image median(z_est/depth_prior) when the
-  // caller didn't provide initial_dmap_scales. Only meaningful in
-  // use_metric_depth_constraint mode; gated by use_init so the GP1->GP2 handoff (which
-  // already supplies initial_dmap_scales) bypasses this. Images without
-  // observations consumed here fall through to the constant lazy-insert
-  // path in AddObservationToProblem.
+  // No caller-supplied seed for dmap_scales_; derive one from per-image
+  // median observed z_est/depth_prior.
   if (options_.use_metric_depth_constraint &&
       options_.use_init && !options_.initial_dmap_scales.has_value()) {
     InitializeDepthMapScalesFromObservations(reconstruction);
