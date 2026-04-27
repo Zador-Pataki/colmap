@@ -38,13 +38,20 @@ COLMAP_ADD_LIBRARY(
         incremental_mapper.h incremental_mapper.cc
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
+        relative_pose_estimation.h relative_pose_estimation.cc
+        track_establishment.h track_establishment.cc
+        image_pair_inliers.h image_pair_inliers.cc
+        view_graph_manipulation.h view_graph_manipulation.cc
+        track_filter.h track_filter.cc
     PUBLIC_LINK_LIBS
         colmap_scene
         colmap_estimators
+        colmap_estimators_solvers
         colmap_util
     PRIVATE_LINK_LIBS
         colmap_geometry
         colmap_image
+        PoseLib
 )
 
 if(MSVC)
@@ -69,5 +76,20 @@ COLMAP_ADD_TEST(
 COLMAP_ADD_TEST(
     NAME incremental_mapper_test
     SRCS incremental_mapper_test.cc
+    LINK_LIBS colmap_sfm
+)
+COLMAP_ADD_TEST(
+    NAME track_establishment_test
+    SRCS track_establishment_test.cc
+    LINK_LIBS colmap_sfm
+)
+COLMAP_ADD_TEST(
+    NAME track_filter_test
+    SRCS track_filter_test.cc
+    LINK_LIBS colmap_sfm
+)
+COLMAP_ADD_TEST(
+    NAME image_pair_inliers_test
+    SRCS image_pair_inliers_test.cc
     LINK_LIBS colmap_sfm
 )

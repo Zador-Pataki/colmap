@@ -8,9 +8,25 @@
 #include <limits>
 
 #include <Eigen/CholmodSupport>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
 namespace {
+
+// Returns true if the pair has more (or equal) non-LC inliers than LC
+// inliers — i.e. tracking-dominated. Used by SolveCeres to choose the
+// per-pair loss (Huber for tracking, Cauchy for LC).
+bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair) {
+  if (image_pair.inliers.empty()) return false;
+  size_t lc_count = 0;
+  for (const auto idx : image_pair.inliers) {
+    if (idx < image_pair.are_lc.size() && image_pair.are_lc[idx]) {
+      ++lc_count;
+    }
+  }
+  return image_pair.inliers.size() - lc_count >= lc_count;
+}
 
 // Computes the 1-DOF residual for gravity-aligned rotation constraints.
 // Returns (angle_2 - angle_1) - angle_12, wrapped to [-π, π] with jitter
@@ -80,8 +96,15 @@ RotationAveragingProblem::RotationAveragingProblem(
     const std::vector<PosePrior>& pose_priors,
     const RotationEstimatorOptions& options,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction)
-    : options_(options) {
+    Reconstruction& reconstruction,
+    const CorrespondenceGraph* correspondence_graph)
+    : options_(options),
+      correspondence_graph_(correspondence_graph) {
+  // Fail-loud guard: skip_risky_LC_pairs reads ImagePair::are_lc from the
+  // CorrespondenceGraph; with no CG the per-pair LC filter silently never
+  // triggers. Force the caller to wire CG explicitly when opting in.
+  THROW_CHECK(!options_.skip_risky_LC_pairs || correspondence_graph_ != nullptr)
+      << "skip_risky_LC_pairs=true requires correspondence_graph; got nullptr";
   // Derive active_frame_ids from active_image_ids, and cache mappings.
   for (const image_t image_id : active_image_ids) {
     const auto& image = reconstruction.Image(image_id);
@@ -230,6 +253,32 @@ void RotationAveragingProblem::BuildPairConstraints(
 
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+
+    // Skip pairs whose LC inliers strictly exceed non-LC inliers; LC-
+    // dominated pairs are loop-closures whose relative rotation often
+    // disagrees with track-based geometry and breaks RA convergence.
+    // Reads ImagePair.{inliers, are_lc} from the CorrespondenceGraph
+    // plumbed in via ctor; PoseGraph::Edge doesn't carry the per-pair
+    // {inliers, are_lc} fields.
+    if (options_.skip_risky_LC_pairs && correspondence_graph_ != nullptr) {
+      const auto& cg_map = correspondence_graph_->ImagePairsMap();
+      auto cg_pair_it = cg_map.find(pair_id);
+      if (cg_pair_it != cg_map.end()) {
+        const auto& cg_pair = cg_pair_it->second;
+        if (!cg_pair.inliers.empty() && !cg_pair.are_lc.empty()) {
+          size_t lc_count = 0;
+          for (const auto idx : cg_pair.inliers) {
+            if (idx < cg_pair.are_lc.size() && cg_pair.are_lc[idx]) {
+              ++lc_count;
+            }
+          }
+          if (lc_count > cg_pair.inliers.size() - lc_count) {
+            continue;
+          }
+        }
+      }
+    }
+
     const auto& image1 = reconstruction.Image(image_id1);
     const auto& image2 = reconstruction.Image(image_id2);
     const auto& frame1 = *image1.FramePtr();
@@ -446,12 +495,28 @@ void RotationAveragingProblem::BuildConstraintMatrix(
   residuals_.resize(curr_row);
 }
 
-void RotationAveragingProblem::ComputeResiduals() {
-  // Set PRNG seed for deterministic jitter injection.
-  if (options_.random_seed >= 0) {
-    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
+// Translate the per-row IRLS weight vector into a per-pair map keyed by
+// image_pair_t. Each PairConstraint owns 1 (gravity-aligned) or 3
+// (full-3DOF) consecutive rows starting at constraint.row_index. Take the
+// weight at the first row of the constraint (all rows share the same
+// weight per ComputeIRLSWeights). Gauge-fixing rows (last
+// num_gauge_fixing_residuals_ rows) are excluded — they are not pair
+// residuals, just rotational-ambiguity anchors with weight=1 by
+// convention.
+void RotationAveragingProblem::SetFinalWeightsFromIRLS(
+    const Eigen::VectorXd& weights_irls) {
+  final_weights_.clear();
+  final_weights_.reserve(pair_constraints_.size());
+  for (const auto& [pair_id, constraint] : pair_constraints_) {
+    if (constraint.row_index < 0 ||
+        constraint.row_index >= weights_irls.size()) {
+      continue;
+    }
+    final_weights_[pair_id] = weights_irls[constraint.row_index];
   }
+}
 
+void RotationAveragingProblem::ComputeResiduals() {
   for (const auto& [pair_id, constraint] : pair_constraints_) {
     const frame_t frame_id1 = image_id_to_frame_id_.at(constraint.image_id1);
     const frame_t frame_id2 = image_id_to_frame_id_.at(constraint.image_id2);
@@ -633,6 +698,27 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 }
 
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
+  // Seed the global PRNG once per solve. ComputeResiduals' boundary
+  // jitter consumer (RandomUniformReal) advances naturally across
+  // iterations from this seed; resetting per-iteration would replay
+  // the identical jitter sequence and break IRLS convergence.
+  if (options_.random_seed >= 0) {
+    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
+  }
+
+  // Video-Ceres path: mutually exclusive with use_gravity. Replaces
+  // L1+IRLS with a Ceres optimization over per-frame 3-DOF angle-axis
+  // blocks. The LC-penalty MST initialization (also gated on
+  // use_video_constraints) runs before this solve.
+  if (options_.use_video_constraints && !options_.use_gravity) {
+    VLOG(2) << "Solving video-aware Ceres rotation averaging";
+    return SolveCeres(problem);
+  }
+  if (options_.use_video_constraints && options_.use_gravity) {
+    LOG(WARNING) << "use_video_constraints + use_gravity both set; "
+                 << "use_video_constraints disabled (mutually exclusive).";
+  }
+
   if (options_.max_num_l1_iterations > 0) {
     VLOG(2) << "Solving L1 regression problem";
     if (!SolveL1Regression(problem)) {
@@ -775,6 +861,7 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
   Eigen::VectorXd step(problem.NumParameters());
 
   int iteration = 0;
+  Eigen::VectorXd last_weights;
   for (iteration = 0; iteration < options_.max_num_irls_iterations;
        iteration++) {
     problem.ComputeResiduals();
@@ -784,6 +871,7 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
     if (!weights_irls) {
       return false;
     }
+    last_weights = *weights_irls;
 
     // Update the factorization for the weighted values.
     at_weight =
@@ -794,6 +882,13 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
     // Solve the least squares problem.
     step.setZero();
     step = llt.solve(at_weight * problem.Residuals());
+    // Mirror the L1 path's NaN guard (line 755). Without this, a singular
+    // pose-graph silently corrupts cams_from_world via UpdateState and
+    // SolveIRLS returns true with garbage residuals next iteration.
+    if (step.array().isNaN().any()) {
+      LOG(ERROR) << "IRLS step is NaN at iteration " << iteration;
+      return false;
+    }
     problem.UpdateState(step);
 
     const double avg_step = problem.AverageStepSize(step);
@@ -807,7 +902,112 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
   }
   VLOG(2) << "IRLS total iteration: " << iteration;
 
+  // Capture last successful iteration's per-pair weight for the
+  // consecutive-pair-weight diagnostic.
+  if (last_weights.size() > 0) {
+    problem.SetFinalWeightsFromIRLS(last_weights);
+  }
+
   return true;
+}
+
+// Replaces L1+IRLS with a Ceres optimization over per-frame 3-DOF
+// angle-axis blocks. Activated by use_video_constraints (and gated to
+// !use_gravity in Solve). Each pair's residual is a relative-rotation
+// error wrapped in Huber (tracking-dominated) or Cauchy (LC-dominated)
+// loss. Initialized rotations come from the LC-penalty MST (also gated
+// on use_video_constraints) or the L1+IRLS warm-start if MST init was
+// skipped.
+bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
+  THROW_CHECK(!options_.use_gravity)
+      << "SolveCeres is gated on !use_gravity; gravity-aware video-Ceres "
+         "is not implemented (this combination is unsupported).";
+
+  const auto* cg = problem.CorrespondenceGraphPtr();
+  if (cg == nullptr) {
+    LOG(WARNING) << "use_video_constraints requires a CorrespondenceGraph "
+                 << "to classify pairs as tracking-vs-LC; falling back to "
+                 << "Huber loss for all pairs.";
+  }
+
+  ceres::Problem ceres_problem;
+  Eigen::VectorXd& estimated_rotations = problem.MutableEstimatedRotations();
+  const auto& frame_id_to_param_idx = problem.FrameIdToParamIdx();
+  const auto& image_id_to_frame_id = problem.ImageIdToFrameId();
+  const frame_t fixed_frame_id = problem.FixedFrameId();
+
+  // Add parameter blocks for all active frames (3-DOF angle-axis).
+  for (const auto& [frame_id, param_idx] : frame_id_to_param_idx) {
+    double* param = estimated_rotations.data() + param_idx;
+    ceres_problem.AddParameterBlock(param, 3);
+    if (frame_id == fixed_frame_id) {
+      ceres_problem.SetParameterBlockConstant(param);
+    }
+  }
+
+  // Add residual blocks for each pair_constraint.
+  for (const auto& [pair_id, constraint] : problem.PairConstraints()) {
+    const auto* full_3dof =
+        std::get_if<RotationAveragingProblem::Full3DOF>(&constraint.constraint);
+    if (full_3dof == nullptr) {
+      // Gravity-aligned 1-DOF should not occur in video-Ceres path
+      // (gated on !use_gravity above).
+      continue;
+    }
+    const auto frame_it1 =
+        image_id_to_frame_id.find(constraint.image_id1);
+    const auto frame_it2 =
+        image_id_to_frame_id.find(constraint.image_id2);
+    if (frame_it1 == image_id_to_frame_id.end() ||
+        frame_it2 == image_id_to_frame_id.end()) {
+      continue;
+    }
+    const auto idx_it1 = frame_id_to_param_idx.find(frame_it1->second);
+    const auto idx_it2 = frame_id_to_param_idx.find(frame_it2->second);
+    if (idx_it1 == frame_id_to_param_idx.end() ||
+        idx_it2 == frame_id_to_param_idx.end()) {
+      continue;
+    }
+
+    Eigen::Vector3d rel_aa;
+    ceres::RotationMatrixToAngleAxis(full_3dof->R_cam2_from_cam1.data(),
+                                     rel_aa.data());
+
+    bool is_tracking = true;  // Default: Huber (tracking).
+    if (cg != nullptr) {
+      auto cg_pair_it = cg->ImagePairsMap().find(pair_id);
+      if (cg_pair_it != cg->ImagePairsMap().end()) {
+        is_tracking = IsTrackingPair(cg_pair_it->second);
+      }
+    }
+    ceres::LossFunction* loss =
+        is_tracking ? static_cast<ceres::LossFunction*>(
+                          new ceres::HuberLoss(
+                              options_.video_tracking_huber_scale))
+                    : static_cast<ceres::LossFunction*>(
+                          new ceres::CauchyLoss(
+                              options_.video_lc_cauchy_scale));
+
+    ceres::CostFunction* cost = RelativeRotationError::Create(rel_aa);
+    ceres_problem.AddResidualBlock(
+        cost,
+        loss,
+        estimated_rotations.data() + idx_it1->second,
+        estimated_rotations.data() + idx_it2->second);
+  }
+
+  ceres::Solver::Options solver_options;
+  solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+  solver_options.max_num_iterations = 100;
+  solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+  ceres::Solver::Summary summary;
+  ceres::Solve(solver_options, &ceres_problem, &summary);
+  if (VLOG_IS_ON(2)) {
+    LOG(INFO) << summary.FullReport();
+  } else {
+    LOG(INFO) << summary.BriefReport();
+  }
+  return summary.IsSolutionUsable();
 }
 
 }  // namespace colmap
