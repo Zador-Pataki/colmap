@@ -391,8 +391,32 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
 
     // If the image is not part of a camera rig, use the standard BATA error
     if (image.IsRefInFrame()) {
-      ceres::CostFunction* cost_function =
-          BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
+      // --- Glomap-fork WeightedBATADirectionalError dispatch (M5 fix) ---
+      // Use anisotropic per-keypoint weighting when image.angular_stddevs
+      // is populated (fork's typical case — videosfm always populates).
+      // Fall back to unweighted BATAPairwiseDirectionCostFunctor when
+      // sigmas are absent. Without this dispatch the SPLIT_METRIC_DEPTH
+      // path's geometry residuals lose their relative weighting against
+      // the metric-depth residuals — was the dominant contributor to the
+      // M7+M12 ATE drift (audit_algorithmic_semantics.md suspect #1).
+      ceres::CostFunction* cost_function = nullptr;
+      if (observation.point2D_idx < image.angular_stddevs.size()) {
+        const Eigen::Vector2d& angular_std =
+            image.angular_stddevs[observation.point2D_idx];
+        const double sigma_x = std::max(1e-9, angular_std[0]);
+        const double sigma_y = std::max(1e-9, angular_std[1]);
+        const double sigma_z = 0.5 * (sigma_x + sigma_y);
+        cost_function = WeightedBATADirectionalError::Create(
+            cam_from_point3D_dir,
+            image.CamFromWorld().rotation(),
+            sigma_x,
+            sigma_y,
+            sigma_z);
+      }
+      if (cost_function == nullptr) {
+        cost_function =
+            BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
+      }
 
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
