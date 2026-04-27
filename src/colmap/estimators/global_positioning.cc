@@ -39,6 +39,23 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     return false;
   }
 
+  // TODO: extend the rig branch in AddObservationToProblem to also add a
+  // MetricDepthError residual (parameterized over rig_from_world +
+  // cam_from_rig instead of cam_from_world). Until then, multi-camera
+  // rigs combined with use_metric_depth_constraint=true would silently
+  // drop depth residuals on non-ref images. Fail loud rather than
+  // produce an inconsistent optimization.
+  if (options_.use_metric_depth_constraint) {
+    for (const auto& [image_id, image] : reconstruction.Images()) {
+      THROW_CHECK(image.IsRefInFrame())
+          << "use_metric_depth_constraint=true is not yet supported with "
+             "multi-camera rigs. Image "
+          << image_id << " is a non-ref sensor in its frame; its depth "
+             "residual would be silently dropped. Either disable "
+             "use_metric_depth_constraint or run on single-camera rigs.";
+    }
+  }
+
   LOG(INFO) << "Setting up the global positioner problem";
 
   // Setup the problem.
