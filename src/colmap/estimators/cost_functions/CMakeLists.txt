@@ -91,3 +91,8 @@ COLMAP_ADD_TEST(
     SRCS depth_prior_test.cc
     LINK_LIBS colmap_estimators_cost_functions
 )
+COLMAP_ADD_TEST(
+    NAME metric_depth_test
+    SRCS metric_depth_test.cc
+    LINK_LIBS colmap_estimators_cost_functions
+)

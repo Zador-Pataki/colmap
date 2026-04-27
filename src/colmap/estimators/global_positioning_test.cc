@@ -36,6 +36,9 @@
 #include "colmap/scene/synthetic.h"
 #include "colmap/util/testing.h"
 
+#include <cmath>
+
+#include <ceres/loss_function.h>
 #include <gtest/gtest.h>
 
 namespace colmap {
@@ -135,6 +138,106 @@ TEST(GlobalPositioning, MultiCameraRig) {
                                  /*max_proj_center_error=*/0.5,
                                  /*max_scale_error=*/std::nullopt,
                                  /*num_obs_tolerance=*/0.0));
+}
+
+// ---- LossConfig::CreateLossFunction() dispatch ----
+
+TEST(LossConfig, TrivialDispatch) {
+  LossConfig config;
+  config.type = LossFunctionType::TRIVIAL;
+  config.scale = 1.0;
+  config.weight = 1.0;
+  std::shared_ptr<ceres::LossFunction> loss = config.CreateLossFunction();
+  ASSERT_NE(loss, nullptr);
+
+  // TrivialLoss: rho = (s, 1, 0) for any s.
+  double rho[3];
+  loss->Evaluate(/*sq_norm=*/4.0, rho);
+  EXPECT_NEAR(rho[0], 4.0, 1e-12);
+  EXPECT_NEAR(rho[1], 1.0, 1e-12);
+  EXPECT_NEAR(rho[2], 0.0, 1e-12);
+
+  // dynamic_cast confirms exact type when no ScaledLoss wrap.
+  EXPECT_NE(dynamic_cast<ceres::TrivialLoss*>(loss.get()), nullptr);
+}
+
+TEST(LossConfig, HuberDispatchSemantics) {
+  LossConfig config;
+  config.type = LossFunctionType::HUBER;
+  config.scale = 0.5;
+  config.weight = 1.0;
+  std::shared_ptr<ceres::LossFunction> loss = config.CreateLossFunction();
+  ASSERT_NE(loss, nullptr);
+  EXPECT_NE(dynamic_cast<ceres::HuberLoss*>(loss.get()), nullptr);
+
+  // HuberLoss(a) with sq_norm s:
+  //   s <= a^2: rho[0] = s
+  //   s >  a^2: rho[0] = 2*a*sqrt(s) - a^2
+  const double a = 0.5;
+  const double a2 = a * a;
+
+  double rho_below[3];
+  loss->Evaluate(/*sq_norm=*/0.1, rho_below);  // 0.1 < 0.25 -> quadratic
+  EXPECT_NEAR(rho_below[0], 0.1, 1e-12);
+
+  double rho_above[3];
+  loss->Evaluate(/*sq_norm=*/4.0, rho_above);  // 4.0 > 0.25 -> linear
+  const double expected = 2.0 * a * std::sqrt(4.0) - a2;
+  EXPECT_NEAR(rho_above[0], expected, 1e-12);
+}
+
+TEST(LossConfig, ScaledLossWrapWhenWeightNonOne) {
+  // weight=2.0 over a TrivialLoss → rho[0] = 2 * sq_norm.
+  LossConfig config;
+  config.type = LossFunctionType::TRIVIAL;
+  config.scale = 1.0;
+  config.weight = 2.0;
+  std::shared_ptr<ceres::LossFunction> loss = config.CreateLossFunction();
+  ASSERT_NE(loss, nullptr);
+
+  // After ScaledLoss wrap, the outer pointer is no longer a TrivialLoss.
+  EXPECT_EQ(dynamic_cast<ceres::TrivialLoss*>(loss.get()), nullptr);
+
+  double rho[3];
+  loss->Evaluate(/*sq_norm=*/3.0, rho);
+  EXPECT_NEAR(rho[0], 6.0, 1e-12);  // 2 * sq_norm
+  EXPECT_NEAR(rho[1], 2.0, 1e-12);  // 2 * 1.0
+  EXPECT_NEAR(rho[2], 0.0, 1e-12);
+
+  // Weight=2 over Huber: rho should be exactly 2x the unweighted Huber rho.
+  LossConfig huber_unweighted;
+  huber_unweighted.type = LossFunctionType::HUBER;
+  huber_unweighted.scale = 0.7;
+  huber_unweighted.weight = 1.0;
+  LossConfig huber_weighted = huber_unweighted;
+  huber_weighted.weight = 2.0;
+  auto loss_u = huber_unweighted.CreateLossFunction();
+  auto loss_w = huber_weighted.CreateLossFunction();
+
+  double rho_u[3];
+  double rho_w[3];
+  loss_u->Evaluate(/*sq_norm=*/2.5, rho_u);
+  loss_w->Evaluate(/*sq_norm=*/2.5, rho_w);
+  EXPECT_NEAR(rho_w[0], 2.0 * rho_u[0], 1e-12);
+  EXPECT_NEAR(rho_w[1], 2.0 * rho_u[1], 1e-12);
+  EXPECT_NEAR(rho_w[2], 2.0 * rho_u[2], 1e-12);
+}
+
+TEST(LossConfig, CauchyAndSoftL1Smoke) {
+  for (LossFunctionType type :
+       {LossFunctionType::CAUCHY, LossFunctionType::SOFT_L1}) {
+    LossConfig config;
+    config.type = type;
+    config.scale = 0.5;
+    config.weight = 1.0;
+    std::shared_ptr<ceres::LossFunction> loss = config.CreateLossFunction();
+    ASSERT_NE(loss, nullptr);
+    double rho[3];
+    loss->Evaluate(/*sq_norm=*/1.0, rho);
+    EXPECT_TRUE(std::isfinite(rho[0]));
+    EXPECT_TRUE(std::isfinite(rho[1]));
+    EXPECT_TRUE(std::isfinite(rho[2]));
+  }
 }
 
 }  // namespace
