@@ -2,6 +2,7 @@
 
 #include "colmap/sfm/track_establishment.h"
 
+#include <algorithm>
 #include <limits>
 #include <set>
 #include <utility>
@@ -82,7 +83,12 @@ void TrackEngine::ProcessLoopClosurePairs(
     std::unordered_map<track_t, Point3D>& tracks) {
   // Build a lookup from observation (image_id << 32 | feature_id) to track_id
   std::unordered_map<uint64_t, track_t> obs_to_track;
+  // Mint new track ids sequentially from native's max + 1. Avoids the
+  // obs-key encoding (image_id<<32 | feature_id) which could in principle
+  // collide with native's dense [0, N) ids.
+  track_t next_id = 0;
   for (const auto& [track_id, point3D] : tracks) {
+    next_id = std::max(next_id, static_cast<track_t>(track_id + 1));
     for (const auto& el : point3D.track.Elements()) {
       const uint64_t key = (static_cast<uint64_t>(el.image_id) << 32) |
                            static_cast<uint64_t>(el.point2D_idx);
@@ -136,8 +142,8 @@ void TrackEngine::ProcessLoopClosurePairs(
         // Neither observation exists in any built track: create two new tracks
         // Track A: obsA as regular observation, obsB as LC observation
         // Track B: obsB as regular observation, obsA as LC observation
-        const track_t tid_a = static_cast<track_t>(obs1_key);
-        const track_t tid_b = static_cast<track_t>(obs2_key);
+        const track_t tid_a = next_id++;
+        const track_t tid_b = next_id++;
 
         Point3D track_a;
         track_a.track.AddElement(image_id1, point1_idx);
@@ -147,18 +153,17 @@ void TrackEngine::ProcessLoopClosurePairs(
         track_b.track.AddElement(image_id2, point2_idx);
         track_b.track.lc_elements.emplace_back(image_id1, point1_idx);
 
-        // Insert the new tracks. Track ids derive from observation
-        // (image_id, point2D_idx) pairs which must be unique post-MDRP;
-        // assert no collision so a violation surfaces fast rather than
-        // silently dropping a track.
+        // Insert the new tracks. Track ids continue sequentially from
+        // native's max so collisions are genuinely impossible; the
+        // THROW_CHECK below stays as a defensive guard.
         const auto inserted_a = tracks.emplace(tid_a, std::move(track_a));
         THROW_CHECK(inserted_a.second)
             << "Track id collision on " << tid_a
-            << " — observation key reused unexpectedly";
+            << " — sequential id minting violated unexpectedly";
         const auto inserted_b = tracks.emplace(tid_b, std::move(track_b));
         THROW_CHECK(inserted_b.second)
             << "Track id collision on " << tid_b
-            << " — observation key reused unexpectedly";
+            << " — sequential id minting violated unexpectedly";
 
         // Register in lookup so subsequent LC pairs can find them
         obs_to_track[obs1_key] = tid_a;
