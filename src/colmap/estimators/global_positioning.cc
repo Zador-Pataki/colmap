@@ -50,6 +50,18 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
   // Also, convert the camera pose translation to be the camera center.
   InitializeRandomPositions(pose_graph, reconstruction);
 
+  // Seed dmap_scales_ from per-image median(z_est/depth_prior) when the
+  // caller didn't provide initial_dmap_scales. Only meaningful in
+  // SPLIT_METRIC_DEPTH; gated by use_init so the GP1->GP2 handoff (which
+  // already supplies initial_dmap_scales) bypasses this. Images without
+  // observations consumed here fall through to the constant lazy-insert
+  // path in AddObservationToProblem.
+  if (options_.point_constraint_type ==
+          PointConstraintType::SPLIT_METRIC_DEPTH &&
+      options_.use_init && !options_.initial_dmap_scales.has_value()) {
+    InitializeDepthMapScalesFromObservations(reconstruction);
+  }
+
   // Add the point to camera constraints to the problem.
   AddPointToCameraConstraints(reconstruction);
 
@@ -859,6 +871,68 @@ void GlobalPositioner::FilterDepthOutliers(
   }
   VLOG(2) << "FilterDepthOutliers: flagged " << depth_outliers_.size()
           << " observations as depth outliers.";
+}
+
+void GlobalPositioner::InitializeDepthMapScalesFromObservations(
+    const Reconstruction& reconstruction) {
+  // Per-image scale estimates: scale = z_est / depth_prior.
+  std::map<image_t, std::vector<double>> image_scale_estimates;
+
+  auto consume_observation = [&](image_t image_id, point2D_t feature_id,
+                                 const Eigen::Vector3d& point_world) {
+    if (!reconstruction.ExistsImage(image_id)) return;
+    const Image& image = reconstruction.Image(image_id);
+    if (!image.HasPose()) return;
+
+    if (feature_id >= image.depth_prior_validity.size() ||
+        !image.depth_prior_validity[feature_id]) {
+      return;
+    }
+    if (feature_id >= image.depth_priors.size()) return;
+
+    const double depth_prior = image.depth_priors[feature_id];
+    if (depth_prior <= 1e-6) return;
+
+    // z_est = (cam_from_world * X_world)[2]
+    const Eigen::Vector3d point_cam = image.CamFromWorld() * point_world;
+    const double z_est = point_cam[2];
+    if (z_est <= 1e-6) return;
+
+    const double scale_estimate = z_est / depth_prior;
+    if (scale_estimate > 1e-6 && scale_estimate < 1e6) {
+      image_scale_estimates[image_id].push_back(scale_estimate);
+    }
+  };
+
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    for (const auto& observation : point3D.track.Elements()) {
+      consume_observation(
+          observation.image_id, observation.point2D_idx, point3D.xyz);
+    }
+    if (options_.use_lc_observations) {
+      for (const auto& observation : point3D.track.lc_elements) {
+        consume_observation(
+            observation.image_id, observation.point2D_idx, point3D.xyz);
+      }
+    }
+  }
+
+  for (auto& [image_id, scale_estimates] : image_scale_estimates) {
+    if (scale_estimates.empty()) continue;
+
+    std::sort(scale_estimates.begin(), scale_estimates.end());
+    const double median_scale = scale_estimates[scale_estimates.size() / 2];
+
+    const double initial_value = options_.use_log_scale_for_depth_map_scales
+                                     ? std::log(median_scale)
+                                     : median_scale;
+
+    dmap_scales_[image_id] = initial_value;
+    dmap_scale_observation_counts_[image_id] = 0;
+  }
+
+  VLOG(2) << "InitializeDepthMapScalesFromObservations: seeded "
+          << dmap_scales_.size() << " image scales from observations.";
 }
 
 bool RunGlobalPositioning(const GlobalPositionerOptions& options,

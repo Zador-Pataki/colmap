@@ -215,6 +215,18 @@ class GlobalPositioner {
                                bool random_initialization,
                                Reconstruction& reconstruction);
 
+  // Seed ``dmap_scales_`` with the per-image median of
+  // ``z_est / depth_prior`` over all (regular + LC) observations whose
+  // image has a valid depth prior. Stores log(median) when
+  // ``use_log_scale_for_depth_map_scales=true``, else linear median.
+  // Called from ``Solve`` only when ``SPLIT_METRIC_DEPTH`` +
+  // ``use_init=true`` + ``initial_dmap_scales`` is empty (i.e. no
+  // caller-supplied seed). Images without observations consumed here
+  // still fall through to the lazy-insert path in
+  // ``AddObservationToProblem`` (1.0 linear / 0.0 log).
+  void InitializeDepthMapScalesFromObservations(
+      const Reconstruction& reconstruction);
+
   // Sweep observations and flag those whose
   // ``|log(z_est) - log(scale * depth_prior)|`` exceeds 3 sigma into
   // ``depth_outliers_``. Gated by ``filter_depth_outliers`` +
