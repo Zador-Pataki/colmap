@@ -95,6 +95,52 @@ void BindGlobalPositioner(py::module& m) {
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
                          "Whether to use custom parameter block ordering.")
+          // --- Pass-through to ceres::Solver::Options sub-fields ---
+          .def_property(
+              "num_threads",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.num_threads;
+              },
+              [](GlobalPositionerOptions& self, int v) {
+                self.solver_options.num_threads = v;
+              },
+              "Ceres solver thread count (-1 = auto).")
+          .def_property(
+              "max_num_iterations",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.max_num_iterations;
+              },
+              [](GlobalPositionerOptions& self, int v) {
+                self.solver_options.max_num_iterations = v;
+              },
+              "Ceres solver max iterations.")
+          .def_property(
+              "function_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.function_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.function_tolerance = v;
+              },
+              "Ceres solver function tolerance.")
+          .def_property(
+              "gradient_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.gradient_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.gradient_tolerance = v;
+              },
+              "Ceres solver gradient tolerance.")
+          .def_property(
+              "parameter_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.parameter_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.parameter_tolerance = v;
+              },
+              "Ceres solver parameter tolerance.")
           // --- Glomap-fork additions (M2) ---
           .def_readwrite(
               "point_constraint_type",
@@ -230,22 +276,12 @@ void BindGlobalPositioner(py::module& m) {
         py::dict result;
         result["success"] = success;
         result["dmap_scale_map"] = dmap_scale_map;
-        // Nested map: {image_id: {linear, log}}. Mirrors fork's
-        // GetDepthMapScaleMapNested return shape; videosfm pipeline reads it
-        // for viz (mostly an alias of dmap_scale_map for our linear path).
-        py::dict dmap_scale_map_nested;
-        for (const auto& [image_id, scale] : positioner.GetDmapScales()) {
-          py::dict per_image;
-          const double linear = options.use_log_scale_for_depth_map_scales
-                                    ? std::exp(scale)
-                                    : scale;
-          per_image["linear"] = linear;
-          per_image["log"] = options.use_log_scale_for_depth_map_scales
-                                 ? scale
-                                 : std::log(std::max(scale, 1e-9));
-          dmap_scale_map_nested[py::cast(image_id)] = per_image;
-        }
-        result["dmap_scale_map_nested"] = dmap_scale_map_nested;
+        // ``dmap_scale_map_nested``: alias of dmap_scale_map (Dict[image_id,
+        // linear_scale]). Mirrors fork's binding return shape — videosfm
+        // caller treats it as a flat scalar map (np.log() consumed in
+        // viz). Native colmap doesn't carry frame-vs-image nesting since
+        // trivial-rig means image_id == frame_id.
+        result["dmap_scale_map_nested"] = dmap_scale_map;
         return result;
       },
       "options"_a,

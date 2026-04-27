@@ -4,6 +4,7 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -140,7 +141,7 @@ class GlobalPositioner {
   // the parameterization the optimizer ran in (log-space when
   // options_.use_log_scale_for_depth_map_scales=true, linear otherwise).
   // Pycolmap binding converts to linear space before returning to Python.
-  const std::unordered_map<image_t, double>& GetDmapScales() const {
+  const std::map<image_t, double>& GetDmapScales() const {
     return dmap_scales_;
   }
 
@@ -215,7 +216,11 @@ class GlobalPositioner {
   // ``point_constraint_type == SPLIT_METRIC_DEPTH``. Lazily inserted on the
   // first valid depth-prior observation per image. Keyed by ``image_t``
   // (matches fork; trivial-rig case has ``image_t == frame_t`` numerically).
-  std::unordered_map<image_t, double> dmap_scales_;
+  // Uses ``std::map`` instead of ``unordered_map`` because Ceres residuals
+  // store ``&dmap_scales_[image_id]`` data pointers; a hash-table rehash
+  // during lazy-insert would invalidate them. ``std::map`` is a balanced BST
+  // — pointers stay stable for the lifetime of the entry.
+  std::map<image_t, double> dmap_scales_;
 
   // Per-image observation count for scale-prior weighting. Each observation
   // that contributes a ``MetricDepthError`` residual increments the count;

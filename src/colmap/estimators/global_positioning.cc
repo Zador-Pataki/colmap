@@ -88,11 +88,15 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
 
   // Allocate enough memory for the scales. One for each residual.
   // Due to possibly invalid tracks, the actual number of residuals may be
-  // smaller.
+  // smaller. Include both regular observations + glomap-fork lc_elements
+  // (M5 two-loop iteration adds residuals + scales for both); without the
+  // lc count, vector reallocation invalidates earlier &scale pointers
+  // stored in Ceres residual blocks.
   scales_.clear();
   size_t total_observations = 0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     total_observations += point3D.track.Length();
+    total_observations += point3D.track.lc_elements.size();
   }
   scales_.reserve(total_observations);
 }
@@ -259,6 +263,11 @@ void GlobalPositioner::AddPointToCameraConstraints(
           scale_prior_cost, obs_count_scaled_loss, &scale);
     }
   }
+  VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
+          << ", parameter blocks=" << problem_->NumParameterBlocks()
+          << ", scales=" << scales_.size()
+          << ", frame_centers=" << frame_centers_.size()
+          << ", dmap_scales=" << dmap_scales_.size();
 }
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
@@ -577,7 +586,13 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
   }
 
   // --- Glomap-fork SPLIT_METRIC_DEPTH parameter group (M4) ---
-  // Per-image dmap_scales_ ride alongside frame_centers_ in group 2.
+  // Per-image dmap_scales_ go in a separate group (one beyond
+  // frame_centers/cams_in_rig). dmap_scales_ are 1-D blocks; mixing them
+  // with 3-D frame_centers in the same Schur-ordering group breaks the
+  // Schur-complement preprocessor (Ceres downgrades to
+  // SPARSE_NORMAL_CHOLESKY then fails to start). Separate group keeps
+  // each Schur block size-uniform.
+  ++group_id;
   for (auto& [image_id, scale] : dmap_scales_) {
     if (problem_->HasParameterBlock(&scale)) {
       parameter_ordering->AddElementToGroup(&scale, group_id);
@@ -755,7 +770,7 @@ inline bool DepthOutlierFlag(
     point2D_t feature_id,
     const Eigen::Vector3d& point3D_xyz,
     bool use_log_scale,
-    const std::unordered_map<image_t, double>& dmap_scales,
+    const std::map<image_t, double>& dmap_scales,
     image_t image_id) {
   if (feature_id >= image.depth_prior_validity.size() ||
       !image.depth_prior_validity[feature_id]) {
