@@ -1,4 +1,4 @@
-#include "colmap/sfm/image_pair_inliers_glomap.h"
+#include "colmap/sfm/image_pair_inliers.h"
 
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
@@ -20,10 +20,10 @@ namespace py = pybind11;
 namespace {
 
 py::dict RunImagePairsInlierCount(
-    CorrespondenceGraph& view_graph,
+    CorrespondenceGraph& correspondence_graph,
     py::dict cameras_py,
     py::dict images_py,
-    const glomap_ra::InlierThresholdOptions& options,
+    const InlierThresholdOptions& options,
     bool clean_inliers) {
   std::unordered_map<camera_t, Camera> cameras;
   cameras.reserve(cameras_py.size());
@@ -40,8 +40,8 @@ py::dict RunImagePairsInlierCount(
 
   {
     py::gil_scoped_release release;
-    glomap_ra::ImagePairsInlierCount(
-        view_graph, cameras, images, options, clean_inliers);
+    ImagePairsInlierCount(
+        correspondence_graph, cameras, images, options, clean_inliers);
   }
 
   py::dict cameras_out;
@@ -53,7 +53,7 @@ py::dict RunImagePairsInlierCount(
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
@@ -61,44 +61,44 @@ py::dict RunImagePairsInlierCount(
 
 }  // namespace
 
-void BindImagePairInliersGlomap(py::module& m) {
+void BindImagePairInliers(py::module& m) {
   auto PyOpts =
-      py::classh<glomap_ra::InlierThresholdOptions>(
+      py::classh<InlierThresholdOptions>(
           m, "InlierThresholdOptions")
           .def(py::init<>())
           .def_readwrite("max_angle_error",
-                         &glomap_ra::InlierThresholdOptions::max_angle_error)
+                         &InlierThresholdOptions::max_angle_error)
           .def_readwrite(
               "max_reprojection_error",
-              &glomap_ra::InlierThresholdOptions::max_reprojection_error)
+              &InlierThresholdOptions::max_reprojection_error)
           .def_readwrite(
               "min_triangulation_angle",
-              &glomap_ra::InlierThresholdOptions::min_triangulation_angle)
+              &InlierThresholdOptions::min_triangulation_angle)
           .def_readwrite(
               "max_epipolar_error_E",
-              &glomap_ra::InlierThresholdOptions::max_epipolar_error_E)
+              &InlierThresholdOptions::max_epipolar_error_E)
           .def_readwrite(
               "max_epipolar_error_F",
-              &glomap_ra::InlierThresholdOptions::max_epipolar_error_F)
+              &InlierThresholdOptions::max_epipolar_error_F)
           .def_readwrite(
               "max_epipolar_error_H",
-              &glomap_ra::InlierThresholdOptions::max_epipolar_error_H)
+              &InlierThresholdOptions::max_epipolar_error_H)
           .def_readwrite(
               "min_angle_from_epipole",
-              &glomap_ra::InlierThresholdOptions::min_angle_from_epipole)
+              &InlierThresholdOptions::min_angle_from_epipole)
           .def_readwrite("min_inlier_num",
-                         &glomap_ra::InlierThresholdOptions::min_inlier_num)
+                         &InlierThresholdOptions::min_inlier_num)
           .def_readwrite(
               "min_inlier_ratio",
-              &glomap_ra::InlierThresholdOptions::min_inlier_ratio)
+              &InlierThresholdOptions::min_inlier_ratio)
           .def_readwrite(
               "max_rotation_error",
-              &glomap_ra::InlierThresholdOptions::max_rotation_error);
+              &InlierThresholdOptions::max_rotation_error);
   MakeDataclass(PyOpts);
 
   m.def("image_pairs_inlier_count",
         &RunImagePairsInlierCount,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "options"_a,

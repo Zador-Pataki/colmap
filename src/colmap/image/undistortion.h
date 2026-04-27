@@ -128,9 +128,6 @@ void RectifyAndUndistortStereoImages(const UndistortCameraOptions& options,
 //
 // If ``clean_points`` is true (default), always recomputes; if false, skips
 // images whose ``features_undist`` already has the same length as ``features``.
-//
-// Mirrors glomap's ``UndistortImages`` so the videosfm pyglomap shim can be
-// retired once this function is exposed via pycolmap.
 void UndistortImageFeatures(
     const std::unordered_map<camera_t, Camera>& cameras,
     std::unordered_map<image_t, Image>& images,

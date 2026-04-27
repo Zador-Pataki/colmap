@@ -7,12 +7,15 @@ void BindIncrementalTriangulator(py::module& m);
 void BindIncrementalMapper(py::module& m);
 void BindViewGraphManipulation(py::module& m);
 void BindRelativePoseEstimation(py::module& m);
-void BindRotationAveragingGlomap(py::module& m);
-void BindTrackEstablishmentGlomap(py::module& m);
-void BindImagePairInliersGlomap(py::module& m);
-void BindGlobalPositionerOptions(py::module& m);
-void BindGlobalPositioningGlomap(py::module& m);
-void BindTrackFilterGlomap(py::module& m);
+void BindTrackEstablishment(py::module& m);
+void BindImagePairInliers(py::module& m);
+void BindTrackFilter(py::module& m);
+
+// GP + RA bindings live at top-level pycolmap as
+// pycolmap.GlobalPositionerOptions / RotationEstimatorOptions /
+// run_global_positioning / run_rotation_averaging. Track-filter,
+// track-establishment, and image-pair-inliers also bind at top-level
+// pycolmap.
 
 void BindSfm(py::module& m) {
   BindObservationManager(m);
@@ -20,10 +23,7 @@ void BindSfm(py::module& m) {
   BindIncrementalMapper(m);
   BindViewGraphManipulation(m);
   BindRelativePoseEstimation(m);
-  BindRotationAveragingGlomap(m);
-  BindTrackEstablishmentGlomap(m);
-  BindImagePairInliersGlomap(m);
-  BindGlobalPositionerOptions(m);
-  BindGlobalPositioningGlomap(m);
-  BindTrackFilterGlomap(m);
+  BindTrackEstablishment(m);
+  BindImagePairInliers(m);
+  BindTrackFilter(m);
 }

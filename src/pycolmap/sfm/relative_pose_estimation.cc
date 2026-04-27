@@ -17,7 +17,7 @@ namespace py = pybind11;
 
 namespace {
 
-py::dict RunRelativePoseEstimation(CorrespondenceGraph& view_graph,
+py::dict RunRelativePoseEstimation(CorrespondenceGraph& correspondence_graph,
                                    py::dict cameras_py,
                                    py::dict images_py) {
   std::unordered_map<camera_t, Camera> cameras;
@@ -36,7 +36,7 @@ py::dict RunRelativePoseEstimation(CorrespondenceGraph& view_graph,
   RelativePoseEstimationOptions options;
   {
     py::gil_scoped_release release;
-    EstimateRelativePoses(view_graph, cameras, images, options);
+    EstimateRelativePoses(correspondence_graph, cameras, images, options);
   }
 
   py::dict cameras_out;
@@ -48,7 +48,7 @@ py::dict RunRelativePoseEstimation(CorrespondenceGraph& view_graph,
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
@@ -59,12 +59,12 @@ py::dict RunRelativePoseEstimation(CorrespondenceGraph& view_graph,
 void BindRelativePoseEstimation(py::module& m) {
   m.def("run_relative_pose_estimation",
         &RunRelativePoseEstimation,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "Estimate relative poses for every valid pair via "
         "poselib::estimate_relative_pose on the matched 2D correspondences. "
         "Writes image_pair.two_view_geometry.cam2_from_cam1; on per-pair "
         "PoseLib failure, marks is_valid=false. Returns dict with mutated "
-        "view_graph + cameras + images.");
+        "correspondence_graph + cameras + images.");
 }

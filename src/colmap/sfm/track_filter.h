@@ -29,54 +29,41 @@
 
 #pragma once
 
-#include "colmap/scene/track.h"
-#include "colmap/util/eigen_alignment.h"
+#include "colmap/scene/camera.h"
+#include "colmap/scene/correspondence_graph.h"
+#include "colmap/scene/image.h"
+#include "colmap/scene/point3d.h"
 #include "colmap/util/types.h"
 
-#include <Eigen/Core>
+#include <unordered_map>
 
 namespace colmap {
 
-// 3D point class that holds information about triangulated 2D points.
-struct Point3D {
-  // The 3D position of the point.
-  Eigen::Vector3d xyz = Eigen::Vector3d::Zero();
+// Drop ``Track::Elements`` whose bearing-vs-3D-point angle exceeds the
+// threshold. Reads ``Image::features_undist`` (precomputed unit ray)
+// per element. Calibrated cameras (``Camera::has_prior_focal_length``)
+// use ``cos(max_angle_error_deg)``; uncalibrated cameras get a 2x relaxed
+// threshold ``cos(2 * max_angle_error_deg)`` since their focal is still
+// being optimized. Mutates ``tracks`` in place via ``Track::SetElements``;
+// returns the count of tracks whose element list shrank.
+int FilterTracksByAngle(
+    CorrespondenceGraph& view_graph,
+    const std::unordered_map<camera_t, Camera>& cameras,
+    const std::unordered_map<image_t, Image>& images,
+    std::unordered_map<point3D_t, Point3D>& tracks,
+    double max_angle_error_deg = 1.);
 
-  // The mean reprojection error in pixels.
-  double error = -1.;
-
-  // The track of the point as a list of image observations.
-  Track track;
-
-  // The color of the point in the range [0, 255].
-  Eigen::Vector3ub color = Eigen::Vector3ub::Zero();
-
-  // Whether the 3D position has been computed (e.g. via global positioning
-  // or triangulation). Default false — xyz is a placeholder until set true.
-  // Track-quality flag set by the LC pass.
-  bool is_initialized = false;
-
-  inline bool HasError() const;
-
-  inline bool operator==(const Point3D& other) const;
-  inline bool operator!=(const Point3D& other) const;
-};
-
-std::ostream& operator<<(std::ostream& stream, const Point3D& point3D);
-
-////////////////////////////////////////////////////////////////////////////////
-// Implementation
-////////////////////////////////////////////////////////////////////////////////
-
-bool Point3D::HasError() const { return error != -1; }
-
-bool Point3D::operator==(const Point3D& other) const {
-  return xyz == other.xyz && color == other.color && error == other.error &&
-         is_initialized == other.is_initialized && track == other.track;
-}
-
-bool Point3D::operator!=(const Point3D& other) const {
-  return !(*this == other);
-}
+// Drop tracks whose maximum pairwise triangulation angle is below the
+// threshold. Mirrors
+// ``ObservationManager::FindPoints3DWithSmallTriangulationAngle`` but
+// operates on the dict-of-tracks state used here instead of a
+// ``Reconstruction``; shares the angle math via
+// ``CalculateTriangulationAngle``. Marks dropped tracks with
+// ``Track::SetElements({})``; returns the dropped count.
+int FilterTrackTriangulationAngle(
+    CorrespondenceGraph& view_graph,
+    const std::unordered_map<image_t, Image>& images,
+    std::unordered_map<point3D_t, Point3D>& tracks,
+    double min_angle_deg = 1.);
 
 }  // namespace colmap

@@ -27,56 +27,26 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#pragma once
+#include "colmap/estimators/ceres_loss.h"
 
-#include "colmap/scene/track.h"
-#include "colmap/util/eigen_alignment.h"
-#include "colmap/util/types.h"
-
-#include <Eigen/Core>
+#include "colmap/util/logging.h"
 
 namespace colmap {
 
-// 3D point class that holds information about triangulated 2D points.
-struct Point3D {
-  // The 3D position of the point.
-  Eigen::Vector3d xyz = Eigen::Vector3d::Zero();
-
-  // The mean reprojection error in pixels.
-  double error = -1.;
-
-  // The track of the point as a list of image observations.
-  Track track;
-
-  // The color of the point in the range [0, 255].
-  Eigen::Vector3ub color = Eigen::Vector3ub::Zero();
-
-  // Whether the 3D position has been computed (e.g. via global positioning
-  // or triangulation). Default false — xyz is a placeholder until set true.
-  // Track-quality flag set by the LC pass.
-  bool is_initialized = false;
-
-  inline bool HasError() const;
-
-  inline bool operator==(const Point3D& other) const;
-  inline bool operator!=(const Point3D& other) const;
-};
-
-std::ostream& operator<<(std::ostream& stream, const Point3D& point3D);
-
-////////////////////////////////////////////////////////////////////////////////
-// Implementation
-////////////////////////////////////////////////////////////////////////////////
-
-bool Point3D::HasError() const { return error != -1; }
-
-bool Point3D::operator==(const Point3D& other) const {
-  return xyz == other.xyz && color == other.color && error == other.error &&
-         is_initialized == other.is_initialized && track == other.track;
-}
-
-bool Point3D::operator!=(const Point3D& other) const {
-  return !(*this == other);
+std::unique_ptr<ceres::LossFunction> CreateLossFunction(
+    LossFunctionType loss_function_type, double loss_function_scale) {
+  switch (loss_function_type) {
+    case LossFunctionType::TRIVIAL:
+      return std::make_unique<ceres::TrivialLoss>();
+    case LossFunctionType::SOFT_L1:
+      return std::make_unique<ceres::SoftLOneLoss>(loss_function_scale);
+    case LossFunctionType::CAUCHY:
+      return std::make_unique<ceres::CauchyLoss>(loss_function_scale);
+    case LossFunctionType::HUBER:
+      return std::make_unique<ceres::HuberLoss>(loss_function_scale);
+  }
+  LOG(FATAL) << "Unhandled LossFunctionType: "
+             << static_cast<int>(loss_function_type);
 }
 
 }  // namespace colmap

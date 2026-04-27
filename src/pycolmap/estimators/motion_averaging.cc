@@ -4,6 +4,8 @@
 
 #include "pycolmap/helpers.h"
 
+#include <cmath>
+
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -13,6 +15,16 @@ using namespace pybind11::literals;
 namespace py = pybind11;
 
 void BindGlobalPositioner(py::module& m) {
+  py::enum_<PointConstraintType>(m, "PointConstraintType")
+      .value("BATA", PointConstraintType::BATA)
+      .value("SPLIT_METRIC_DEPTH", PointConstraintType::SPLIT_METRIC_DEPTH);
+
+  py::classh<LossConfig>(m, "LossConfig")
+      .def(py::init<>())
+      .def_readwrite("type", &LossConfig::type)
+      .def_readwrite("scale", &LossConfig::scale)
+      .def_readwrite("weight", &LossConfig::weight);
+
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -49,14 +61,187 @@ void BindGlobalPositioner(py::module& m) {
                          "Minimum number of views per track.")
           .def_readwrite("random_seed",
                          &GlobalPositionerOptions::random_seed,
-                         "PRNG seed for random initialization. -1 for "
-                         "non-deterministic.")
+                         "PRNG seed for random initialization. Default -1 "
+                         "(non-deterministic random_device, matches upstream "
+                         "colmap4). When -1 the ctor honors a GP_SEED env "
+                         "var as a documented escape for byte-identity "
+                         "recipes; set explicitly (>=0) to override.")
+          .def_readwrite("loss_function_type",
+                         &GlobalPositionerOptions::loss_function_type,
+                         "Top-level robust loss kernel applied to the BATA "
+                         "direction residual. Default HUBER (was hardcoded "
+                         "in upstream colmap GP).")
           .def_readwrite("loss_function_scale",
                          &GlobalPositionerOptions::loss_function_scale,
                          "Scaling factor for the loss function.")
+          .def_readwrite("loss_function_weight",
+                         &GlobalPositionerOptions::loss_function_weight,
+                         "Multiplicative weight; wraps the loss in "
+                         "ceres::ScaledLoss when != 1.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
-                         "Whether to use custom parameter block ordering.");
+                         "Whether to use custom parameter block ordering.")
+          .def_readwrite(
+              "apply_uncalibrated_loss_downweight",
+              &GlobalPositionerOptions::apply_uncalibrated_loss_downweight,
+              "Apply 0.5x ScaledLoss to BATA residuals from cameras whose "
+              "focal length lacks an EXIF prior. Default true (mainline "
+              "colmap heuristic). Set false to disable the downweight.")
+          // --- Pass-through to ceres::Solver::Options sub-fields ---
+          .def_property(
+              "num_threads",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.num_threads;
+              },
+              [](GlobalPositionerOptions& self, int v) {
+                self.solver_options.num_threads = v;
+              },
+              "Ceres solver thread count (-1 = auto).")
+          .def_property(
+              "max_num_iterations",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.max_num_iterations;
+              },
+              [](GlobalPositionerOptions& self, int v) {
+                self.solver_options.max_num_iterations = v;
+              },
+              "Ceres solver max iterations.")
+          .def_property(
+              "function_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.function_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.function_tolerance = v;
+              },
+              "Ceres solver function tolerance.")
+          .def_property(
+              "gradient_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.gradient_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.gradient_tolerance = v;
+              },
+              "Ceres solver gradient tolerance.")
+          .def_property(
+              "parameter_tolerance",
+              [](const GlobalPositionerOptions& self) {
+                return self.solver_options.parameter_tolerance;
+              },
+              [](GlobalPositionerOptions& self, double v) {
+                self.solver_options.parameter_tolerance = v;
+              },
+              "Ceres solver parameter tolerance.")
+          // Optional extensions (default OFF — vanilla call = vanilla GP).
+          .def_readwrite(
+              "point_constraint_type",
+              &GlobalPositionerOptions::point_constraint_type,
+              "Per-observation residual structure: BATA (default, native "
+              "behaviour) or SPLIT_METRIC_DEPTH (BATA + 1-D MetricDepthError).")
+          .def_readwrite("use_init",
+                         &GlobalPositionerOptions::use_init,
+                         "If true, skip random init for both camera centers "
+                         "AND track xyz.")
+          .def_readwrite(
+              "use_observation_exclusions",
+              &GlobalPositionerOptions::use_observation_exclusions,
+              "If true, observations with image.is_excluded[idx]=true are "
+              "skipped.")
+          .def_readwrite(
+              "use_lc_observations",
+              &GlobalPositionerOptions::use_lc_observations,
+              "If true, AddPoint3DToProblem also iterates "
+              "track.lc_elements (loop-closure observations).")
+          .def_readwrite(
+              "random_init_scale",
+              &GlobalPositionerOptions::random_init_scale,
+              "Cube size for random init of camera centers / points (linear).")
+          .def_readwrite(
+              "use_log_scale_for_depth_map_scales",
+              &GlobalPositionerOptions::use_log_scale_for_depth_map_scales,
+              "If true, dmap_scales_ are log-space and use exp() in "
+              "MetricDepthError.")
+          .def_readwrite(
+              "use_log_residual_for_depth",
+              &GlobalPositionerOptions::use_log_residual_for_depth,
+              "If true, use log-space residual in MetricDepthError for "
+              "points in front of camera.")
+          .def_readwrite(
+              "zero_residual_behind",
+              &GlobalPositionerOptions::zero_residual_behind,
+              "If true, set MetricDepthError residual to 0 for points "
+              "behind camera.")
+          .def_readwrite(
+              "smooth_log_linear_transition",
+              &GlobalPositionerOptions::smooth_log_linear_transition,
+              "If true, C1-blend log<->linear residual at threshold "
+              "(use_log_residual_for_depth=true only).")
+          .def_readwrite(
+              "log_linear_threshold",
+              &GlobalPositionerOptions::log_linear_threshold,
+              "z-depth threshold for smooth_log_linear_transition.")
+          .def_readwrite(
+              "scale_prior_stddev",
+              &GlobalPositionerOptions::scale_prior_stddev,
+              "Per-image scale-prior stddev (linear or log).")
+          .def_readwrite(
+              "filter_depth_outliers",
+              &GlobalPositionerOptions::filter_depth_outliers,
+              "If true, run pre-Solve 3-sigma log-space depth-outlier "
+              "filter.")
+          .def_property(
+              "initial_dmap_scales",
+              [](const GlobalPositionerOptions& self) -> py::object {
+                if (!self.initial_dmap_scales.has_value()) {
+                  return py::none();
+                }
+                py::dict d;
+                for (const auto& [image_id, scale] :
+                     *self.initial_dmap_scales) {
+                  d[py::cast(image_id)] = scale;
+                }
+                return d;
+              },
+              [](GlobalPositionerOptions& self, py::object value) {
+                if (value.is_none()) {
+                  self.initial_dmap_scales.reset();
+                  return;
+                }
+                std::unordered_map<image_t, double> map;
+                for (auto item : py::cast<py::dict>(value)) {
+                  map[py::cast<image_t>(item.first)] =
+                      py::cast<double>(item.second);
+                }
+                self.initial_dmap_scales = std::move(map);
+              },
+              "Caller-supplied {image_id: linear_scale} seed for dmap_scales_ "
+              "(GP1 -> GP2 handoff). None = use defaults.");
+
+  // 10 per-bucket loss configs. ``LossConfig`` carries
+  // (type=LossFunctionType enum, scale, weight). Defaults give
+  // unweighted TrivialLoss — equivalent to no override.
+  PyGlobalPositionerOptions
+      .def_readwrite("loss_normal_geometry",
+                     &GlobalPositionerOptions::loss_normal_geometry)
+      .def_readwrite("loss_normal_depth",
+                     &GlobalPositionerOptions::loss_normal_depth)
+      .def_readwrite("loss_lc_geometry",
+                     &GlobalPositionerOptions::loss_lc_geometry)
+      .def_readwrite("loss_lc_depth", &GlobalPositionerOptions::loss_lc_depth)
+      .def_readwrite("loss_normal_geometry_inlier",
+                     &GlobalPositionerOptions::loss_normal_geometry_inlier)
+      .def_readwrite("loss_normal_depth_inlier",
+                     &GlobalPositionerOptions::loss_normal_depth_inlier)
+      .def_readwrite("loss_normal_depth_outlier",
+                     &GlobalPositionerOptions::loss_normal_depth_outlier)
+      .def_readwrite("loss_normal_geometry_trackstart",
+                     &GlobalPositionerOptions::loss_normal_geometry_trackstart)
+      .def_readwrite("loss_normal_depth_trackstart",
+                     &GlobalPositionerOptions::loss_normal_depth_trackstart)
+      .def_readwrite("loss_scale_prior",
+                     &GlobalPositionerOptions::loss_scale_prior);
+
   MakeDataclass(PyGlobalPositionerOptions);
 
   m.def(
@@ -64,16 +249,32 @@ void BindGlobalPositioner(py::module& m) {
       [](const GlobalPositionerOptions& options,
          const PoseGraph& pose_graph,
          Reconstruction& reconstruction) {
-        py::gil_scoped_release release;
-        bool success =
-            RunGlobalPositioning(options, pose_graph, reconstruction);
-        return success;
+        GlobalPositioner positioner(options);
+        bool success = false;
+        {
+          py::gil_scoped_release release;
+          success = positioner.Solve(pose_graph, reconstruction);
+        }
+        // Convert dmap_scales_ to linear-space dict for return.
+        py::dict dmap_scale_map;
+        for (const auto& [image_id, scale] : positioner.GetDmapScales()) {
+          const double linear = options.use_log_scale_for_depth_map_scales
+                                    ? std::exp(scale)
+                                    : scale;
+          dmap_scale_map[py::cast(image_id)] = linear;
+        }
+        py::dict result;
+        result["success"] = success;
+        result["dmap_scale_map"] = dmap_scale_map;
+        return result;
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "Solve global positioning using point-to-camera constraints. Returns "
-      "True if optimization succeeded.");
+      "a dict {'success': bool, 'dmap_scale_map': Dict[image_id, float]}. "
+      "``reconstruction`` is mutated in place with the optimized poses + "
+      "track xyz.");
 }
 
 void BindGravityRefiner(py::module& m) {
@@ -137,9 +338,6 @@ void BindRotationEstimator(py::module& m) {
               "irls_step_convergence_threshold",
               &RotationEstimatorOptions::irls_step_convergence_threshold,
               "Average step size threshold to terminate IRLS.")
-          .def_readwrite("gravity_dir",
-                         &RotationEstimatorOptions::gravity_dir,
-                         "Gravity direction vector.")
           .def_readwrite(
               "irls_loss_parameter_sigma",
               &RotationEstimatorOptions::irls_loss_parameter_sigma,
@@ -166,22 +364,7 @@ void BindRotationEstimator(py::module& m) {
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
               "(degrees).")
-          // --- glomap-fork additions (consumed by EstimateRotationsGlomap)
-          .def_readwrite(
-              "use_precomputed_weights",
-              &RotationEstimatorOptions::use_precomputed_weights,
-              "Use pre-computed weights from image_pair.weight in a weighted "
-              "least-squares pass instead of dynamic IRLS reweighting.")
-          .def_readwrite(
-              "fix_non_lc_weights",
-              &RotationEstimatorOptions::fix_non_lc_weights,
-              "Fix non-LC pair weights at fixed_non_lc_weight during IRLS. "
-              "Currently disabled at the call site.")
-          .def_readwrite(
-              "fixed_non_lc_weight",
-              &RotationEstimatorOptions::fixed_non_lc_weight,
-              "Fixed weight value for non-LC pairs when fix_non_lc_weights "
-              "is true.")
+          // --- Video / loop-closure extensions ---
           .def_readwrite(
               "skip_risky_LC_pairs",
               &RotationEstimatorOptions::skip_risky_LC_pairs,
@@ -190,7 +373,8 @@ void BindRotationEstimator(py::module& m) {
               "use_video_constraints",
               &RotationEstimatorOptions::use_video_constraints,
               "Use Ceres video-aware solver with differential loss "
-              "functions. Mutually exclusive with use_gravity.")
+              "functions. Mutually exclusive with use_gravity. Also gates "
+              "the LC-penalty branch in the MST initializer.")
           .def_readwrite(
               "video_tracking_huber_scale",
               &RotationEstimatorOptions::video_tracking_huber_scale,
@@ -207,18 +391,46 @@ void BindRotationEstimator(py::module& m) {
       [](const RotationEstimatorOptions& options,
          PoseGraph& pose_graph,
          Reconstruction& reconstruction,
-         const std::vector<PosePrior>& pose_priors) {
-        py::gil_scoped_release release;
-        bool success = RunRotationAveraging(
-            options, pose_graph, reconstruction, pose_priors);
-        return success;
+         const std::vector<PosePrior>& pose_priors,
+         const CorrespondenceGraph* correspondence_graph,
+         bool extract_final_weights) {
+        std::unordered_map<image_pair_t, double> final_weights;
+        bool success = false;
+        {
+          py::gil_scoped_release release;
+          success = RunRotationAveraging(
+              options,
+              pose_graph,
+              reconstruction,
+              pose_priors,
+              extract_final_weights ? &final_weights : nullptr,
+              correspondence_graph);
+        }
+        if (!extract_final_weights) {
+          return py::cast(success);
+        }
+        py::dict result;
+        result["success"] = success;
+        py::dict weights_map;
+        for (const auto& [pair_id, weight] : final_weights) {
+          weights_map[py::cast(pair_id)] = weight;
+        }
+        result["final_weights"] = weights_map;
+        return py::cast<py::object>(result);
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "pose_priors"_a,
+      "correspondence_graph"_a = nullptr,
+      "extract_final_weights"_a = false,
       "High-level rotation averaging solver that handles rig expansion. "
-      "Returns True if rotation averaging succeeded.");
+      "Returns True if rotation averaging succeeded. When "
+      "``extract_final_weights=True``, returns ``{success, final_weights}`` "
+      "dict instead. ``correspondence_graph`` is required when "
+      "``options.skip_risky_LC_pairs=True`` so the LC-majority filter can "
+      "read ImagePair.{inliers, are_lc} (PoseGraph::Edge does not carry "
+      "them).");
 }
 
 void BindMotionAveraging(py::module& m) {

@@ -29,54 +29,24 @@
 
 #pragma once
 
-#include "colmap/scene/track.h"
-#include "colmap/util/eigen_alignment.h"
-#include "colmap/util/types.h"
+#include <memory>
 
-#include <Eigen/Core>
+#include <ceres/loss_function.h>
 
 namespace colmap {
 
-// 3D point class that holds information about triangulated 2D points.
-struct Point3D {
-  // The 3D position of the point.
-  Eigen::Vector3d xyz = Eigen::Vector3d::Zero();
-
-  // The mean reprojection error in pixels.
-  double error = -1.;
-
-  // The track of the point as a list of image observations.
-  Track track;
-
-  // The color of the point in the range [0, 255].
-  Eigen::Vector3ub color = Eigen::Vector3ub::Zero();
-
-  // Whether the 3D position has been computed (e.g. via global positioning
-  // or triangulation). Default false — xyz is a placeholder until set true.
-  // Track-quality flag set by the LC pass.
-  bool is_initialized = false;
-
-  inline bool HasError() const;
-
-  inline bool operator==(const Point3D& other) const;
-  inline bool operator!=(const Point3D& other) const;
+// Public enum of supported Ceres robust loss kernels. Shared by all
+// estimator option structs that expose a configurable loss (BA, GP, ...).
+enum class LossFunctionType {
+  TRIVIAL,
+  SOFT_L1,
+  CAUCHY,
+  HUBER,
 };
 
-std::ostream& operator<<(std::ostream& stream, const Point3D& point3D);
-
-////////////////////////////////////////////////////////////////////////////////
-// Implementation
-////////////////////////////////////////////////////////////////////////////////
-
-bool Point3D::HasError() const { return error != -1; }
-
-bool Point3D::operator==(const Point3D& other) const {
-  return xyz == other.xyz && color == other.color && error == other.error &&
-         is_initialized == other.is_initialized && track == other.track;
-}
-
-bool Point3D::operator!=(const Point3D& other) const {
-  return !(*this == other);
-}
+// Build the corresponding ``ceres::LossFunction`` from a typed config.
+// Returns ``nullptr`` only if a future enum value is unhandled.
+std::unique_ptr<ceres::LossFunction> CreateLossFunction(
+    LossFunctionType loss_function_type, double loss_function_scale);
 
 }  // namespace colmap
