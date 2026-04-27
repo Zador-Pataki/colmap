@@ -7,7 +7,7 @@ using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 
 
 size_t TrackEngine::EstablishFullTracks(
-    std::unordered_map<track_t, Track>& tracks) {
+    std::unordered_map<track_t, Point3D>& tracks) {
   tracks.clear();
   uf_.Clear();
 
@@ -84,7 +84,8 @@ void TrackEngine::BlindConcatenation() {
   std::cout << std::endl;
 }
 
-void TrackEngine::TrackCollection(std::unordered_map<track_t, Track>& tracks) {
+void TrackEngine::TrackCollection(
+    std::unordered_map<track_t, Point3D>& tracks) {
   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> track_map;
 
   size_t counter = 0;
@@ -171,11 +172,11 @@ void TrackEngine::TrackCollection(std::unordered_map<track_t, Track>& tracks) {
         for (const auto& feature : image_id_set.at(image_id)) {
           if ((feature - images_.at(image_id).features[feature_id]).norm() >
               options_.thres_inconsistency) {
-            tracks[track_id].observations.clear();
+            tracks[track_id].track.Elements().clear();
             break;
           }
         }
-        if (tracks[track_id].observations.size() == 0) {
+        if (tracks[track_id].track.Length() == 0) {
           break;
         }
       } else
@@ -185,7 +186,7 @@ void TrackEngine::TrackCollection(std::unordered_map<track_t, Track>& tracks) {
       image_id_set[image_id].push_back(
           images_.at(image_id).features[feature_id]);
 
-      tracks[track_id].observations.emplace_back(image_id, feature_id);
+      tracks[track_id].track.AddElement(image_id, feature_id);
     }
   }
 
@@ -194,13 +195,13 @@ void TrackEngine::TrackCollection(std::unordered_map<track_t, Track>& tracks) {
 }
 
 void TrackEngine::ProcessLoopClosurePairs(
-    std::unordered_map<track_t, Track>& tracks) {
+    std::unordered_map<track_t, Point3D>& tracks) {
   // Build a lookup from observation (image_id << 32 | feature_id) to track_id
   std::unordered_map<uint64_t, track_t> obs_to_track;
-  for (const auto& [track_id, track] : tracks) {
-    for (const auto& obs : track.observations) {
-      const uint64_t key = (static_cast<uint64_t>(obs.first) << 32) |
-                           static_cast<uint64_t>(obs.second);
+  for (const auto& [track_id, point3D] : tracks) {
+    for (const auto& el : point3D.track.Elements()) {
+      const uint64_t key = (static_cast<uint64_t>(el.image_id) << 32) |
+                           static_cast<uint64_t>(el.point2D_idx);
       obs_to_track.emplace(key, track_id);
     }
   }
@@ -251,23 +252,24 @@ void TrackEngine::ProcessLoopClosurePairs(
         // Neither observation exists in any built track: create two new tracks
         // Track A: obsA as regular observation, obsB as LC observation
         // Track B: obsB as regular observation, obsA as LC observation
-        Track track_a;
-        track_a.track_id = static_cast<track_t>(obs1_key);
-        track_a.observations.emplace_back(image_id1, point1_idx);
-        track_a.lc_observations.emplace_back(image_id2, point2_idx);
+        const track_t tid_a = static_cast<track_t>(obs1_key);
+        const track_t tid_b = static_cast<track_t>(obs2_key);
 
-        Track track_b;
-        track_b.track_id = static_cast<track_t>(obs2_key);
-        track_b.observations.emplace_back(image_id2, point2_idx);
-        track_b.lc_observations.emplace_back(image_id1, point1_idx);
+        Point3D track_a;
+        track_a.track.AddElement(image_id1, point1_idx);
+        track_a.track.lc_elements.emplace_back(image_id2, point2_idx);
+
+        Point3D track_b;
+        track_b.track.AddElement(image_id2, point2_idx);
+        track_b.track.lc_elements.emplace_back(image_id1, point1_idx);
 
         // Insert the new tracks
-        tracks.emplace(track_a.track_id, std::move(track_a));
-        tracks.emplace(track_b.track_id, std::move(track_b));
+        tracks.emplace(tid_a, std::move(track_a));
+        tracks.emplace(tid_b, std::move(track_b));
 
         // Register in lookup so subsequent LC pairs can find them
-        obs_to_track[obs1_key] = static_cast<track_t>(obs1_key);
-        obs_to_track[obs2_key] = static_cast<track_t>(obs2_key);
+        obs_to_track[obs1_key] = tid_a;
+        obs_to_track[obs2_key] = tid_b;
 
         continue;
       }
@@ -277,8 +279,8 @@ void TrackEngine::ProcessLoopClosurePairs(
         const track_t t2 = obs_to_track.at(obs2_key);
         if (t1 != t2) {
           // Add reciprocal LC observations without merging tracks
-          tracks[t1].lc_observations.emplace_back(image_id2, point2_idx);
-          tracks[t2].lc_observations.emplace_back(image_id1, point1_idx);
+          tracks[t1].track.lc_elements.emplace_back(image_id2, point2_idx);
+          tracks[t2].track.lc_elements.emplace_back(image_id1, point1_idx);
         }
         continue;
       }
@@ -286,34 +288,34 @@ void TrackEngine::ProcessLoopClosurePairs(
       // Only one side exists in a track: add the other observation as LC to it
       if (has_track1) {
         const track_t t1 = obs_to_track.at(obs1_key);
-        tracks[t1].lc_observations.emplace_back(image_id2, point2_idx);
+        tracks[t1].track.lc_elements.emplace_back(image_id2, point2_idx);
       } else if (has_track2) {
         const track_t t2 = obs_to_track.at(obs2_key);
-        tracks[t2].lc_observations.emplace_back(image_id1, point1_idx);
+        tracks[t2].track.lc_elements.emplace_back(image_id1, point1_idx);
       }
     }
   }
 }
 
 size_t TrackEngine::FindTracksForProblem(
-    const std::unordered_map<track_t, Track>& tracks_full,
-    std::unordered_map<track_t, Track>& tracks_selected) {
+    const std::unordered_map<track_t, Point3D>& tracks_full,
+    std::unordered_map<track_t, Point3D>& tracks_selected) {
   // Sort the tracks by length
   std::vector<std::pair<size_t, track_t>> track_lengths;
 
   // std::unordered_map<ViewId, std::vector<TrackId>> map_track;
-  for (const auto& [track_id, track] : tracks_full) {
+  for (const auto& [track_id, point3D] : tracks_full) {
     const size_t obs_plus_lc =
-        track.observations.size() + track.lc_observations.size();
+        point3D.track.Length() + point3D.track.lc_elements.size();
     if (obs_plus_lc < options_.min_num_view_per_track) {
       continue;
     }
     // FUTURE: have a more elegant way of filtering tracks
-    if (track.observations.size() > options_.max_num_view_per_track) {
+    if (point3D.track.Length() > options_.max_num_view_per_track) {
       continue;
     }
     track_lengths.emplace_back(
-        std::make_pair(track.observations.size(), track_id));
+        std::make_pair(point3D.track.Length(), track_id));
   }
   std::sort(std::rbegin(track_lengths), std::rend(track_lengths));
 
@@ -322,7 +324,7 @@ size_t TrackEngine::FindTracksForProblem(
 
   // If we only want to select a subset of images, then only add the tracks
   // corresponding to those images
-  std::unordered_map<track_t, Track> tracks;
+  std::unordered_map<track_t, Point3D> tracks;
   for (const auto& [image_id, image] : images_) {
     if (!image.is_registered) continue;
 
@@ -331,45 +333,41 @@ size_t TrackEngine::FindTracksForProblem(
 
   int cameras_left = tracks_per_camera.size();
   for (const auto& [track_length, track_id] : track_lengths) {
-    const auto& track = tracks_full.at(track_id);
+    const auto& point3D = tracks_full.at(track_id);
 
     // Collect the image ids. For each image, only increment the counter by 1
     std::unordered_set<image_t> image_ids;
-    Track track_temp;
-    for (const auto& [image_id, feature_id] : track.observations) {
-      if (tracks_per_camera.count(image_id) == 0) continue;
+    Point3D track_temp;
+    for (const auto& el : point3D.track.Elements()) {
+      if (tracks_per_camera.count(el.image_id) == 0) continue;
 
-      track_temp.track_id = track_id;
-      track_temp.observations.emplace_back(
-          std::make_pair(image_id, feature_id));
-      image_ids.insert(image_id);
+      track_temp.track.AddElement(el);
+      image_ids.insert(el.image_id);
     }
 
     // Also carry over LC observations. We copy those whose image is present
     // in the selection domain (registered and tracked by tracks_per_camera).
-    for (const auto& [lc_image_id, lc_feature_id] : track.lc_observations) {
-      if (tracks_per_camera.count(lc_image_id) == 0) continue;
-      track_temp.lc_observations.emplace_back(
-          std::make_pair(lc_image_id, lc_feature_id));
+    for (const auto& lc_el : point3D.track.lc_elements) {
+      if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
+      track_temp.track.lc_elements.emplace_back(lc_el);
     }
 
-    // const size_t obs_plus_lc_selected =
-    //     track_temp.observations.size() + track_temp.lc_observations.size();
-    if (track_temp.observations.size() < options_.min_num_view_per_track) {
+    if (track_temp.track.Length() < options_.min_num_view_per_track) {
       continue;
     }
     if (image_ids.size() == 2) {
       // For tracks with exactly 2 observations, check that both have valid
       // depth priors
       bool all_have_valid_depth = true;
-      for (const auto& [image_id, feature_id] : track_temp.observations) {
-        if (images_.find(image_id) == images_.end()) {
+      for (const auto& el : track_temp.track.Elements()) {
+        if (images_.find(el.image_id) == images_.end()) {
           all_have_valid_depth = false;
           break;
         }
-        const Image& image = images_.at(image_id);
-        if (!image.is_registered || !image.depth_prior_validity[feature_id] ||
-            image.depth_priors[feature_id] <= 1e-6) {
+        const Image& image = images_.at(el.image_id);
+        if (!image.is_registered ||
+            !image.depth_prior_validity[el.point2D_idx] ||
+            image.depth_priors[el.point2D_idx] <= 1e-6) {
           all_have_valid_depth = false;
           break;
         }
@@ -383,10 +381,9 @@ size_t TrackEngine::FindTracksForProblem(
     // A flag to see if the track has already been added or not to avoid
     // multiple insertion into the set to be efficient
     bool added = false;
-    // for (auto &image_id : image_ids) {
-    for (const auto& [image_id, feature_id] : track_temp.observations) {
+    for (const auto& el : track_temp.track.Elements()) {
       // Getting the current number of tracks
-      auto& track_per_camera = tracks_per_camera[image_id];
+      auto& track_per_camera = tracks_per_camera[el.image_id];
       if (track_per_camera > options_.min_num_tracks_per_view) {
         continue;
       }

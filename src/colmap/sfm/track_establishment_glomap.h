@@ -5,39 +5,23 @@
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
+#include "colmap/scene/point3d.h"
 #include "colmap/util/types.h"
 #include <unordered_map>
 
 #include <unordered_set>
 
-// TODO(dedup-glomap-vs-colmap4): vendored ``Track`` / ``Observation``
-// ~ colmap::Track (scene/track.h:53) + colmap::TrackElement (:41), and
-// ``lc_elements`` already exists at colmap/scene/track.h:93. Replacing
-// the vendored types with native colmap::Track removes ~90 LOC of
-// fork↔native round-tripping at the binding boundary, and lets
-// track_filter_glomap call ObservationManager::FilterPoints3DWithSmallTriangulationAngle
-// directly. TrackEngine::Establish*/FindTracksForProblem are unique
-// algorithms (keep). See
-// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
-
 namespace colmap {
 namespace glomap_ra {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
-// (glomap::Observation, glomap::Track) are vendored below
-// because colmap's Point3D / Track use a different shape; the
-// pycolmap binding converts between them.
+// Track shape collapsed onto colmap::Point3D — its ``track`` member
+// (colmap::Track) holds the regular observations as TrackElements and
+// the ``lc_elements`` parallel vector for loop-closure observations.
+// xyz / color / is_initialized live directly on Point3D. The
+// ``track_t`` typedef is just colmap::point3D_t (the natural map key).
 using feature_t = colmap::point2D_t;
-using track_t = uint64_t;
-using Observation = std::pair<colmap::image_t, feature_t>;
-struct Track {
-  track_t track_id = 0;
-  Eigen::Vector3d xyz = Eigen::Vector3d::Zero();
-  Eigen::Matrix<uint8_t, 3, 1> color = Eigen::Matrix<uint8_t, 3, 1>::Zero();
-  bool is_initialized = false;
-  std::vector<Observation> observations;
-  std::vector<Observation> lc_observations;
-};
+using track_t = colmap::point3D_t;
 
 
 struct TrackEstablishmentOptions {
@@ -66,23 +50,23 @@ class TrackEngine {
 
   // Establish tracks from the view graph. Exclude the tracks that are not
   // consistent Return the number of tracks
-  size_t EstablishFullTracks(std::unordered_map<track_t, Track>& tracks);
+  size_t EstablishFullTracks(std::unordered_map<track_t, Point3D>& tracks);
 
   // Subsample the tracks, and exclude too short / long tracks
   // Return the number of tracks
   size_t FindTracksForProblem(
-      const std::unordered_map<track_t, Track>& tracks_full,
-      std::unordered_map<track_t, Track>& tracks_selected);
+      const std::unordered_map<track_t, Point3D>& tracks_full,
+      std::unordered_map<track_t, Point3D>& tracks_selected);
 
  private:
   // Blindly concatenate tracks if any matches occur
   void BlindConcatenation();
 
   // Iterate through the collected tracks and record the items for each track
-  void TrackCollection(std::unordered_map<track_t, Track>& tracks);
+  void TrackCollection(std::unordered_map<track_t, Point3D>& tracks);
 
   // Iterate over loop-closure pairs and add cross-track LC observations
-  void ProcessLoopClosurePairs(std::unordered_map<track_t, Track>& tracks);
+  void ProcessLoopClosurePairs(std::unordered_map<track_t, Point3D>& tracks);
 
   const TrackEstablishmentOptions& options_;
 

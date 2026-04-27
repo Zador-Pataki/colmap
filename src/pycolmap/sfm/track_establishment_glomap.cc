@@ -20,31 +20,6 @@ namespace py = pybind11;
 
 namespace {
 
-// Convert a glomap_ra::Track (vendored algorithm output) to a
-// pycolmap-side Point3D so the videosfm caller receives the same shape
-// it gets from from_pyglomap_tracks today.
-Point3D ToPoint3D(const glomap_ra::Track& src) {
-  Point3D p;
-  p.xyz = src.xyz;
-  p.color = src.color;
-  p.is_initialized = src.is_initialized;
-  std::vector<TrackElement> elements;
-  elements.reserve(src.observations.size());
-  for (const auto& [image_id, feature_id] : src.observations) {
-    elements.emplace_back(image_id,
-                          static_cast<point2D_t>(feature_id));
-  }
-  p.track.SetElements(std::move(elements));
-  // Glomap fork's lc_observations -> Track::lc_elements.
-  p.track.lc_elements.clear();
-  p.track.lc_elements.reserve(src.lc_observations.size());
-  for (const auto& [image_id, feature_id] : src.lc_observations) {
-    p.track.lc_elements.emplace_back(image_id,
-                                      static_cast<point2D_t>(feature_id));
-  }
-  return p;
-}
-
 py::dict RunEstablishFullTracks(
     CorrespondenceGraph& view_graph,
     py::dict images_py,
@@ -56,7 +31,7 @@ py::dict RunEstablishFullTracks(
                    py::cast<Image>(item.second));
   }
 
-  std::unordered_map<glomap_ra::track_t, glomap_ra::Track> tracks_full;
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
   {
     py::gil_scoped_release release;
     glomap_ra::TrackEngine engine(view_graph, images, options);
@@ -64,9 +39,8 @@ py::dict RunEstablishFullTracks(
   }
 
   py::dict tracks_out;
-  for (auto& [tid, track] : tracks_full) {
-    Point3D p3d = ToPoint3D(track);
-    tracks_out[py::cast(tid)] = py::cast(p3d);
+  for (auto& [tid, p3d] : tracks_full) {
+    tracks_out[py::cast(tid)] = py::cast(std::move(p3d));
   }
   return tracks_out;
 }
@@ -83,29 +57,14 @@ py::dict RunFindTracksForProblem(
                    py::cast<Image>(item.second));
   }
 
-  // Read tracks_full_py back into glomap_ra::Track form (fields are
-  // round-tripped via the Point3D shape that ToPoint3D produced earlier).
-  std::unordered_map<glomap_ra::track_t, glomap_ra::Track> tracks_full;
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
   tracks_full.reserve(tracks_full_py.size());
   for (auto item : tracks_full_py) {
-    const glomap_ra::track_t tid = py::cast<glomap_ra::track_t>(item.first);
-    Point3D p3d = py::cast<Point3D>(item.second);
-    glomap_ra::Track& t = tracks_full[tid];
-    t.track_id = tid;
-    t.xyz = p3d.xyz;
-    t.color = p3d.color;
-    t.is_initialized = p3d.is_initialized;
-    t.observations.reserve(p3d.track.Length());
-    for (const auto& el : p3d.track.Elements()) {
-      t.observations.emplace_back(el.image_id, el.point2D_idx);
-    }
-    t.lc_observations.reserve(p3d.track.lc_elements.size());
-    for (const auto& el : p3d.track.lc_elements) {
-      t.lc_observations.emplace_back(el.image_id, el.point2D_idx);
-    }
+    tracks_full.emplace(py::cast<glomap_ra::track_t>(item.first),
+                        py::cast<Point3D>(item.second));
   }
 
-  std::unordered_map<glomap_ra::track_t, glomap_ra::Track> tracks_selected;
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_selected;
   {
     py::gil_scoped_release release;
     glomap_ra::TrackEngine engine(view_graph, images, options);
@@ -113,9 +72,8 @@ py::dict RunFindTracksForProblem(
   }
 
   py::dict tracks_out;
-  for (auto& [tid, track] : tracks_selected) {
-    Point3D p3d = ToPoint3D(track);
-    tracks_out[py::cast(tid)] = py::cast(p3d);
+  for (auto& [tid, p3d] : tracks_selected) {
+    tracks_out[py::cast(tid)] = py::cast(std::move(p3d));
   }
   return tracks_out;
 }

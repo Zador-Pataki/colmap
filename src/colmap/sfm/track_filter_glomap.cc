@@ -25,19 +25,18 @@ int TrackFilter::FilterTracksByAngle(
     ViewGraph& view_graph,
     const std::unordered_map<camera_t, Camera>& cameras,
     const std::unordered_map<image_t, Image>& images,
-    std::unordered_map<track_t, Track>& tracks,
+    std::unordered_map<track_t, Point3D>& tracks,
     double max_angle_error) {
   int counter = 0;
   double thres = std::cos(DegToRad(max_angle_error));
   double thres_uncalib = std::cos(DegToRad(max_angle_error * 2));
-  for (auto& [track_id, track] : tracks) {
-    std::vector<Observation> observation_new;
-    for (auto& [image_id, feature_id] : track.observations) {
-      const Image& image = images.at(image_id);
-      // const Camera& camera = image.camera;
+  for (auto& [track_id, point3D] : tracks) {
+    std::vector<TrackElement> elements_new;
+    for (const auto& el : point3D.track.Elements()) {
+      const Image& image = images.at(el.image_id);
       const Eigen::Vector3d& feature_undist =
-          image.features_undist.at(feature_id);
-      Eigen::Vector3d pt_calc = image.cam_from_world * track.xyz;
+          image.features_undist.at(el.point2D_idx);
+      Eigen::Vector3d pt_calc = image.cam_from_world * point3D.xyz;
       if (pt_calc(2) < EPS) continue;
 
       pt_calc = pt_calc.normalized();
@@ -46,12 +45,12 @@ int TrackFilter::FilterTracksByAngle(
                              : thres_uncalib;
 
       if (pt_calc.dot(feature_undist) > thres_cam) {
-        observation_new.emplace_back(std::make_pair(image_id, feature_id));
+        elements_new.emplace_back(el);
       }
     }
-    if (observation_new.size() != track.observations.size()) {
+    if (elements_new.size() != point3D.track.Length()) {
       counter++;
-      track.observations = observation_new;
+      point3D.track.SetElements(std::move(elements_new));
     }
   }
   LOG(INFO) << "Filtered " << counter << " / " << tracks.size()
@@ -62,22 +61,22 @@ int TrackFilter::FilterTracksByAngle(
 int TrackFilter::FilterTrackTriangulationAngle(
     ViewGraph& view_graph,
     const std::unordered_map<image_t, Image>& images,
-    std::unordered_map<track_t, Track>& tracks,
+    std::unordered_map<track_t, Point3D>& tracks,
     double min_angle) {
   int counter = 0;
   double thres = std::cos(DegToRad(min_angle));
-  for (auto& [track_id, track] : tracks) {
-    std::vector<Observation> observation_new;
+  for (auto& [track_id, point3D] : tracks) {
     std::vector<Eigen::Vector3d> pts_calc;
-    pts_calc.reserve(track.observations.size());
-    for (auto& [image_id, feature_id] : track.observations) {
-      const Image& image = images.at(image_id);
-      Eigen::Vector3d pt_calc = (track.xyz - ImageCenter(image)).normalized();
+    pts_calc.reserve(point3D.track.Length());
+    for (const auto& el : point3D.track.Elements()) {
+      const Image& image = images.at(el.image_id);
+      Eigen::Vector3d pt_calc =
+          (point3D.xyz - ImageCenter(image)).normalized();
       pts_calc.emplace_back(pt_calc);
     }
     bool status = false;
-    for (int i = 0; i < track.observations.size(); i++) {
-      for (int j = i + 1; j < track.observations.size(); j++) {
+    for (size_t i = 0; i < pts_calc.size(); i++) {
+      for (size_t j = i + 1; j < pts_calc.size(); j++) {
         if (pts_calc[i].dot(pts_calc[j]) < thres) {
           status = true;
           break;
@@ -88,7 +87,7 @@ int TrackFilter::FilterTrackTriangulationAngle(
     // If the triangulation angle is too small, just remove it
     if (!status) {
       counter++;
-      track.observations.clear();
+      point3D.track.Elements().clear();
     }
   }
   LOG(INFO) << "Filtered " << counter << " / " << tracks.size()
