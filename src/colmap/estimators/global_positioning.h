@@ -1,10 +1,11 @@
 #pragma once
 
-#include "colmap/estimators/loss_config.h"
+#include "colmap/estimators/bundle_adjustment_ceres.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -24,6 +25,28 @@ enum class PointConstraintType {
   // against per-image ``dmap_scale * depth_prior``. Requires
   // ``image.depth_prior_validity[fid]`` populated.
   SPLIT_METRIC_DEPTH = 1,
+};
+
+// (type, scale, weight) triple used by GlobalPositioner's 10-bucket
+// per-observation loss cascade. The pycolmap binding accepts
+// ``{name: str, scale, weight}`` dicts; videosfm maps the string name
+// to the enum at the boundary (see _to_native_gp_options).
+struct LossConfig {
+  CeresBundleAdjustmentOptions::LossFunctionType type =
+      CeresBundleAdjustmentOptions::LossFunctionType::TRIVIAL;
+  double scale = 1.0;
+  double weight = 1.0;
+
+  // Wraps native ``CreateLossFunction(type, scale)`` with
+  // ``ScaledLoss(weight)`` when weight != 1.
+  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
+    auto loss = colmap::CreateLossFunction(type, scale);
+    if (weight != 1.0) {
+      loss.reset(new ceres::ScaledLoss(
+          loss.release(), weight, ceres::TAKE_OWNERSHIP));
+    }
+    return std::shared_ptr<ceres::LossFunction>(loss.release());
+  }
 };
 
 struct GlobalPositionerOptions {

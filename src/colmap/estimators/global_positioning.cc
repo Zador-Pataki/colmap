@@ -4,7 +4,6 @@
 
 #include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
-#include "colmap/estimators/loss_config.h"
 #include "colmap/math/random.h"
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"

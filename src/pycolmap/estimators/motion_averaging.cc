@@ -1,6 +1,5 @@
 #include "colmap/estimators/global_positioning.h"
 #include "colmap/estimators/gravity_refinement.h"
-#include "colmap/estimators/loss_config.h"
 #include "colmap/estimators/rotation_averaging.h"
 
 #include "pycolmap/helpers.h"
