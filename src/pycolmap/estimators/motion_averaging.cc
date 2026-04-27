@@ -15,10 +15,6 @@ using namespace pybind11::literals;
 namespace py = pybind11;
 
 void BindGlobalPositioner(py::module& m) {
-  py::enum_<PointConstraintType>(m, "PointConstraintType")
-      .value("BATA", PointConstraintType::BATA)
-      .value("SPLIT_METRIC_DEPTH", PointConstraintType::SPLIT_METRIC_DEPTH);
-
   py::classh<LossConfig>(m, "LossConfig")
       .def(py::init<>())
       .def_readwrite("type", &LossConfig::type)
@@ -135,10 +131,11 @@ void BindGlobalPositioner(py::module& m) {
               "Ceres solver parameter tolerance.")
           // Optional extensions (default OFF — vanilla call = vanilla GP).
           .def_readwrite(
-              "point_constraint_type",
-              &GlobalPositionerOptions::point_constraint_type,
-              "Per-observation residual structure: BATA (default, native "
-              "behaviour) or SPLIT_METRIC_DEPTH (BATA + 1-D MetricDepthError).")
+              "use_metric_depth_constraint",
+              &GlobalPositionerOptions::use_metric_depth_constraint,
+              "If true, each observation contributes a 1-D MetricDepthError "
+              "residual on top of the BATA direction residual. Requires "
+              "image.depth_prior_validity[idx] populated.")
           .def_readwrite("use_init",
                          &GlobalPositionerOptions::use_init,
                          "If true, skip random init for both camera centers "

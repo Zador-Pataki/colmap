@@ -16,38 +16,6 @@
 
 namespace colmap {
 
-// Selects which residual structure ``GlobalPositioner`` adds per
-// observation. Track-type enum used by the global positioner.
-enum class PointConstraintType {
-  // Standard BATA direction residual only (native colmap default).
-  BATA = 0,
-  // Two residuals per observation: BATA direction + 1-D ``MetricDepthError``
-  // against per-image ``dmap_scale * depth_prior``. Requires
-  // ``image.depth_prior_validity[fid]`` populated.
-  SPLIT_METRIC_DEPTH = 1,
-};
-
-// (type, scale, weight) triple used by GlobalPositioner's 10-bucket
-// per-observation loss cascade. Callers pass ``{name: str, scale, weight}``
-// dicts; the string name is mapped to this enum at the boundary (see
-// _to_native_gp_options).
-struct LossConfig {
-  LossFunctionType type = LossFunctionType::TRIVIAL;
-  double scale = 1.0;
-  double weight = 1.0;
-
-  // Wraps native ``CreateLossFunction(type, scale)`` with
-  // ``ScaledLoss(weight)`` when weight != 1.
-  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
-    auto loss = colmap::CreateLossFunction(type, scale);
-    if (weight != 1.0) {
-      loss.reset(new ceres::ScaledLoss(
-          loss.release(), weight, ceres::TAKE_OWNERSHIP));
-    }
-    return std::shared_ptr<ceres::LossFunction>(loss.release());
-  }
-};
-
 struct GlobalPositionerOptions {
   // Whether to initialize the camera and track positions randomly.
   bool generate_random_positions = true;
@@ -97,9 +65,11 @@ struct GlobalPositionerOptions {
 
   // --- Optional extensions (default OFF; disabled = baseline GP behavior) ---
 
-  // ``BATA`` = upstream behavior; ``SPLIT_METRIC_DEPTH`` adds a 1-D
-  // ``MetricDepthError`` residual per observation with a valid depth prior.
-  PointConstraintType point_constraint_type = PointConstraintType::BATA;
+  // When true, each observation contributes a 1-D ``MetricDepthError``
+  // residual on ``z_est - dmap_scale * depth_prior`` in addition to the
+  // BATA direction residual. Requires ``image.depth_prior_validity[fid]``
+  // to be populated. Default false = baseline geometry-only GP.
+  bool use_metric_depth_constraint = false;
 
   // When true, observations with ``image.is_excluded[point2D_idx]`` are
   // skipped. The flag itself lives on ``Image`` (see colmap/scene/image.h);
@@ -121,7 +91,7 @@ struct GlobalPositionerOptions {
   double random_init_scale = 100.0;
 
   // --- Metric-depth path toggles (only consulted when
-  //     point_constraint_type == SPLIT_METRIC_DEPTH) ---
+  //     use_metric_depth_constraint == true) ---
   bool use_log_scale_for_depth_map_scales = false;
   bool use_log_residual_for_depth = false;
   bool zero_residual_behind = false;
@@ -140,11 +110,10 @@ struct GlobalPositionerOptions {
   std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
 
   // 10-bucket per-observation loss routing.
-  // NOTE: only consumed when ``point_constraint_type ==
-  // SPLIT_METRIC_DEPTH``. In BATA mode the per-observation cascade
-  // doesn't run; only the top-level ``loss_function_*`` fields apply
-  // and these 10 buckets are silently ignored. ``loss_scale_prior`` is
-  // always consumed.
+  // NOTE: only consumed when ``use_metric_depth_constraint`` is true.
+  // In baseline mode the per-observation cascade doesn't run; only
+  // the top-level ``loss_function_*`` fields apply and these 10 buckets
+  // are silently ignored. ``loss_scale_prior`` is always consumed.
   LossConfig loss_normal_geometry;
   LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;
@@ -219,7 +188,7 @@ class GlobalPositioner {
   // ``z_est / depth_prior`` over all (regular + LC) observations whose
   // image has a valid depth prior. Stores log(median) when
   // ``use_log_scale_for_depth_map_scales=true``, else linear median.
-  // Called from ``Solve`` only when ``SPLIT_METRIC_DEPTH`` +
+  // Called from ``Solve`` only when ``use_metric_depth_constraint`` +
   // ``use_init=true`` + ``initial_dmap_scales`` is empty (i.e. no
   // caller-supplied seed). Images without observations consumed here
   // still fall through to the lazy-insert path in
@@ -230,7 +199,7 @@ class GlobalPositioner {
   // Sweep observations and flag those whose
   // ``|log(z_est) - log(scale * depth_prior)|`` exceeds 3 sigma into
   // ``depth_outliers_``. Gated by ``filter_depth_outliers`` +
-  // ``SPLIT_METRIC_DEPTH``. The flagged set is consumed by the
+  // ``use_metric_depth_constraint``. The flagged set is consumed by the
   // depth-loss cascade in ``AddObservationToProblem``.
   void FilterDepthOutliers(const Reconstruction& reconstruction);
 
@@ -269,7 +238,7 @@ class GlobalPositioner {
 
   // Per-image depth-map scale parameter blocks (lazily inserted on
   // first valid depth-prior observation; only populated when
-  // SPLIT_METRIC_DEPTH active). Must be ``std::map`` not
+  // use_metric_depth_constraint is true). Must be ``std::map`` not
   // ``unordered_map``: Ceres residuals store ``&dmap_scales_[image_id]``
   // and a hash rehash during insert would invalidate them.
   std::map<image_t, double> dmap_scales_;

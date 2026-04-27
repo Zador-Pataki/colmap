@@ -52,12 +52,11 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
 
   // Seed dmap_scales_ from per-image median(z_est/depth_prior) when the
   // caller didn't provide initial_dmap_scales. Only meaningful in
-  // SPLIT_METRIC_DEPTH; gated by use_init so the GP1->GP2 handoff (which
+  // use_metric_depth_constraint mode; gated by use_init so the GP1->GP2 handoff (which
   // already supplies initial_dmap_scales) bypasses this. Images without
   // observations consumed here fall through to the constant lazy-insert
   // path in AddObservationToProblem.
-  if (options_.point_constraint_type ==
-          PointConstraintType::SPLIT_METRIC_DEPTH &&
+  if (options_.use_metric_depth_constraint &&
       options_.use_init && !options_.initial_dmap_scales.has_value()) {
     InitializeDepthMapScalesFromObservations(reconstruction);
   }
@@ -203,8 +202,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   // continuing from GP1) BEFORE FilterDepthOutliers so the log-space
   // residual check uses the right per-image scale. Subsequent lazy
   // inserts in AddObservationToProblem skip already-seeded images.
-  if (options_.point_constraint_type ==
-          PointConstraintType::SPLIT_METRIC_DEPTH &&
+  if (options_.use_metric_depth_constraint &&
       options_.initial_dmap_scales.has_value()) {
     for (const auto& [image_id, linear_scale] :
          *options_.initial_dmap_scales) {
@@ -217,8 +215,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   }
 
   depth_outliers_.clear();
-  if (options_.point_constraint_type ==
-          PointConstraintType::SPLIT_METRIC_DEPTH &&
+  if (options_.use_metric_depth_constraint &&
       options_.filter_depth_outliers) {
     FilterDepthOutliers(reconstruction);
   }
@@ -234,8 +231,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
   // Emit one scale-prior residual per image with depth observations,
   // weighted by obs_count so dense-depth images get stronger priors.
-  if (options_.point_constraint_type ==
-      PointConstraintType::SPLIT_METRIC_DEPTH) {
+  if (options_.use_metric_depth_constraint) {
     for (auto& [image_id, scale] : dmap_scales_) {
       auto count_it = dmap_scale_observation_counts_.find(image_id);
       const double obs_count =
@@ -365,13 +361,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           ? loss_function_ptcam_calibrated_.get()
           : loss_function_ptcam_uncalibrated_.get();
 
-  // SPLIT_METRIC_DEPTH geometry-loss cascade. Per-observation route:
+  // metric-depth geometry-loss cascade. Per-observation route:
   //   is_lc           -> cached_loss_lc_geometry_
   //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
   //   is_inlier       -> cached_loss_normal_geometry_inlier_
   //   else            -> cached_loss_normal_geometry_
-  if (options_.point_constraint_type ==
-      PointConstraintType::SPLIT_METRIC_DEPTH) {
+  if (options_.use_metric_depth_constraint) {
     ceres::LossFunction* cascade = nullptr;
     if (is_lc_observation) {
       cascade = cached_loss_lc_geometry_.get();
@@ -399,7 +394,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     // rotation in the world-frame covariance
     // ``cov_world = R^T diag(sigma^2) R`` so native
     // ``CovarianceWeightedCostFunctor`` reproduces the same residual
-    // norm. Without this weighted variant the SPLIT_METRIC_DEPTH
+    // norm. Without this weighted variant the metric-depth
     // geometry residuals lose their relative weighting against the
     // metric-depth residuals.
     ceres::CostFunction* cost_function = nullptr;
@@ -436,8 +431,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     // 1-D ``MetricDepthError`` residual on
     // (frame_center, point3D.xyz, dmap_scales_[image_id]) — anchors
     // absolute scale when a depth prior is available at this feature.
-    if (options_.point_constraint_type ==
-            PointConstraintType::SPLIT_METRIC_DEPTH &&
+    if (options_.use_metric_depth_constraint &&
         observation.point2D_idx < image.depth_prior_validity.size() &&
         image.depth_prior_validity[observation.point2D_idx]) {
       const double depth_prior = image.depth_priors[observation.point2D_idx];
@@ -684,7 +678,7 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
   // depth-prior observations themselves anchor the gauge, and the redundant
   // pin would over-constrain the system. Gating preserves native colmap GP
   // unit tests under default ``BATA`` mode.
-  if (options_.point_constraint_type != PointConstraintType::SPLIT_METRIC_DEPTH) {
+  if (!options_.use_metric_depth_constraint) {
     for (double& scale : scales_) {
       if (problem_->HasParameterBlock(&scale)) {
         problem_->SetParameterBlockConstant(&scale);
