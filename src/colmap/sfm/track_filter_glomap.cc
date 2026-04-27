@@ -55,9 +55,8 @@ int TrackFilter::FilterTrackTriangulationAngle(
     std::unordered_map<track_t, Point3D>& tracks,
     double min_angle) {
   // Mirrors ObservationManager::FindPoints3DWithSmallTriangulationAngle but
-  // operates on the dict-of-tracks state model used by the glomap RA pipeline
-  // instead of a Reconstruction. Shares the underlying angle math via
-  // CalculateTriangulationAngle for consistency with native colmap.
+  // operates on the dict-of-tracks state used here instead of a
+  // Reconstruction; shares the angle math via CalculateTriangulationAngle.
   int counter = 0;
   const double min_angle_rad = DegToRad(min_angle);
   std::unordered_map<image_t, Eigen::Vector3d> proj_centers;
@@ -68,10 +67,9 @@ int TrackFilter::FilterTrackTriangulationAngle(
       const image_t image_id1 = elements[i1].image_id;
       auto it1 = proj_centers.find(image_id1);
       if (it1 == proj_centers.end()) {
-        // Direct read of the RA-shadow ``cam_from_world`` field instead of
-        // Image::ProjectionCenter(), which goes through frame_ptr_ that the
-        // glomap RA pipeline does not populate. This is the standard idiom
-        // throughout this file (see FilterTracksByAngle above).
+        // Direct read of cam_from_world; Image::ProjectionCenter() goes
+        // through frame_ptr_, which the dict-of-images state model used by
+        // sfm_ext does not populate. Same idiom as FilterTracksByAngle above.
         const Rigid3d& cfw = images.at(image_id1).cam_from_world;
         it1 = proj_centers
                   .emplace(image_id1,

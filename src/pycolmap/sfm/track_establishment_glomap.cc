@@ -105,9 +105,9 @@ void BindTrackEstablishmentGlomap(py::module& m) {
         "view_graph"_a,
         "images"_a,
         "options"_a,
-        "Glomap-style track establishment via TrackEngine. Returns a dict "
-        "mapping track_id -> pycolmap.Point3D with .track.elements + the "
-        "fork-added .track.lc_elements populated.");
+        "Track establishment via TrackEngine. Returns a dict mapping "
+        "track_id -> pycolmap.Point3D with .track.elements + the fork-added "
+        ".track.lc_elements populated.");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,

@@ -1,8 +1,6 @@
-// SFM-extension TrackFilter binding under pycolmap.sfm_ext submodule.
-// Mirrors the pyglomap.filter_tracks_by_angle and
-// pyglomap.filter_track_triangulation_angle Python signatures verbatim.
-// After the Track-shape collapse, the tracks dict carries
-// pycolmap.Point3D directly (no fork↔native round-trip needed).
+// TrackFilter binding under the pycolmap.sfm_ext submodule. The tracks
+// dict carries pycolmap.Point3D directly post-Track-collapse (no
+// fork<->native round-trip).
 
 #include "colmap/sfm/track_filter_glomap.h"
 
