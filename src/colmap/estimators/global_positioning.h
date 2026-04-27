@@ -46,13 +46,8 @@ struct GlobalPositionerOptions {
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
-  // PRNG seed for random initialization. Upstream colmap4 default
-  // (-1) keeps non-deterministic ``random_device``. videosfm sets
-  // ``random_seed = 1`` explicitly via ``_to_native_gp_options`` for
-  // the documented Tier-2 byte-identity recipe (CLAUDE.md §
-  // "ATE byte-identity"). The ctor also honors a ``GP_SEED`` env var
-  // when ``random_seed == -1`` so the recipe still works when running
-  // legacy code that doesn't set the seed explicitly.
+  // PRNG seed; -1 = non-deterministic random_device. The ctor also
+  // honors a GP_SEED env var when this is -1.
   int random_seed = -1;
 
   // Scaling factor for the loss function
@@ -67,40 +62,27 @@ struct GlobalPositionerOptions {
 
   // --- glomap-fork additions (default OFF — vanilla call = vanilla GP) ---
 
-  // Selects per-observation residual structure (see PointConstraintType
-  // enum). ``BATA`` keeps native pre-port behavior; ``SPLIT_METRIC_DEPTH``
-  // emits an extra ``MetricDepthError`` residual when depth priors are
-  // available.
+  // ``BATA`` = upstream behavior; ``SPLIT_METRIC_DEPTH`` adds a 1-D
+  // ``MetricDepthError`` residual per observation with a valid depth prior.
   PointConstraintType point_constraint_type = PointConstraintType::BATA;
 
-  // Gate G-1: when true, observations whose
-  // ``image.is_excluded[point2D_idx]`` is true are skipped in
-  // ``AddObservationToProblem``. Default OFF preserves vanilla colmap4
-  // behavior on Reconstructions that may carry stale exclusion flags.
-  // videosfm sets true via ``_to_native_gp_options``.
-  // Note: ``Image::is_excluded`` is itself a glomap-fork field (see
-  // ``colmap/scene/image.h``). Vanilla pycolmap users won't typically
-  // populate it; this gate exists so even when it IS populated (e.g.
-  // by an external pipeline that copy-pasted the field name) the GP
-  // residual count stays unchanged.
+  // When true, observations with ``image.is_excluded[point2D_idx]`` are
+  // skipped. The flag itself is fork-only (colmap/scene/image.h); this
+  // gate keeps GP residual count unchanged when the flag is populated by
+  // downstream code but not asked for.
   bool use_observation_exclusions = false;
 
-  // Gate G-2 (GP-side LC config): when true, ``AddPoint3DToProblem``
-  // also iterates ``track.lc_elements`` (loop-closure observations) on
-  // top of ``track.Elements()``. Default OFF matches vanilla colmap4 GP
-  // (which doesn't know about LC observations). Pairs with RA's
-  // ``skip_risky_LC_pairs`` to give two complementary LC controls.
+  // When true, ``AddPoint3DToProblem`` also iterates
+  // ``track.lc_elements`` (loop-closure observations). Vanilla colmap4
+  // GP doesn't know about LC.
   bool use_lc_observations = false;
 
-  // If true, skip random-init for both camera centers AND track xyz (collapses
-  // ``generate_random_positions`` + ``generate_random_points`` short-circuit).
-  // Used for GP2 (continues from GP1) and the
-  // ``init_first_gp_from_mdrp`` path. Also gates
+  // Skip random-init for both camera centers and track xyz. Used to
+  // continue from a previous solve (e.g. GP1 -> GP2). Also gates
   // ``InitializeDepthMapScalesFromObservations``.
   bool use_init = false;
 
-  // Cube size for random-init of camera centers / points, replaces fork's
-  // hardcoded 100.0.
+  // Cube size for random-init of camera centers / points.
   double random_init_scale = 100.0;
 
   // --- Metric-depth path toggles (only consulted when
@@ -112,30 +94,27 @@ struct GlobalPositionerOptions {
   double log_linear_threshold = 1.0;
   double scale_prior_stddev = 1.0;
 
-  // Pre-Solve depth-outlier filter (3-sigma log-space residual). Populates
-  // a per-observation outlier set that switches the depth-loss cascade to a
-  // hardcoded soft fallback.
+  // Pre-Solve 3-sigma log-space depth-residual filter. Flagged
+  // observations route through a hardcoded soft fallback in the
+  // depth-loss cascade.
   bool filter_depth_outliers = false;
 
-  // Caller-supplied (image_id -> linear scale) seed for ``dmap_scales_``.
-  // Used by GP2 to continue from GP1's solved scales. ``std::nullopt`` →
-  // either ``InitializeDepthMapScalesFromObservations`` (when
-  // ``use_init=true``) or constant init (1.0 linear / 0.0 log).
+  // Optional caller-supplied seed for ``dmap_scales_`` (linear space).
+  // ``std::nullopt`` → ``InitializeDepthMapScalesFromObservations``
+  // when ``use_init=true``, else constant init (1.0 / 0.0 log).
   std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
 
-  // --- 10-bucket per-observation loss routing (mirrors glomap-fork field
-  //     names verbatim — the 10 LossFunctionConfig fields exposed via
-  //     glomap_ra port at colmap/sfm/global_positioning_glomap.h:140-167) ---
-  LossFunctionConfig loss_normal_geometry;
-  LossFunctionConfig loss_normal_depth;
-  LossFunctionConfig loss_lc_geometry;
-  LossFunctionConfig loss_lc_depth;
-  LossFunctionConfig loss_normal_geometry_inlier;
-  LossFunctionConfig loss_normal_depth_inlier;
-  LossFunctionConfig loss_normal_depth_outlier;
-  LossFunctionConfig loss_normal_geometry_trackstart;
-  LossFunctionConfig loss_normal_depth_trackstart;
-  LossFunctionConfig loss_scale_prior;
+  // 10-bucket per-observation loss routing.
+  LossConfig loss_normal_geometry;
+  LossConfig loss_normal_depth;
+  LossConfig loss_lc_geometry;
+  LossConfig loss_lc_depth;
+  LossConfig loss_normal_geometry_inlier;
+  LossConfig loss_normal_depth_inlier;
+  LossConfig loss_normal_depth_outlier;
+  LossConfig loss_normal_geometry_trackstart;
+  LossConfig loss_normal_depth_trackstart;
+  LossConfig loss_scale_prior;
 
   GlobalPositionerOptions() {
     solver_options.num_threads = -1;
@@ -159,11 +138,9 @@ class GlobalPositioner {
 
   GlobalPositionerOptions& GetOptions() { return options_; }
 
-  // --- Glomap-fork accessor (M7) ---
   // Returns the per-image dmap_scales_ map after Solve(). Values are in
   // the parameterization the optimizer ran in (log-space when
   // options_.use_log_scale_for_depth_map_scales=true, linear otherwise).
-  // Pycolmap binding converts to linear space before returning to Python.
   const std::map<image_t, double>& GetDmapScales() const {
     return dmap_scales_;
   }
@@ -183,23 +160,20 @@ class GlobalPositioner {
   void AddPoint3DToProblem(point3D_t point3D_id,
                            Reconstruction& reconstruction);
 
-  // Add a single observation (regular or LC) for one point3D. Extracted as
-  // a helper so AddPoint3DToProblem can iterate ``track.Elements()`` and
-  // ``track.lc_elements`` separately and pass ``is_lc_observation``
-  // through to the loss-routing cascade (M5).
+  // Add a single observation (regular or LC) for one point3D. The
+  // ``is_lc_observation`` flag selects which loss bucket the cascade
+  // routes to.
   void AddObservationToProblem(point3D_t point3D_id,
                                const TrackElement& observation,
                                bool is_lc_observation,
                                bool random_initialization,
                                Reconstruction& reconstruction);
 
-  // Glomap-fork pre-Solve depth-outlier filter (M6). When
-  // ``options_.filter_depth_outliers=true`` (and SPLIT_METRIC_DEPTH active),
-  // sweep both regular and LC observations per track. Flag observations whose
-  // ``|log(z_est) - log(scale * depth_prior)|`` exceeds 3 sigma in log-space
-  // by inserting ``(image_id, point2D_idx)`` into ``depth_outliers_``. The
-  // M5 depth-loss cascade then routes flagged observations to the soft
-  // fallback (or skips them entirely on LC pairs).
+  // Sweep observations and flag those whose
+  // ``|log(z_est) - log(scale * depth_prior)|`` exceeds 3 sigma into
+  // ``depth_outliers_``. Gated by ``filter_depth_outliers`` +
+  // ``SPLIT_METRIC_DEPTH``. The flagged set is consumed by the
+  // depth-loss cascade in ``AddObservationToProblem``.
   void FilterDepthOutliers(const Reconstruction& reconstruction);
 
   // Set the parameter groups
@@ -235,32 +209,23 @@ class GlobalPositioner {
 
   // --- glomap-fork additions ---
 
-  // Per-image depth-map scale parameter blocks. Only populated when
-  // ``point_constraint_type == SPLIT_METRIC_DEPTH``. Lazily inserted on the
-  // first valid depth-prior observation per image. Keyed by ``image_t``
-  // (matches fork; trivial-rig case has ``image_t == frame_t`` numerically).
-  // Uses ``std::map`` instead of ``unordered_map`` because Ceres residuals
-  // store ``&dmap_scales_[image_id]`` data pointers; a hash-table rehash
-  // during lazy-insert would invalidate them. ``std::map`` is a balanced BST
-  // — pointers stay stable for the lifetime of the entry.
+  // Per-image depth-map scale parameter blocks (lazily inserted on
+  // first valid depth-prior observation; only populated when
+  // SPLIT_METRIC_DEPTH active). Must be ``std::map`` not
+  // ``unordered_map``: Ceres residuals store ``&dmap_scales_[image_id]``
+  // and a hash rehash during insert would invalidate them.
   std::map<image_t, double> dmap_scales_;
 
-  // Per-image observation count for scale-prior weighting. Each observation
-  // that contributes a ``MetricDepthError`` residual increments the count;
-  // the per-image ``ScalePriorError`` block scales its loss by this count
-  // so dense-depth images get proportionally stronger priors.
+  // Per-image count of MetricDepthError residuals. Used by the
+  // per-image ScalePriorError to weight by observation density.
   std::unordered_map<image_t, int> dmap_scale_observation_counts_;
 
-  // Pre-pass-flagged depth outliers (only populated when
-  // ``filter_depth_outliers=true``). Switches the depth-loss cascade to a
-  // hardcoded soft fallback for non-LC outliers, or skip-depth-residual
-  // for LC outliers.
+  // Observations flagged by ``FilterDepthOutliers``. Routed to
+  // soft-fallback loss (non-LC) or skipped entirely (LC).
   std::set<std::pair<image_t, point2D_t>> depth_outliers_;
 
-  // 10 cached loss buckets corresponding to the option struct's
-  // ``loss_*`` fields. Pre-warmed at the start of
-  // ``AddPointToCameraConstraints`` and reused per observation. Lifetime
-  // mirrors the ``loss_function_*`` members above.
+  // 10 cached loss buckets, one per ``options_.loss_*`` field.
+  // Pre-warmed once in ``AddPointToCameraConstraints``.
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_;
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_;
   std::shared_ptr<ceres::LossFunction> cached_loss_lc_geometry_;
@@ -272,9 +237,8 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_trackstart_;
   std::shared_ptr<ceres::LossFunction> cached_loss_scale_prior_;
 
-  // Hardcoded ScaledLoss(HuberLoss(1), 1) for non-LC depth outliers flagged
-  // by the M6 filter pre-pass. Allocated on first use in
-  // ``AddPointToCameraConstraints``.
+  // ScaledLoss(HuberLoss(1), 1) used for non-LC depth outliers.
+  // Lazily allocated.
   std::shared_ptr<ceres::LossFunction> soft_outlier_fallback_loss_;
 };
 

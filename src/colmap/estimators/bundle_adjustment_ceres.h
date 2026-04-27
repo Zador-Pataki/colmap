@@ -92,6 +92,13 @@ struct CeresBundleAdjustmentOptions {
   bool Check() const;
 };
 
+// Free factory mirroring the dispatch in
+// CeresBundleAdjustmentOptions::CreateLossFunction(). Reused by other
+// per-block loss factories (e.g. GlobalPositioner's loss cascade).
+std::unique_ptr<ceres::LossFunction> CreateLossFunction(
+    CeresBundleAdjustmentOptions::LossFunctionType loss_function_type,
+    double loss_function_scale);
+
 // Ceres-specific bundle adjustment summary with access to full solver details.
 struct CeresBundleAdjustmentSummary : public BundleAdjustmentSummary {
   ceres::Solver::Summary ceres_summary;

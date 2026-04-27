@@ -67,12 +67,10 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   edges.reserve(pose_graph.NumEdges());
   weights.reserve(pose_graph.NumEdges());
 
-  // M10: when prioritize_tracking is enabled (typically alongside
-  // options_.use_video_constraints), penalize LC-dominated edges so the
+  // When prioritize_tracking is enabled, penalize LC-dominated edges so the
   // spanning tree picks tracking-dominated edges as parents. Native MST
   // maximises weights, so we SUBTRACT a large penalty from LC-dominated
-  // weights (fork's "+1e9 to weights_boost" maps to "-1e9 to weight"
-  // here since the convention is inverted).
+  // weights.
   constexpr float kLCPenalty = 1e9f;
   const auto* cg_map_ptr =
       (prioritize_tracking && correspondence_graph != nullptr)
@@ -461,8 +459,7 @@ bool RotationEstimator::SolveRotationAveraging(
 
   problem.ApplyResultsToReconstruction(reconstruction);
 
-  // M8: surface IRLS final weights for the videosfm consecutive-pair
-  // diagnostic (rotation_averaging.py:117-129).
+  // Surface IRLS final weights for the consecutive-pair diagnostic.
   if (final_weights != nullptr) {
     *final_weights = problem.FinalWeights();
   }

@@ -64,6 +64,8 @@ BundleAdjustmentTerminationType CeresTerminationTypeToTerminationType(
   return BundleAdjustmentTerminationType::FAILURE;
 }
 
+}  // namespace
+
 std::unique_ptr<ceres::LossFunction> CreateLossFunction(
     CeresBundleAdjustmentOptions::LossFunctionType loss_function_type,
     double loss_function_scale) {
@@ -79,8 +81,6 @@ std::unique_ptr<ceres::LossFunction> CreateLossFunction(
   }
   return nullptr;
 }
-
-}  // namespace
 
 std::shared_ptr<CeresBundleAdjustmentSummary>
 CeresBundleAdjustmentSummary::Create(ceres::Solver::Summary ceres_summary) {

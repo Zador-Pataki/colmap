@@ -15,41 +15,16 @@ using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
 
-namespace {
-
-// Helper: bind a LossFunctionConfig field on GlobalPositionerOptions as a
-// dict-typed property accepting / emitting {"name", "scale", "weight"}.
-template <LossFunctionConfig GlobalPositionerOptions::*Member>
-void BindLossField(
-    py::classh<GlobalPositionerOptions>& cls, const char* name,
-    const char* docstring) {
-  cls.def_property(
-      name,
-      [](const GlobalPositionerOptions& self) -> py::dict {
-        py::dict d;
-        d["name"] = (self.*Member).name;
-        d["scale"] = (self.*Member).scale;
-        d["weight"] = (self.*Member).weight;
-        return d;
-      },
-      [](GlobalPositionerOptions& self, const py::dict& d) {
-        (self.*Member).name =
-            d.contains("name") ? py::cast<std::string>(d["name"]) : "trivial";
-        (self.*Member).scale =
-            d.contains("scale") ? py::cast<double>(d["scale"]) : 1.0;
-        (self.*Member).weight =
-            d.contains("weight") ? py::cast<double>(d["weight"]) : 1.0;
-      },
-      docstring);
-}
-
-}  // namespace
-
 void BindGlobalPositioner(py::module& m) {
-  // Glomap-fork PointConstraintType enum (M2).
   py::enum_<PointConstraintType>(m, "PointConstraintType")
       .value("BATA", PointConstraintType::BATA)
       .value("SPLIT_METRIC_DEPTH", PointConstraintType::SPLIT_METRIC_DEPTH);
+
+  py::classh<LossConfig>(m, "LossConfig")
+      .def(py::init<>())
+      .def_readwrite("type", &LossConfig::type)
+      .def_readwrite("scale", &LossConfig::scale)
+      .def_readwrite("weight", &LossConfig::weight);
 
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
@@ -144,7 +119,7 @@ void BindGlobalPositioner(py::module& m) {
                 self.solver_options.parameter_tolerance = v;
               },
               "Ceres solver parameter tolerance.")
-          // --- Glomap-fork additions (M2) ---
+          // Glomap-fork additions (default OFF — vanilla call = vanilla GP).
           .def_readwrite(
               "point_constraint_type",
               &GlobalPositionerOptions::point_constraint_type,
@@ -153,20 +128,17 @@ void BindGlobalPositioner(py::module& m) {
           .def_readwrite("use_init",
                          &GlobalPositionerOptions::use_init,
                          "If true, skip random init for both camera centers "
-                         "AND track xyz (collapses fork's split flags).")
+                         "AND track xyz.")
           .def_readwrite(
               "use_observation_exclusions",
               &GlobalPositionerOptions::use_observation_exclusions,
-              "Gate G-1: when true, observations with "
-              "image.is_excluded[idx]=true are skipped. Default OFF "
-              "preserves vanilla colmap4 behavior.")
+              "If true, observations with image.is_excluded[idx]=true are "
+              "skipped.")
           .def_readwrite(
               "use_lc_observations",
               &GlobalPositionerOptions::use_lc_observations,
-              "Gate G-2 (GP-side LC config): when true, "
-              "AddPoint3DToProblem also iterates track.lc_elements. "
-              "Default OFF matches vanilla colmap4 GP. Pairs with RA's "
-              "skip_risky_LC_pairs.")
+              "If true, AddPoint3DToProblem also iterates "
+              "track.lc_elements (loop-closure observations).")
           .def_readwrite(
               "random_init_scale",
               &GlobalPositionerOptions::random_init_scale,
@@ -232,41 +204,29 @@ void BindGlobalPositioner(py::module& m) {
               "Caller-supplied {image_id: linear_scale} seed for dmap_scales_ "
               "(GP1 -> GP2 handoff). None = use defaults.");
 
-  // 10 LossFunctionConfig dict-typed properties (M2).
-  BindLossField<&GlobalPositionerOptions::loss_normal_geometry>(
-      PyGlobalPositionerOptions, "loss_normal_geometry",
-      "Loss config for non-LC geometry residuals (default-bucket).");
-  BindLossField<&GlobalPositionerOptions::loss_normal_depth>(
-      PyGlobalPositionerOptions, "loss_normal_depth",
-      "Loss config for non-LC metric-depth residuals (default-bucket).");
-  BindLossField<&GlobalPositionerOptions::loss_lc_geometry>(
-      PyGlobalPositionerOptions, "loss_lc_geometry",
-      "Loss config for LC-observation geometry residuals.");
-  BindLossField<&GlobalPositionerOptions::loss_lc_depth>(
-      PyGlobalPositionerOptions, "loss_lc_depth",
-      "Loss config for LC-observation metric-depth residuals.");
-  BindLossField<&GlobalPositionerOptions::loss_normal_geometry_inlier>(
-      PyGlobalPositionerOptions, "loss_normal_geometry_inlier",
-      "Loss config for non-LC geometry residuals on is_inlier observations.");
-  BindLossField<&GlobalPositionerOptions::loss_normal_depth_inlier>(
-      PyGlobalPositionerOptions, "loss_normal_depth_inlier",
-      "Loss config for non-LC metric-depth residuals on is_inlier "
-      "observations.");
-  BindLossField<&GlobalPositionerOptions::loss_normal_depth_outlier>(
-      PyGlobalPositionerOptions, "loss_normal_depth_outlier",
-      "Loss config for non-LC metric-depth residuals on MDRP-flagged outlier "
-      "observations.");
-  BindLossField<&GlobalPositionerOptions::loss_normal_geometry_trackstart>(
-      PyGlobalPositionerOptions, "loss_normal_geometry_trackstart",
-      "Loss config for non-LC geometry residuals on track-anchor "
-      "observations.");
-  BindLossField<&GlobalPositionerOptions::loss_normal_depth_trackstart>(
-      PyGlobalPositionerOptions, "loss_normal_depth_trackstart",
-      "Loss config for non-LC metric-depth residuals on track-anchor "
-      "observations.");
-  BindLossField<&GlobalPositionerOptions::loss_scale_prior>(
-      PyGlobalPositionerOptions, "loss_scale_prior",
-      "Loss config for the per-image scale-prior residual.");
+  // 10 per-bucket loss configs. ``LossConfig`` carries
+  // (type=LossFunctionType enum, scale, weight). Defaults give
+  // unweighted TrivialLoss — equivalent to no override.
+  PyGlobalPositionerOptions
+      .def_readwrite("loss_normal_geometry",
+                     &GlobalPositionerOptions::loss_normal_geometry)
+      .def_readwrite("loss_normal_depth",
+                     &GlobalPositionerOptions::loss_normal_depth)
+      .def_readwrite("loss_lc_geometry",
+                     &GlobalPositionerOptions::loss_lc_geometry)
+      .def_readwrite("loss_lc_depth", &GlobalPositionerOptions::loss_lc_depth)
+      .def_readwrite("loss_normal_geometry_inlier",
+                     &GlobalPositionerOptions::loss_normal_geometry_inlier)
+      .def_readwrite("loss_normal_depth_inlier",
+                     &GlobalPositionerOptions::loss_normal_depth_inlier)
+      .def_readwrite("loss_normal_depth_outlier",
+                     &GlobalPositionerOptions::loss_normal_depth_outlier)
+      .def_readwrite("loss_normal_geometry_trackstart",
+                     &GlobalPositionerOptions::loss_normal_geometry_trackstart)
+      .def_readwrite("loss_normal_depth_trackstart",
+                     &GlobalPositionerOptions::loss_normal_depth_trackstart)
+      .def_readwrite("loss_scale_prior",
+                     &GlobalPositionerOptions::loss_scale_prior);
 
   MakeDataclass(PyGlobalPositionerOptions);
 
@@ -408,10 +368,8 @@ void BindRotationEstimator(py::module& m) {
           .def_readwrite(
               "prioritize_tracking_in_mst",
               &RotationEstimatorOptions::prioritize_tracking_in_mst,
-              "Gate R-1: when true, ComputeMaximumPoseGraphSpanningTree "
-              "penalizes LC-dominated edges (M10). Default OFF; videosfm "
-              "sets this true alongside use_video_constraints to keep "
-              "the existing combined behavior.")
+              "If true, ComputeMaximumPoseGraphSpanningTree penalizes "
+              "LC-dominated edges so the MST routes through tracking pairs.")
           .def_readwrite(
               "use_video_constraints",
               &RotationEstimatorOptions::use_video_constraints,

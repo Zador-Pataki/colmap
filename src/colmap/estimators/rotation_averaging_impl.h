@@ -71,22 +71,20 @@ class RotationAveragingProblem {
     return pair_constraints_;
   }
 
-  // --- Glomap-fork IRLS final-weight plumb (M8) ---
   // After a successful IRLS solve, ``RotationAveragingSolver::SolveIRLS``
   // calls ``SetFinalWeightsFromIRLS(weights_irls)`` to capture the
-  // per-pair IRLS weight from the last successful iteration. videosfm
-  // pipeline reads this for the consecutive-pair-weight degeneracy
-  // diagnostic (rotation_averaging.py:117-129).
+  // per-pair IRLS weight from the last successful iteration. Caller reads
+  // this for the consecutive-pair-weight degeneracy diagnostic.
   void SetFinalWeightsFromIRLS(const Eigen::VectorXd& weights_irls);
   const std::unordered_map<image_pair_t, double>& FinalWeights() const {
     return final_weights_;
   }
 
-  // --- Glomap-fork video-Ceres path accessors (M11) ---
-  // Direct mutable access to estimated_rotations_, plus the parameter
-  // index maps + fixed_frame_id, so RotationAveragingSolver::SolveCeres
-  // can build a Ceres problem over per-frame angle-axis blocks. M11 path
-  // is gated on !use_gravity, so all frames are 3-DOF blocks.
+  // Accessors for the video-Ceres path: direct mutable access to
+  // estimated_rotations_, plus the parameter index maps + fixed_frame_id,
+  // so RotationAveragingSolver::SolveCeres can build a Ceres problem over
+  // per-frame angle-axis blocks. Path is gated on !use_gravity, so all
+  // frames are 3-DOF blocks.
   Eigen::VectorXd& MutableEstimatedRotations() { return estimated_rotations_; }
   const std::unordered_map<frame_t, int>& FrameIdToParamIdx() const {
     return frame_id_to_param_idx_;
@@ -147,13 +145,11 @@ class RotationAveragingProblem {
   // Active frames for the current solve.
   std::unordered_set<frame_t> active_frame_ids_;
 
-  // --- Glomap-fork IRLS final-weight plumb (M8) ---
   // Per-pair IRLS weight from the last successful iteration. Populated by
   // SetFinalWeightsFromIRLS. Empty if SolveIRLS didn't run (e.g. L1-only
-  // path, or video-Ceres path in M11).
+  // path, or video-Ceres path).
   std::unordered_map<image_pair_t, double> final_weights_;
 
-  // --- Glomap-fork skip_risky_LC_pairs (M9) ---
   // Optional CorrespondenceGraph reference for reading fork ImagePair
   // fields (``inliers``, ``are_lc``) — needed by skip_risky_LC_pairs in
   // BuildPairConstraints. PoseGraph::Edge is a strict subset of
@@ -178,7 +174,6 @@ class RotationAveragingSolver {
   // Iteratively reweighted least squares phase.
   bool SolveIRLS(RotationAveragingProblem& problem);
 
-  // --- Glomap-fork video-Ceres path (M11) ---
   // Replaces L1+IRLS with a Ceres optimization over per-frame 3-DOF
   // angle-axis blocks when options_.use_video_constraints &&
   // !options_.use_gravity. Each pair gets a Huber loss (tracking

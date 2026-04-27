@@ -68,20 +68,18 @@ struct RotationEstimatorOptions {
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
 
-  // --- glomap-fork additions (default OFF — vanilla call = vanilla RA) ---
+  // Glomap-fork additions (default OFF — vanilla call = vanilla RA).
 
   // If true, drop pairs whose loop-closure inlier count exceeds non-LC
   // inliers — prevents LC-contaminated pairs from breaking RA. Consumed by
   // BuildPairConstraints in rotation_averaging_impl.cc when a
-  // CorrespondenceGraph& is plumbed through (M9 of the glomap_ra port).
+  // CorrespondenceGraph& is plumbed through.
   bool skip_risky_LC_pairs = false;
 
-  // Gate R-1: when true, ``ComputeMaximumPoseGraphSpanningTree`` penalizes
+  // When true, ``ComputeMaximumPoseGraphSpanningTree`` penalizes
   // LC-dominated edges (subtracts kLCPenalty=1e9 from edge weight) so the
   // MST routes through tracking pairs first. Independent of
-  // ``use_video_constraints`` and of ``skip_risky_LC_pairs``; pre-collapse
-  // (M10) it was implicitly tied to ``use_video_constraints`` but is now
-  // a separate knob — set independently of the Ceres-path opt-in.
+  // ``use_video_constraints`` and of ``skip_risky_LC_pairs``.
   bool prioritize_tracking_in_mst = false;
 
   // If true, switch from L1 + IRLS to a Ceres-based solver with differential
@@ -140,8 +138,8 @@ class RotationEstimator {
 
   // Initializes rotations from maximum spanning tree.
   // ``correspondence_graph`` (in, optional): when non-null and
-  // ``options_.use_video_constraints`` is true, MST construction
-  // penalises LC-dominated edges (M10 prioritize_tracking).
+  // ``options_.prioritize_tracking_in_mst`` is true, MST construction
+  // penalises LC-dominated edges.
   void InitializeFromMaximumSpanningTree(
       const PoseGraph& pose_graph,
       const std::unordered_set<image_t>& active_image_ids,

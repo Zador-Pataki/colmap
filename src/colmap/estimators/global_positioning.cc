@@ -23,10 +23,6 @@ Eigen::Vector3d RandVector3d(double low, double high) {
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
     : options_(options) {
-  // ``options_.random_seed >= 0`` wins; otherwise honor the GP_SEED env
-  // var (documented escape for Tier-2 byte-identity, see CLAUDE.md);
-  // otherwise leave the global PRNG alone (upstream colmap4 default
-  // is non-deterministic ``random_device``).
   if (options_.random_seed >= 0) {
     SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
   } else if (const char* env_seed = std::getenv("GP_SEED")) {
@@ -94,12 +90,10 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   frame_centers_.clear();
   cams_in_rig_.clear();
 
-  // Allocate enough memory for the scales. One for each residual.
-  // Due to possibly invalid tracks, the actual number of residuals may be
-  // smaller. Include both regular observations + glomap-fork lc_elements
-  // (M5 two-loop iteration adds residuals + scales for both); without the
-  // lc count, vector reallocation invalidates earlier &scale pointers
-  // stored in Ceres residual blocks.
+  // Reserve scales_ for both regular observations and lc_elements.
+  // Underestimating triggers ``vector::push_back`` reallocation mid-build,
+  // which invalidates the ``&scale`` data pointers that earlier residual
+  // blocks already stored.
   scales_.clear();
   size_t total_observations = 0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
@@ -160,44 +154,35 @@ void GlobalPositioner::AddPointToCameraConstraints(
       loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
   loss_function_ptcam_calibrated_ = loss_function_;
 
-  // --- Glomap-fork loss-routing cascade pre-warm (M5) ---
-  // Materialize the 10 cached losses from their LossFunctionConfig fields.
-  // Default-config (all loss_*.name == "trivial", scale=1, weight=1) gives
-  // unweighted residuals — equivalent to no override. The
-  // AddObservationToProblem cascade picks one of these based on
-  // (is_lc_observation, is_track_anchor, is_inlier, is_depth_outlier,
-  // depth_outliers_) flags. ``soft_outlier_fallback_loss_`` is allocated
-  // lazily on first non-LC depth-outlier observation in the cascade.
+  // Pre-warm the 10 cascade losses; default trivial/1/1 gives unweighted
+  // residuals (equivalent to no override). Selection happens per-observation
+  // in ``AddObservationToProblem``. ``soft_outlier_fallback_loss_`` is
+  // allocated lazily on first non-LC depth-outlier.
   cached_loss_normal_geometry_ =
-      CreateLossFromConfig(options_.loss_normal_geometry);
-  cached_loss_normal_depth_ = CreateLossFromConfig(options_.loss_normal_depth);
-  cached_loss_lc_geometry_ = CreateLossFromConfig(options_.loss_lc_geometry);
-  cached_loss_lc_depth_ = CreateLossFromConfig(options_.loss_lc_depth);
+      options_.loss_normal_geometry.CreateLossFunction();
+  cached_loss_normal_depth_ = options_.loss_normal_depth.CreateLossFunction();
+  cached_loss_lc_geometry_ = options_.loss_lc_geometry.CreateLossFunction();
+  cached_loss_lc_depth_ = options_.loss_lc_depth.CreateLossFunction();
   cached_loss_normal_geometry_inlier_ =
-      CreateLossFromConfig(options_.loss_normal_geometry_inlier);
+      options_.loss_normal_geometry_inlier.CreateLossFunction();
   cached_loss_normal_depth_inlier_ =
-      CreateLossFromConfig(options_.loss_normal_depth_inlier);
+      options_.loss_normal_depth_inlier.CreateLossFunction();
   cached_loss_normal_depth_outlier_ =
-      CreateLossFromConfig(options_.loss_normal_depth_outlier);
+      options_.loss_normal_depth_outlier.CreateLossFunction();
   cached_loss_normal_geometry_trackstart_ =
-      CreateLossFromConfig(options_.loss_normal_geometry_trackstart);
+      options_.loss_normal_geometry_trackstart.CreateLossFunction();
   cached_loss_normal_depth_trackstart_ =
-      CreateLossFromConfig(options_.loss_normal_depth_trackstart);
-  cached_loss_scale_prior_ = CreateLossFromConfig(options_.loss_scale_prior);
+      options_.loss_normal_depth_trackstart.CreateLossFunction();
+  cached_loss_scale_prior_ = options_.loss_scale_prior.CreateLossFunction();
   soft_outlier_fallback_loss_.reset();
 
-  // --- Glomap-fork SPLIT_METRIC_DEPTH bookkeeping (M4) ---
-  // Reset per-image scale state. Lazy-inserted from observation loop in
-  // AddPoint3DToProblem.
   dmap_scales_.clear();
   dmap_scale_observation_counts_.clear();
 
-  // --- Glomap-fork initial_dmap_scales seeding + filter pre-pass (M6) ---
-  // When the caller supplied initial_dmap_scales (e.g. GP2 receiving GP1's
-  // solved scales), seed dmap_scales_ before FilterDepthOutliers so the
-  // log-space residual check uses the right per-image scale. Lazy-insert
-  // in AddObservationToProblem then skips these images. observation_count
-  // starts at 0 and is incremented per observation processed.
+  // Seed dmap_scales_ from caller-supplied initial values (e.g. GP2
+  // continuing from GP1) BEFORE FilterDepthOutliers so the log-space
+  // residual check uses the right per-image scale. Subsequent lazy
+  // inserts in AddObservationToProblem skip already-seeded images.
   if (options_.point_constraint_type ==
           PointConstraintType::SPLIT_METRIC_DEPTH &&
       options_.initial_dmap_scales.has_value()) {
@@ -211,8 +196,6 @@ void GlobalPositioner::AddPointToCameraConstraints(
     }
   }
 
-  // Pre-Solve depth outlier filter. Populates depth_outliers_ which the
-  // M5 depth-loss cascade reads.
   depth_outliers_.clear();
   if (options_.point_constraint_type ==
           PointConstraintType::SPLIT_METRIC_DEPTH &&
@@ -229,10 +212,8 @@ void GlobalPositioner::AddPointToCameraConstraints(
     AddPoint3DToProblem(point3D_id, reconstruction);
   }
 
-  // --- Glomap-fork ScalePriorError emission (M4) ---
-  // After every observation has been added, emit one scale-prior residual
-  // per image with depth observations. Loss is scaled by observation count
-  // so dense-depth images get proportionally stronger priors.
+  // Emit one scale-prior residual per image with depth observations,
+  // weighted by obs_count so dense-depth images get stronger priors.
   if (options_.point_constraint_type ==
       PointConstraintType::SPLIT_METRIC_DEPTH) {
     for (auto& [image_id, scale] : dmap_scales_) {
@@ -252,10 +233,8 @@ void GlobalPositioner::AddPointToCameraConstraints(
       }
       if (scale_prior_cost == nullptr) continue;
 
-      // Per-image obs_count weighting (M4) wrapped around the cached
-      // scale-prior loss (M5). When ``loss_scale_prior`` is left at default
-      // (TrivialLoss / weight=1), the ScaledLoss collapses to a plain
-      // 1/obs_count^-1 weighting — equivalent to fork's behaviour.
+      // Wrap cached_loss_scale_prior_ with a ScaledLoss(obs_count) so
+      // dense-depth images get proportionally stronger priors.
       ceres::LossFunction* obs_count_scaled_loss = nullptr;
       if (cached_loss_scale_prior_) {
         obs_count_scaled_loss = new ceres::ScaledLoss(
@@ -291,12 +270,8 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
     point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
 
-  // Glomap-fork two-loop iteration (M5):
-  // - First loop walks regular track elements (``is_lc_observation=false``).
-  // - Second loop walks LC elements (``is_lc_observation=true``).
-  // The fork keeps these as parallel collections rather than flagging
-  // individual elements; the caller's loss-routing cascade picks the
-  // appropriate cached loss based on the flag.
+  // Walk regular elements then LC elements as separate passes — they
+  // share the residual layout but route to different cascade buckets.
   for (const auto& observation : point3D.track.Elements()) {
     AddObservationToProblem(point3D_id,
                             observation,
@@ -304,10 +279,6 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                             random_initialization,
                             reconstruction);
   }
-  // Gate G-2: only emit LC observation residuals when the caller opted
-  // in. Vanilla colmap4 GP knows nothing about ``track.lc_elements``,
-  // so default-OFF preserves vanilla behavior even on Reconstructions
-  // that happen to carry populated ``lc_elements``.
   if (options_.use_lc_observations) {
     for (const auto& observation : point3D.track.lc_elements) {
       AddObservationToProblem(point3D_id,
@@ -330,11 +301,6 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     Image& image = reconstruction.Image(observation.image_id);
     if (!image.HasPose()) return;
 
-    // Gate G-1: per-observation skip via ``image.is_excluded`` only
-    // honored when the caller opted in. Default OFF preserves vanilla
-    // colmap4 behavior on Reconstructions that may carry stale
-    // exclusion flags (videosfm sets ``use_observation_exclusions=true``
-    // via ``_to_native_gp_options``).
     if (options_.use_observation_exclusions &&
         observation.point2D_idx < image.is_excluded.size() &&
         image.is_excluded[observation.point2D_idx]) {
@@ -377,18 +343,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
             ? loss_function_ptcam_calibrated_.get()
             : loss_function_ptcam_uncalibrated_.get();
 
-    // --- Glomap-fork loss-routing cascade (M5) ---
-    // When SPLIT_METRIC_DEPTH path is active, the geometry loss is
-    // selected per-observation from the 4-way cached cascade:
+    // SPLIT_METRIC_DEPTH geometry-loss cascade. Per-observation route:
     //   is_lc           -> cached_loss_lc_geometry_
     //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
     //   is_inlier       -> cached_loss_normal_geometry_inlier_
     //   else            -> cached_loss_normal_geometry_
-    // Default-config (all cascade losses set to TrivialLoss / weight=1)
-    // is equivalent to no override. Calibrated/uncalibrated discrimination
-    // is preserved by composing the cascade output with native's existing
-    // 0.5x ScaledLoss for !has_prior_focal_length cameras (handled by
-    // wrapping cached_loss in loss_function_ptcam_uncalibrated_).
     if (options_.point_constraint_type ==
         PointConstraintType::SPLIT_METRIC_DEPTH) {
       ceres::LossFunction* cascade = nullptr;
@@ -410,14 +369,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
 
     // If the image is not part of a camera rig, use the standard BATA error
     if (image.IsRefInFrame()) {
-      // --- Glomap-fork WeightedBATADirectionalError dispatch (M5 fix) ---
-      // Use anisotropic per-keypoint weighting when image.angular_stddevs
-      // is populated (fork's typical case — videosfm always populates).
-      // Fall back to unweighted BATAPairwiseDirectionCostFunctor when
-      // sigmas are absent. Without this dispatch the SPLIT_METRIC_DEPTH
-      // path's geometry residuals lose their relative weighting against
-      // the metric-depth residuals — was the dominant contributor to the
-      // M7+M12 ATE drift (audit_algorithmic_semantics.md suspect #1).
+      // Use anisotropic per-keypoint weighting when ``angular_stddevs``
+      // is populated; fall back to unweighted ``BATAPairwiseDirectionCostFunctor``
+      // when sigmas are absent. Without the weighted variant the
+      // SPLIT_METRIC_DEPTH geometry residuals lose their relative
+      // weighting against the metric-depth residuals.
       ceres::CostFunction* cost_function = nullptr;
       if (observation.point2D_idx < image.angular_stddevs.size()) {
         const Eigen::Vector2d& angular_std =
@@ -443,10 +399,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                  point3D.xyz.data(),
                                  &scale);
 
-      // --- Glomap-fork SPLIT_METRIC_DEPTH addition (M4) ---
-      // Add a 1-D ``MetricDepthError`` residual on
-      // (frame_center, point3D.xyz, dmap_scales_[image_id]) when the image
-      // has a valid depth prior at this feature. Anchors absolute scale.
+      // 1-D ``MetricDepthError`` residual on
+      // (frame_center, point3D.xyz, dmap_scales_[image_id]) — anchors
+      // absolute scale when a depth prior is available at this feature.
       if (options_.point_constraint_type ==
               PointConstraintType::SPLIT_METRIC_DEPTH &&
           observation.point2D_idx < image.depth_prior_validity.size() &&
@@ -490,13 +445,13 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
               options_.log_linear_threshold);
 
           if (metric_depth_cost != nullptr) {
-            // --- Glomap-fork depth-loss cascade (M5) ---
-            // 5-way cascade: pre-pass-flagged outlier (M6) -> soft fallback,
-            // then is_lc -> cached_loss_lc_depth_, track_anchor ->
-            // cached_loss_normal_depth_trackstart_, inlier ->
-            // cached_loss_normal_depth_inlier_, MDRP-flagged outlier ->
-            // cached_loss_normal_depth_outlier_, else ->
-            // cached_loss_normal_depth_.
+            // 5-way depth-loss cascade:
+            //   pre-pass outlier  -> soft fallback (skip on LC)
+            //   is_lc             -> cached_loss_lc_depth_
+            //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
+            //   is_inlier         -> cached_loss_normal_depth_inlier_
+            //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
+            //   else              -> cached_loss_normal_depth_
             ceres::LossFunction* depth_loss = nullptr;
             const std::pair<image_t, point2D_t> obs_key{observation.image_id,
                                                         observation.point2D_idx};
@@ -628,13 +583,9 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
     }
   }
 
-  // --- Glomap-fork SPLIT_METRIC_DEPTH parameter group (M4) ---
-  // Per-image dmap_scales_ go in a separate group (one beyond
-  // frame_centers/cams_in_rig). dmap_scales_ are 1-D blocks; mixing them
-  // with 3-D frame_centers in the same Schur-ordering group breaks the
-  // Schur-complement preprocessor (Ceres downgrades to
-  // SPARSE_NORMAL_CHOLESKY then fails to start). Separate group keeps
-  // each Schur block size-uniform.
+  // dmap_scales_ in their own group: Ceres' Schur preprocessor needs
+  // each group to have uniform block size, and these are 1-D blocks vs
+  // 3-D frame_centers/cams_in_rig.
   ++group_id;
   for (auto& [image_id, scale] : dmap_scales_) {
     if (problem_->HasParameterBlock(&scale)) {
@@ -684,7 +635,6 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
     }
   }
 
-  // --- Glomap-fork SPLIT_METRIC_DEPTH parameter bound (M4) ---
   // Lower-bound dmap_scales_ in linear space (prevents collapse to <=0).
   // No bound in log space (parameter is unbounded; positivity comes from
   // exp() in MetricDepthError).
@@ -696,10 +646,10 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
     }
   }
   // Set the first scale to be constant to remove the gauge ambiguity. Skip
-  // when the metric-depth path is active: ``ScalePriorError`` (M4) plus the
+  // when the metric-depth path is active: ``ScalePriorError`` plus the
   // depth-prior observations themselves anchor the gauge, and the redundant
-  // pin would over-constrain the system. (Q1 / R10 — gating preserves native
-  // colmap GP unit tests under default ``BATA`` mode.)
+  // pin would over-constrain the system. Gating preserves native colmap GP
+  // unit tests under default ``BATA`` mode.
   if (options_.point_constraint_type != PointConstraintType::SPLIT_METRIC_DEPTH) {
     for (double& scale : scales_) {
       if (problem_->HasParameterBlock(&scale)) {
@@ -796,14 +746,14 @@ void GlobalPositioner::ConvertBackResults(Reconstruction& reconstruction) {
   }
 }
 
-// --- Glomap-fork FilterDepthOutliers (M6) ---
-// Sweep regular + LC observations per track. For each, compute estimated
-// camera-frame z-depth via the WORLD pose (not the in-Solve flipped
-// frame_centers_ convention — Solve is about to start, frame_centers_ is
-// raw initial-cam-position). Flag |log(z_est) - log(scale*prior)| >= 3 sigma_log
-// where sigma_log = std::log(1 + relative_stddev). Insert (image_id,
-// point2D_idx) into depth_outliers_. M5 cascade routes flagged observations
-// to soft fallback (non-LC) or skip-residual (LC).
+// FilterDepthOutliers: sweep regular + LC observations per track. For each,
+// compute estimated camera-frame z-depth via the WORLD pose (not the in-Solve
+// flipped frame_centers_ convention — Solve is about to start, frame_centers_
+// is raw initial-cam-position). Flag
+// |log(z_est) - log(scale*prior)| >= 3 sigma_log where
+// sigma_log = std::log(1 + relative_stddev). Insert (image_id, point2D_idx)
+// into depth_outliers_; the geometry-loss cascade then routes flagged
+// observations to soft fallback (non-LC) or skip-residual (LC).
 namespace {
 
 // Helper: per-observation outlier check. Returns true to insert into
@@ -868,7 +818,6 @@ void GlobalPositioner::FilterDepthOutliers(
             {observation.image_id, observation.point2D_idx});
       }
     }
-    // LC observations — Gate G-2 paired: only sweep when caller opted in.
     if (options_.use_lc_observations) {
       for (const auto& observation : point3D.track.lc_elements) {
         if (!reconstruction.ExistsImage(observation.image_id)) continue;

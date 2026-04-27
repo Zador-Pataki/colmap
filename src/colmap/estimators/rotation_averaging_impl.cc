@@ -14,7 +14,6 @@
 namespace colmap {
 namespace {
 
-// --- Glomap-fork video-Ceres helper (M11) ---
 // AutoDiff cost functor for relative rotation error in the video-aware
 // Ceres path. Residual = AngleAxis(R2^T * R_rel * R1) where R1, R2 are
 // the per-frame rotations being optimized and R_rel is the precomputed
@@ -280,13 +279,11 @@ void RotationAveragingProblem::BuildPairConstraints(
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
 
-    // --- Glomap-fork skip_risky_LC_pairs (M9) ---
     // Skip pairs whose LC inliers strictly exceed non-LC inliers; LC-
     // dominated pairs are loop-closures whose relative rotation often
     // disagrees with track-based geometry and breaks RA convergence.
-    // Reads ImagePair.{inliers, are_lc} from the videosfm-side
-    // CorrespondenceGraph plumbed in via ctor; PoseGraph::Edge doesn't
-    // carry these fork fields.
+    // Reads ImagePair.{inliers, are_lc} from the CorrespondenceGraph
+    // plumbed in via ctor; PoseGraph::Edge doesn't carry these fork fields.
     if (options_.skip_risky_LC_pairs && correspondence_graph_ != nullptr) {
       const auto& cg_map = correspondence_graph_->ImagePairsMap();
       auto cg_pair_it = cg_map.find(pair_id);
@@ -522,7 +519,6 @@ void RotationAveragingProblem::BuildConstraintMatrix(
   residuals_.resize(curr_row);
 }
 
-// --- Glomap-fork IRLS final-weight plumb (M8) ---
 // Translate the per-row IRLS weight vector into a per-pair map keyed by
 // image_pair_t. Each PairConstraint owns 1 (gravity-aligned) or 3
 // (full-3DOF) consecutive rows starting at constraint.row_index. Take the
@@ -731,11 +727,10 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 }
 
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
-  // --- Glomap-fork video-Ceres path (M11) ---
-  // Mutually exclusive with use_gravity. Replaces L1+IRLS with a Ceres
-  // optimization over per-frame 3-DOF angle-axis blocks. M0 RA-side
-  // skip_initialization is typically false; the M10 prioritize_tracking
-  // MST initialization runs before the video-Ceres solve.
+  // Video-Ceres path: mutually exclusive with use_gravity. Replaces
+  // L1+IRLS with a Ceres optimization over per-frame 3-DOF angle-axis
+  // blocks. The prioritize_tracking_in_mst MST initialization (when
+  // enabled) runs before this solve.
   if (options_.use_video_constraints && !options_.use_gravity) {
     VLOG(2) << "Solving video-aware Ceres rotation averaging";
     return SolveCeres(problem);
@@ -921,8 +916,7 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
   }
   VLOG(2) << "IRLS total iteration: " << iteration;
 
-  // --- Glomap-fork IRLS final-weight plumb (M8) ---
-  // Capture last successful iteration's per-pair weight for the videosfm
+  // Capture last successful iteration's per-pair weight for the
   // consecutive-pair-weight diagnostic.
   if (last_weights.size() > 0) {
     problem.SetFinalWeightsFromIRLS(last_weights);
@@ -931,12 +925,11 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
   return true;
 }
 
-// --- Glomap-fork video-Ceres path (M11) ---
 // Replaces L1+IRLS with a Ceres optimization over per-frame 3-DOF
 // angle-axis blocks. Activated by use_video_constraints (and gated to
 // !use_gravity in Solve). Each pair's residual is a relative-rotation
 // error wrapped in Huber (tracking-dominated) or Cauchy (LC-dominated)
-// loss. Initialized rotations come from the M10 prioritize_tracking
+// loss. Initialized rotations come from the prioritize_tracking_in_mst
 // MST (or the L1+IRLS warm-start if MST init was skipped).
 bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   THROW_CHECK(!options_.use_gravity)

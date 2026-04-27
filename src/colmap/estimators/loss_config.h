@@ -29,57 +29,34 @@
 
 #pragma once
 
+#include "colmap/estimators/bundle_adjustment_ceres.h"
+
 #include <memory>
-#include <stdexcept>
-#include <string>
 
 #include <ceres/loss_function.h>
 
 namespace colmap {
 
-// Typed (name, scale, weight) triple describing a Ceres loss function. Allows
-// downstream optimizers (e.g. GlobalPositioner with metric-depth + LC routing)
-// to expose 10+ different loss buckets via configurable dict-typed properties
-// from Python instead of hardcoded scales. ``weight != 1`` wraps the inner
-// loss in ``ceres::ScaledLoss``.
-struct LossFunctionConfig {
-  std::string name = "trivial";  // {trivial, huber, cauchy, arctan, softlone}
+// Light (type, scale, weight) triple over native ``LossFunctionType``.
+// Used by GlobalPositioner's 10-bucket per-observation loss cascade.
+// The pycolmap binding accepts ``{name: str, scale, weight}`` dicts and
+// maps the string name to the enum at the boundary.
+struct LossConfig {
+  CeresBundleAdjustmentOptions::LossFunctionType type =
+      CeresBundleAdjustmentOptions::LossFunctionType::TRIVIAL;
   double scale = 1.0;
   double weight = 1.0;
+
+  // Materialize the Ceres loss function described by this config.
+  // Wraps in ``ScaledLoss(weight)`` when weight != 1.
+  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
+    auto loss = colmap::CreateLossFunction(type, scale);
+    if (weight != 1.0) {
+      loss.reset(new ceres::ScaledLoss(
+          loss.release(), weight, ceres::TAKE_OWNERSHIP));
+    }
+    return std::shared_ptr<ceres::LossFunction>(loss.release());
+  }
 };
-
-// Materialize a Ceres ``LossFunction`` from a config. Returns ``nullptr`` if
-// ``weight == 0`` (no residual contribution). Throws ``std::invalid_argument``
-// for unknown ``name``.
-inline std::shared_ptr<ceres::LossFunction> CreateLossFromConfig(
-    const LossFunctionConfig& cfg) {
-  if (cfg.weight == 0.0) {
-    return nullptr;
-  }
-
-  ceres::LossFunction* inner = nullptr;
-  if (cfg.name == "trivial") {
-    // ``ceres::TrivialLoss`` ignores ``scale``; emit anyway for symmetry.
-    inner = new ceres::TrivialLoss();
-  } else if (cfg.name == "huber") {
-    inner = new ceres::HuberLoss(cfg.scale);
-  } else if (cfg.name == "cauchy") {
-    inner = new ceres::CauchyLoss(cfg.scale);
-  } else if (cfg.name == "arctan") {
-    inner = new ceres::ArctanLoss(cfg.scale);
-  } else if (cfg.name == "softlone" || cfg.name == "soft_l_one") {
-    inner = new ceres::SoftLOneLoss(cfg.scale);
-  } else {
-    throw std::invalid_argument(
-        "Unknown LossFunctionConfig.name: '" + cfg.name +
-        "'. Expected one of {trivial, huber, cauchy, arctan, softlone}.");
-  }
-
-  if (cfg.weight == 1.0) {
-    return std::shared_ptr<ceres::LossFunction>(inner);
-  }
-  return std::make_shared<ceres::ScaledLoss>(
-      inner, cfg.weight, ceres::TAKE_OWNERSHIP);
-}
 
 }  // namespace colmap
