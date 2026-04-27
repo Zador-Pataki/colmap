@@ -18,18 +18,16 @@ namespace py = pybind11;
 
 namespace {
 
-// Replicate glomap's ViewGraphCalibrator::Solve() flow on top of colmap's pure
+// Drives ViewGraphCalibrator::Solve()'s flow on top of colmap's pure
 // CalibrateFocalLengths function. Bypasses colmap4's higher-level
-// CalibrateViewGraph wrapper to preserve byte-for-byte parity with
-// pyglomap.run_view_graph_calibration during the pyglomap → pycolmap port.
-// Adopting the wrapper's richer behavior (cross_validate_prior_focal_lengths,
-// reestimate_relative_pose, F/E recomputation, config flips) is tracked in
-// videosfm-private issue #40.
+// CalibrateViewGraph wrapper because that wrapper assumes a Database +
+// Reconstruction; videosfm-private issue #40 tracks adopting its richer
+// behavior (cross_validate_prior_focal_lengths, reestimate_relative_pose,
+// F/E recomputation, config flips) once the dict-state model is replaced.
 //
-// Returns a dict {"view_graph", "cameras", "images"} with the mutated
-// state. Mirrors pyglomap.run_view_graph_calibration's return shape so the
-// caller can rebind locally (pybind11 auto-converts the input dicts to C++
-// copies, so mutations propagate via the returned dict, not the inputs).
+// Returns a dict {"view_graph", "cameras", "images"} with the mutated state.
+// Round-trips through fresh dicts because pybind11 auto-converts the input
+// dicts to C++ copies — mutations would otherwise be lost on return.
 py::dict RunViewGraphCalibration(CorrespondenceGraph& view_graph,
                                  py::dict cameras_py,
                                  py::dict images_py,
@@ -92,7 +90,7 @@ py::dict RunViewGraphCalibration(CorrespondenceGraph& view_graph,
   }
 
   // FilterImagePairs: invalidate pairs whose squared calibration error exceeds
-  // threshold. Mirrors glomap::ViewGraphCalibrator::FilterImagePairs.
+  // threshold.
   const double max_err_sq =
       options.max_calibration_error * options.max_calibration_error;
   size_t invalid_counter = 0;
@@ -144,9 +142,8 @@ void BindViewGraphCalibration(py::module& m) {
         "cameras"_a,
         "images"_a,
         "options"_a,
-        "Run view graph focal-length calibration on a CorrespondenceGraph + "
-        "cameras + images, bypassing colmap4's full CalibrateViewGraph "
-        "wrapper. Used during the pyglomap → pycolmap migration to preserve "
-        "byte-for-byte parity with pyglomap.run_view_graph_calibration; see "
-        "videosfm-private issue #40 for adopting the wrapper later.");
+        "Run view graph focal-length calibration on a dict-of-cameras + "
+        "dict-of-images, bypassing colmap4's full CalibrateViewGraph wrapper "
+        "(which assumes a Reconstruction). Adopting the wrapper's richer "
+        "behavior is tracked in videosfm-private issue #40.");
 }

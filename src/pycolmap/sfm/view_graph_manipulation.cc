@@ -18,11 +18,11 @@ namespace py = pybind11;
 namespace {
 
 // Wraps colmap::UpdateImagePairsConfig with the dict-in / dict-out pattern
-// pyglomap.update_image_pairs_config uses, so the migrated videosfm caller
-// can drop the to_pyglomap / from_pyglomap shim around it. cameras and
-// images are explicitly deep-copied via py::cast on entry and exit because
-// pybind11's STL caster + classh<Image> shared_ptr holder can move-from
-// values during round-trip and silently lose data members.
+// used by callers that operate on dict-of-cameras + dict-of-images rather
+// than a Reconstruction. cameras and images are explicitly deep-copied via
+// py::cast on entry and exit because pybind11's STL caster + classh<Image>
+// shared_ptr holder can move-from values during round-trip and silently
+// lose data members.
 py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& view_graph,
                                    py::dict cameras_py,
                                    py::dict images_py) {
@@ -45,8 +45,8 @@ py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& view_graph,
   }
 
   // Build fresh Python dicts for the result; cameras/images are unchanged
-  // here but we round-trip them anyway to match the pyglomap return shape
-  // (the chained decompose_rel_pose call expects all three keys).
+  // here but we round-trip them anyway because the chained decompose_rel_pose
+  // call expects all three keys in its input dict.
   py::dict cameras_out;
   for (auto& [cid, cam] : cameras) {
     cameras_out[py::cast(cid)] = py::cast(cam);

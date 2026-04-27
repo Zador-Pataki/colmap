@@ -145,10 +145,10 @@ void BindSceneImage(py::module& m) {
       .def("has_pixel_covariances",
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
-      // glomap-fork per-feature/per-image fields. Bound as def_property with
-      // Eigen-typed getters/setters (matching pyglomap.Image semantics) so
-      // Python sees numpy.ndarray rather than list — the existing videosfm
-      // code does numpy fancy-indexing on these (e.g. depth_priors[matches]).
+      // Fork-extension per-feature/per-image fields. Bound as def_property
+      // with Eigen-typed getters/setters so Python sees numpy.ndarray rather
+      // than list — videosfm callers do numpy fancy-indexing on these
+      // (e.g. depth_priors[matches]).
       .def_property(
           "depth_priors",
           [](const Image& self) -> Eigen::VectorXd {
