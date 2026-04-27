@@ -4,6 +4,7 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -97,11 +98,16 @@ class RotationEstimator {
   // Estimates the global orientations of all views.
   // Solves rotation averaging and registers frames with computed poses.
   // active_image_ids defines which images to include.
+  // ``final_weights`` (out, optional): per-pair IRLS weight from the last
+  // successful iteration. Populated only when SolveIRLS runs (skipped on
+  // L1-only path or M11 video-Ceres path).
   // Returns true on successful estimation.
-  bool EstimateRotations(const PoseGraph& pose_graph,
-                         const std::vector<PosePrior>& pose_priors,
-                         const std::unordered_set<image_t>& active_image_ids,
-                         Reconstruction& reconstruction);
+  bool EstimateRotations(
+      const PoseGraph& pose_graph,
+      const std::vector<PosePrior>& pose_priors,
+      const std::unordered_set<image_t>& active_image_ids,
+      Reconstruction& reconstruction,
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr);
 
  private:
   // Maybe solves 1-DOF rotation averaging on the gravity-aligned subset.
@@ -117,7 +123,8 @@ class RotationEstimator {
       const PoseGraph& pose_graph,
       const std::vector<PosePrior>& pose_priors,
       const std::unordered_set<image_t>& active_image_ids,
-      Reconstruction& reconstruction);
+      Reconstruction& reconstruction,
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr);
 
   // Initializes rotations from maximum spanning tree.
   void InitializeFromMaximumSpanningTree(
@@ -139,9 +146,14 @@ bool InitializeRigRotationsFromImages(
 // For cameras with unknown cam_from_rig, first estimates their orientations
 // independently using an expanded reconstruction, then initializes the
 // cam_from_rig and runs rotation averaging on the original reconstruction.
-bool RunRotationAveraging(const RotationEstimatorOptions& options,
-                          PoseGraph& pose_graph,
-                          Reconstruction& reconstruction,
-                          const std::vector<PosePrior>& pose_priors);
+// ``final_weights`` (out, optional): per-pair IRLS weight from the last
+// successful iteration of the FINAL solve (if rig expansion runs, only the
+// final solve's weights are returned).
+bool RunRotationAveraging(
+    const RotationEstimatorOptions& options,
+    PoseGraph& pose_graph,
+    Reconstruction& reconstruction,
+    const std::vector<PosePrior>& pose_priors,
+    std::unordered_map<image_pair_t, double>* final_weights = nullptr);
 
 }  // namespace colmap

@@ -68,6 +68,17 @@ class RotationAveragingProblem {
     return pair_constraints_;
   }
 
+  // --- Glomap-fork IRLS final-weight plumb (M8) ---
+  // After a successful IRLS solve, ``RotationAveragingSolver::SolveIRLS``
+  // calls ``SetFinalWeightsFromIRLS(weights_irls)`` to capture the
+  // per-pair IRLS weight from the last successful iteration. videosfm
+  // pipeline reads this for the consecutive-pair-weight degeneracy
+  // diagnostic (rotation_averaging.py:117-129).
+  void SetFinalWeightsFromIRLS(const Eigen::VectorXd& weights_irls);
+  const std::unordered_map<image_pair_t, double>& FinalWeights() const {
+    return final_weights_;
+  }
+
  private:
   // Returns true if frame has gravity prior and gravity mode is enabled.
   bool HasFrameGravity(frame_t frame_id) const;
@@ -115,6 +126,12 @@ class RotationAveragingProblem {
 
   // Active frames for the current solve.
   std::unordered_set<frame_t> active_frame_ids_;
+
+  // --- Glomap-fork IRLS final-weight plumb (M8) ---
+  // Per-pair IRLS weight from the last successful iteration. Populated by
+  // SetFinalWeightsFromIRLS. Empty if SolveIRLS didn't run (e.g. L1-only
+  // path, or video-Ceres path in M11).
+  std::unordered_map<image_pair_t, double> final_weights_;
 };
 
 // Solves the rotation averaging problem using L1 regression followed by IRLS.
