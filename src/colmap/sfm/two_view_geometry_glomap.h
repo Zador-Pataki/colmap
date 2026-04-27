@@ -13,11 +13,22 @@
 // - SampsonError(E, Vec3, Vec3) (depth-aware variant — divides by z+EPS
 //   before applying Sampson formula)
 //
-// Helpers that DID duplicate native (EssentialFromMotion, the Vec2 overload
-// of SampsonError, HomographyError, FundamentalFromMotionAndCameras) were
-// dropped in favor of colmap::EssentialMatrixFromPose,
-// colmap::ComputeSquaredSampsonError, colmap::ComputeSquaredHomographyError,
-// and colmap::FundamentalFromEssentialMatrix respectively.
+// Helpers that duplicated native were dropped:
+// - EssentialFromMotion -> use colmap::EssentialMatrixFromPose
+//   (colmap/geometry/essential_matrix.h:83). Migrated callers in
+//   image_pair_inliers_glomap.cc.
+// - SampsonError(E, Vec2, Vec2) -> use colmap::ComputeSquaredSampsonError
+//   (colmap/geometry/essential_matrix.h:144) with .homogeneous()
+//   conversion at the call site. Migrated callers in
+//   image_pair_inliers_glomap.cc.
+// - HomographyError -> use colmap::ComputeSquaredHomographyError
+//   (colmap/geometry/homography_matrix.h:110, note arg order is
+//   (point1, point2, H)). Migrated callers in image_pair_inliers_glomap.cc.
+// - FundamentalFromMotionAndCameras was a 1-line wrapper with zero
+//   call sites — pure dead-code delete (no migration needed). If a
+//   future caller appears, build it inline as
+//   ``FundamentalFromEssentialMatrix(K2, EssentialMatrixFromPose(pose), K1)``
+//   from colmap/geometry/essential_matrix.h.
 
 namespace colmap {
 namespace glomap_ra {

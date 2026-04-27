@@ -78,6 +78,11 @@ struct GlobalPositionerOptions {
   // ``AddObservationToProblem``. Default OFF preserves vanilla colmap4
   // behavior on Reconstructions that may carry stale exclusion flags.
   // videosfm sets true via ``_to_native_gp_options``.
+  // Note: ``Image::is_excluded`` is itself a glomap-fork field (see
+  // ``colmap/scene/image.h``). Vanilla pycolmap users won't typically
+  // populate it; this gate exists so even when it IS populated (e.g.
+  // by an external pipeline that copy-pasted the field name) the GP
+  // residual count stays unchanged.
   bool use_observation_exclusions = false;
 
   // Gate G-2 (GP-side LC config): when true, ``AddPoint3DToProblem``

@@ -78,10 +78,10 @@ struct RotationEstimatorOptions {
 
   // Gate R-1: when true, ``ComputeMaximumPoseGraphSpanningTree`` penalizes
   // LC-dominated edges (subtracts kLCPenalty=1e9 from edge weight) so the
-  // MST routes through tracking pairs first. Decoupled from
-  // ``use_video_constraints`` (M10 was previously coupled to M11);
-  // videosfm sets this true alongside ``use_video_constraints`` to keep
-  // the existing combined behavior.
+  // MST routes through tracking pairs first. Independent of
+  // ``use_video_constraints`` and of ``skip_risky_LC_pairs``; pre-collapse
+  // (M10) it was implicitly tied to ``use_video_constraints`` but is now
+  // a separate knob — set independently of the Ceres-path opt-in.
   bool prioritize_tracking_in_mst = false;
 
   // If true, switch from L1 + IRLS to a Ceres-based solver with differential

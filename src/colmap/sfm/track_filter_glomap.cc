@@ -87,7 +87,7 @@ int TrackFilter::FilterTrackTriangulationAngle(
     // If the triangulation angle is too small, just remove it
     if (!status) {
       counter++;
-      point3D.track.Elements().clear();
+      point3D.track.SetElements({});
     }
   }
   LOG(INFO) << "Filtered " << counter << " / " << tracks.size()

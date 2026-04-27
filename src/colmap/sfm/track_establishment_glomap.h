@@ -11,6 +11,11 @@
 
 #include <unordered_set>
 
+// The ``colmap::glomap_ra`` namespace is kept post-collapse for binding-path
+// stability — pycolmap exposes these algorithms under a ``glomap_ra``
+// submodule (e.g. ``pycolmap.glomap_ra.filter_tracks_by_angle``) and the
+// videosfm callers depend on those import paths. The C++ types
+// underneath now reuse native colmap (``Point3D``/``Track``/``UnionFind``).
 namespace colmap {
 namespace glomap_ra {
 using ViewGraph = colmap::CorrespondenceGraph;

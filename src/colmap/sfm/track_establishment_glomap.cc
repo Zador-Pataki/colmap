@@ -172,7 +172,7 @@ void TrackEngine::TrackCollection(
         for (const auto& feature : image_id_set.at(image_id)) {
           if ((feature - images_.at(image_id).features[feature_id]).norm() >
               options_.thres_inconsistency) {
-            tracks[track_id].track.Elements().clear();
+            tracks[track_id].track.SetElements({});
             break;
           }
         }
@@ -263,9 +263,18 @@ void TrackEngine::ProcessLoopClosurePairs(
         track_b.track.AddElement(image_id2, point2_idx);
         track_b.track.lc_elements.emplace_back(image_id1, point1_idx);
 
-        // Insert the new tracks
-        tracks.emplace(tid_a, std::move(track_a));
-        tracks.emplace(tid_b, std::move(track_b));
+        // Insert the new tracks. Track ids derive from observation
+        // (image_id, point2D_idx) pairs which must be unique post-MDRP;
+        // assert no collision so a violation surfaces fast rather than
+        // silently dropping a track.
+        const auto inserted_a = tracks.emplace(tid_a, std::move(track_a));
+        THROW_CHECK(inserted_a.second)
+            << "Track id collision on " << tid_a
+            << " — observation key reused unexpectedly";
+        const auto inserted_b = tracks.emplace(tid_b, std::move(track_b));
+        THROW_CHECK(inserted_b.second)
+            << "Track id collision on " << tid_b
+            << " — observation key reused unexpectedly";
 
         // Register in lookup so subsequent LC pairs can find them
         obs_to_track[obs1_key] = tid_a;

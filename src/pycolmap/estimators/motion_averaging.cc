@@ -87,8 +87,11 @@ void BindGlobalPositioner(py::module& m) {
                          "Minimum number of views per track.")
           .def_readwrite("random_seed",
                          &GlobalPositionerOptions::random_seed,
-                         "PRNG seed for random initialization. -1 for "
-                         "non-deterministic. Default 1 for byte-identity.")
+                         "PRNG seed for random initialization. Default -1 "
+                         "(non-deterministic random_device, matches upstream "
+                         "colmap4). When -1 the ctor honors a GP_SEED env "
+                         "var as a documented escape for byte-identity "
+                         "recipes; set explicitly (>=0) to override.")
           .def_readwrite("loss_function_scale",
                          &GlobalPositionerOptions::loss_function_scale,
                          "Scaling factor for the loss function.")
