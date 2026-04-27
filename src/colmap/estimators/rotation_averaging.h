@@ -99,15 +99,18 @@ class RotationEstimator {
   // Solves rotation averaging and registers frames with computed poses.
   // active_image_ids defines which images to include.
   // ``final_weights`` (out, optional): per-pair IRLS weight from the last
-  // successful iteration. Populated only when SolveIRLS runs (skipped on
-  // L1-only path or M11 video-Ceres path).
+  // successful iteration. Populated only when SolveIRLS runs.
+  // ``correspondence_graph`` (in, optional): videosfm-side CG carrying
+  // ImagePair.{inliers, are_lc} fork fields. Required when
+  // ``skip_risky_LC_pairs=true``; nullptr otherwise.
   // Returns true on successful estimation.
   bool EstimateRotations(
       const PoseGraph& pose_graph,
       const std::vector<PosePrior>& pose_priors,
       const std::unordered_set<image_t>& active_image_ids,
       Reconstruction& reconstruction,
-      std::unordered_map<image_pair_t, double>* final_weights = nullptr);
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
  private:
   // Maybe solves 1-DOF rotation averaging on the gravity-aligned subset.
@@ -124,7 +127,8 @@ class RotationEstimator {
       const std::vector<PosePrior>& pose_priors,
       const std::unordered_set<image_t>& active_image_ids,
       Reconstruction& reconstruction,
-      std::unordered_map<image_pair_t, double>* final_weights = nullptr);
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   // Initializes rotations from maximum spanning tree.
   void InitializeFromMaximumSpanningTree(
@@ -149,11 +153,15 @@ bool InitializeRigRotationsFromImages(
 // ``final_weights`` (out, optional): per-pair IRLS weight from the last
 // successful iteration of the FINAL solve (if rig expansion runs, only the
 // final solve's weights are returned).
+// ``correspondence_graph`` (in, optional): videosfm-side CG carrying
+// ImagePair.{inliers, are_lc} fork fields. Required when
+// ``skip_risky_LC_pairs=true``.
 bool RunRotationAveraging(
     const RotationEstimatorOptions& options,
     PoseGraph& pose_graph,
     Reconstruction& reconstruction,
     const std::vector<PosePrior>& pose_priors,
-    std::unordered_map<image_pair_t, double>* final_weights = nullptr);
+    std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+    const class CorrespondenceGraph* correspondence_graph = nullptr);
 
 }  // namespace colmap

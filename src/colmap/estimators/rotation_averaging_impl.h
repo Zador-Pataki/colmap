@@ -1,6 +1,7 @@
 #pragma once
 
 #include "colmap/estimators/rotation_averaging.h"
+#include "colmap/scene/correspondence_graph.h"
 
 #include <optional>
 #include <variant>
@@ -38,11 +39,13 @@ class RotationAveragingProblem {
     std::variant<GravityAligned1DOF, Full3DOF> constraint;
   };
 
-  RotationAveragingProblem(const PoseGraph& pose_graph,
-                           const std::vector<PosePrior>& pose_priors,
-                           const RotationEstimatorOptions& options,
-                           const std::unordered_set<image_t>& active_image_ids,
-                           Reconstruction& reconstruction);
+  RotationAveragingProblem(
+      const PoseGraph& pose_graph,
+      const std::vector<PosePrior>& pose_priors,
+      const RotationEstimatorOptions& options,
+      const std::unordered_set<image_t>& active_image_ids,
+      Reconstruction& reconstruction,
+      const CorrespondenceGraph* correspondence_graph = nullptr);
 
   // Computes residual vector b from current rotation estimates.
   void ComputeResiduals();
@@ -132,6 +135,14 @@ class RotationAveragingProblem {
   // SetFinalWeightsFromIRLS. Empty if SolveIRLS didn't run (e.g. L1-only
   // path, or video-Ceres path in M11).
   std::unordered_map<image_pair_t, double> final_weights_;
+
+  // --- Glomap-fork skip_risky_LC_pairs (M9) ---
+  // Optional CorrespondenceGraph reference for reading fork ImagePair
+  // fields (``inliers``, ``are_lc``) — needed by skip_risky_LC_pairs in
+  // BuildPairConstraints. PoseGraph::Edge is a strict subset of
+  // CorrespondenceGraph::ImagePair and doesn't carry these fork fields,
+  // so the CG must be plumbed alongside.
+  const CorrespondenceGraph* correspondence_graph_ = nullptr;
 };
 
 // Solves the rotation averaging problem using L1 regression followed by IRLS.

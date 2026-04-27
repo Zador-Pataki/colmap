@@ -80,8 +80,10 @@ RotationAveragingProblem::RotationAveragingProblem(
     const std::vector<PosePrior>& pose_priors,
     const RotationEstimatorOptions& options,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction)
-    : options_(options) {
+    Reconstruction& reconstruction,
+    const CorrespondenceGraph* correspondence_graph)
+    : options_(options),
+      correspondence_graph_(correspondence_graph) {
   // Derive active_frame_ids from active_image_ids, and cache mappings.
   for (const image_t image_id : active_image_ids) {
     const auto& image = reconstruction.Image(image_id);
@@ -230,6 +232,33 @@ void RotationAveragingProblem::BuildPairConstraints(
 
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+
+    // --- Glomap-fork skip_risky_LC_pairs (M9) ---
+    // Skip pairs whose LC inliers strictly exceed non-LC inliers; LC-
+    // dominated pairs are loop-closures whose relative rotation often
+    // disagrees with track-based geometry and breaks RA convergence.
+    // Reads ImagePair.{inliers, are_lc} from the videosfm-side
+    // CorrespondenceGraph plumbed in via ctor; PoseGraph::Edge doesn't
+    // carry these fork fields.
+    if (options_.skip_risky_LC_pairs && correspondence_graph_ != nullptr) {
+      const auto& cg_map = correspondence_graph_->ImagePairsMap();
+      auto cg_pair_it = cg_map.find(pair_id);
+      if (cg_pair_it != cg_map.end()) {
+        const auto& cg_pair = cg_pair_it->second;
+        if (!cg_pair.inliers.empty() && !cg_pair.are_lc.empty()) {
+          size_t lc_count = 0;
+          for (const auto idx : cg_pair.inliers) {
+            if (idx < cg_pair.are_lc.size() && cg_pair.are_lc[idx]) {
+              ++lc_count;
+            }
+          }
+          if (lc_count > cg_pair.inliers.size() - lc_count) {
+            continue;
+          }
+        }
+      }
+    }
+
     const auto& image1 = reconstruction.Image(image_id1);
     const auto& image2 = reconstruction.Image(image_id2);
     const auto& frame1 = *image1.FramePtr();

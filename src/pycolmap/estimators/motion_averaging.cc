@@ -411,6 +411,7 @@ void BindRotationEstimator(py::module& m) {
          PoseGraph& pose_graph,
          Reconstruction& reconstruction,
          const std::vector<PosePrior>& pose_priors,
+         const CorrespondenceGraph* correspondence_graph,
          bool extract_final_weights) {
         std::unordered_map<image_pair_t, double> final_weights;
         bool success = false;
@@ -421,7 +422,8 @@ void BindRotationEstimator(py::module& m) {
               pose_graph,
               reconstruction,
               pose_priors,
-              extract_final_weights ? &final_weights : nullptr);
+              extract_final_weights ? &final_weights : nullptr,
+              correspondence_graph);
         }
         if (!extract_final_weights) {
           return py::cast(success);
@@ -439,13 +441,15 @@ void BindRotationEstimator(py::module& m) {
       "pose_graph"_a,
       "reconstruction"_a,
       "pose_priors"_a,
+      "correspondence_graph"_a = nullptr,
       "extract_final_weights"_a = false,
       "High-level rotation averaging solver that handles rig expansion. "
       "Returns True if rotation averaging succeeded. When "
       "``extract_final_weights=True``, returns ``{success, final_weights}`` "
-      "dict instead, where ``final_weights`` is the per-pair IRLS weight "
-      "from the last successful iteration (used by videosfm for "
-      "consecutive-pair-weight degeneracy logging).");
+      "dict instead. ``correspondence_graph`` is required when "
+      "``options.skip_risky_LC_pairs=True`` so the LC-majority filter can "
+      "read ImagePair.{inliers, are_lc} fork fields (PoseGraph::Edge "
+      "doesn't carry them).");
 }
 
 void BindMotionAveraging(py::module& m) {

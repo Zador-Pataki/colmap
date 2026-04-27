@@ -213,6 +213,13 @@ class CorrespondenceGraph {
   inline std::unordered_map<image_pair_t, ImagePair>& MutableImagePairs() {
     return image_pairs_;
   }
+  // Const accessor for the internal image_pairs map. Used by RA's
+  // skip_risky_LC_pairs path (M9) to read fork ImagePair fields
+  // (inliers, are_lc) without taking mutable access.
+  inline const std::unordered_map<image_pair_t, ImagePair>& ImagePairsMap()
+      const {
+    return image_pairs_;
+  }
 
   // Check whether the image point has correspondences.
   inline bool HasCorrespondences(image_t image_id, point2D_t point2D_idx) const;
