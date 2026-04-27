@@ -7,6 +7,13 @@
 #include "colmap/util/types.h"  // image_t, camera_t, image_pair_t
 #include <unordered_map>
 
+// TODO(dedup-glomap-vs-colmap4): FilterTrackTriangulationAngle has the
+// same math as ObservationManager::FilterPoints3DWithSmallTriangulationAngle
+// (colmap/scene/observation_manager.h:125) but operates on
+// glomap_ra::Track pre-Point3D state. After the Track-shape collapse
+// (track_establishment_glomap), this whole TU can call native directly.
+// See .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 

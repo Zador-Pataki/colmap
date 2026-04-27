@@ -8,6 +8,13 @@
 #include <unordered_map>
 #include "colmap/util/logging.h"
 
+// TODO(dedup-glomap-vs-colmap4): ImagePairsInlierCount is unique
+// (depth-aware re-scorer for MDRP), but its interior calls fork-side
+// SampsonError/HomographyError that duplicate native helpers (see
+// two_view_geometry_glomap.h). Once those are routed to native this
+// TU shrinks ~30 LOC. See
+// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 using ViewGraph = colmap::CorrespondenceGraph;

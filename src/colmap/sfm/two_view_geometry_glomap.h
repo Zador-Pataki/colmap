@@ -7,6 +7,15 @@
 #include "colmap/util/types.h"
 #include "colmap/util/logging.h"
 
+// TODO(dedup-glomap-vs-colmap4): EssentialFromMotion duplicates
+// EssentialMatrixFromPose at colmap/geometry/essential_matrix.cc:97;
+// SampsonError(E, Vec2, Vec2) duplicates ComputeSquaredSampsonError at
+// essential_matrix.cc:168; HomographyError duplicates
+// ComputeSquaredHomographyError at colmap/geometry/homography_matrix.cc:266.
+// CheckCheirality / GetOrientationSignum / FundamentalFromMotionAndCameras /
+// SampsonError(Vec3) are extensions or unique. See
+// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 

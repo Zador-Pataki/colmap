@@ -6,6 +6,14 @@
 
 #include <Eigen/Geometry>
 
+// TODO(dedup-glomap-vs-colmap4): DegToRad/RadToDeg duplicate
+// colmap::DegToRad/RadToDeg at colmap/math/math.h:59-64,188-200.
+// RotationToAngleAxis / AngleAxisToRotation duplicate
+// RotationMatrixToAngleAxis / AngleAxisToRotationMatrix at
+// colmap/geometry/pose.cc:131,136. The 4 short Calc* helpers and
+// Rigid3dToAngleAxis are unique. See
+// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 

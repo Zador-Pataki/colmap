@@ -10,6 +10,16 @@
 
 #include <unordered_set>
 
+// TODO(dedup-glomap-vs-colmap4): vendored ``Track`` / ``Observation``
+// ~ colmap::Track (scene/track.h:53) + colmap::TrackElement (:41), and
+// ``lc_elements`` already exists at colmap/scene/track.h:93. Replacing
+// the vendored types with native colmap::Track removes ~90 LOC of
+// fork↔native round-tripping at the binding boundary, and lets
+// track_filter_glomap call ObservationManager::FilterPoints3DWithSmallTriangulationAngle
+// directly. TrackEngine::Establish*/FindTracksForProblem are unique
+// algorithms (keep). See
+// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 using ViewGraph = colmap::CorrespondenceGraph;

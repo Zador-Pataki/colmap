@@ -2,6 +2,12 @@
 #include <cstdint>
 #include <unordered_map>
 
+// TODO(dedup-glomap-vs-colmap4): the entire body of this file duplicates
+// colmap::UnionFind<T> at colmap/math/union_find.h:40 (native is a strict
+// superset — adds Reserve/FindIfExists/Compress/Parents). Drop this header
+// and route TrackEngine to the native type. See
+// .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
+
 namespace colmap {
 namespace glomap_ra {
 
