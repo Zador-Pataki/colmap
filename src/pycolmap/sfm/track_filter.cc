@@ -22,7 +22,7 @@ namespace py = pybind11;
 
 namespace {
 
-py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
+py::dict RunFilterTracksByAngle(CorrespondenceGraph& correspondence_graph,
                                 py::dict cameras_py,
                                 py::dict images_py,
                                 py::dict tracks_py,
@@ -50,7 +50,7 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
   {
     py::gil_scoped_release release;
     counter = FilterTracksByAngle(
-        view_graph, cameras, images, tracks, max_angle_error_deg);
+        correspondence_graph, cameras, images, tracks, max_angle_error_deg);
   }
 
   py::dict tracks_out;
@@ -63,7 +63,7 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
   return output;
 }
 
-py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
+py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& correspondence_graph,
                                           py::dict images_py,
                                           py::dict tracks_py,
                                           double min_angle_deg) {
@@ -84,7 +84,7 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
   {
     py::gil_scoped_release release;
     counter = FilterTrackTriangulationAngle(
-        view_graph, images, tracks, min_angle_deg);
+        correspondence_graph, images, tracks, min_angle_deg);
   }
 
   py::dict tracks_out;
@@ -102,7 +102,7 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
 void BindTrackFilter(py::module& m) {
   m.def("filter_tracks_by_angle",
         &RunFilterTracksByAngle,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "tracks"_a,
@@ -114,7 +114,7 @@ void BindTrackFilter(py::module& m) {
         "(number of tracks whose element list shrank).");
   m.def("filter_track_triangulation_angle",
         &RunFilterTrackTriangulationAngle,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "images"_a,
         "tracks"_a,
         "min_angle"_a = 1.,

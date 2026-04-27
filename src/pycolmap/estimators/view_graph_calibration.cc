@@ -25,10 +25,10 @@ namespace {
 // behavior (cross_validate_prior_focal_lengths, reestimate_relative_pose,
 // F/E recomputation, config flips) once the dict-state model is replaced.
 //
-// Returns a dict {"view_graph", "cameras", "images"} with the mutated state.
+// Returns a dict {"correspondence_graph", "cameras", "images"} with the mutated state.
 // Round-trips through fresh dicts because pybind11 auto-converts the input
 // dicts to C++ copies — mutations would otherwise be lost on return.
-py::dict RunViewGraphCalibration(CorrespondenceGraph& view_graph,
+py::dict RunViewGraphCalibration(CorrespondenceGraph& correspondence_graph,
                                  py::dict cameras_py,
                                  py::dict images_py,
                                  const ViewGraphCalibrationOptions& options) {
@@ -48,10 +48,10 @@ py::dict RunViewGraphCalibration(CorrespondenceGraph& view_graph,
 
   // Build inputs: one per CALIBRATED/UNCALIBRATED valid pair with an F matrix.
   std::vector<FocalLengthCalibInput> inputs;
-  inputs.reserve(view_graph.NumImagePairs());
+  inputs.reserve(correspondence_graph.NumImagePairs());
   std::unordered_map<image_pair_t, CorrespondenceGraph::ImagePair*> pair_lookup;
-  pair_lookup.reserve(view_graph.NumImagePairs());
-  for (auto& [pair_id, image_pair] : view_graph.MutableImagePairs()) {
+  pair_lookup.reserve(correspondence_graph.NumImagePairs());
+  for (auto& [pair_id, image_pair] : correspondence_graph.MutableImagePairs()) {
     const auto& tvg = image_pair.two_view_geometry;
     if (tvg.config != TwoViewGeometry::CALIBRATED &&
         tvg.config != TwoViewGeometry::UNCALIBRATED)
@@ -120,7 +120,7 @@ py::dict RunViewGraphCalibration(CorrespondenceGraph& view_graph,
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
@@ -138,7 +138,7 @@ void BindViewGraphCalibration(py::module& m) {
   // is registered and aborts module load. Caller always passes options.
   m.def("run_view_graph_calibration",
         &RunViewGraphCalibration,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "options"_a,

@@ -23,7 +23,7 @@ namespace {
 // py::cast on entry and exit because pybind11's STL caster + classh<Image>
 // shared_ptr holder can move-from values during round-trip and silently
 // lose data members.
-py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& view_graph,
+py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& correspondence_graph,
                                    py::dict cameras_py,
                                    py::dict images_py) {
   std::unordered_map<camera_t, Camera> cameras;
@@ -41,7 +41,7 @@ py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& view_graph,
 
   {
     py::gil_scoped_release release;
-    UpdateImagePairsConfig(view_graph, cameras, images);
+    UpdateImagePairsConfig(correspondence_graph, cameras, images);
   }
 
   // Build fresh Python dicts for the result; cameras/images are unchanged
@@ -56,13 +56,13 @@ py::dict RunUpdateImagePairsConfig(CorrespondenceGraph& view_graph,
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
 }
 
-py::dict RunDecomposeRelPose(CorrespondenceGraph& view_graph,
+py::dict RunDecomposeRelPose(CorrespondenceGraph& correspondence_graph,
                              py::dict cameras_py,
                              py::dict images_py) {
   std::unordered_map<camera_t, Camera> cameras;
@@ -80,7 +80,7 @@ py::dict RunDecomposeRelPose(CorrespondenceGraph& view_graph,
 
   {
     py::gil_scoped_release release;
-    DecomposeRelPose(view_graph, cameras, images);
+    DecomposeRelPose(correspondence_graph, cameras, images);
   }
 
   py::dict cameras_out;
@@ -92,7 +92,7 @@ py::dict RunDecomposeRelPose(CorrespondenceGraph& view_graph,
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
@@ -103,18 +103,18 @@ py::dict RunDecomposeRelPose(CorrespondenceGraph& view_graph,
 void BindViewGraphManipulation(py::module& m) {
   m.def("update_image_pairs_config",
         &RunUpdateImagePairsConfig,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "Reclassify UNCALIBRATED pairs as CALIBRATED if both cameras have "
         "valid focal-length priors and the majority of pairs each camera is "
         "involved in are already CALIBRATED. Recomputes F for newly-upgraded "
         "pairs from the existing cam2_from_cam1. Returns dict with mutated "
-        "view_graph + cameras + images.");
+        "correspondence_graph + cameras + images.");
 
   m.def("decompose_rel_pose",
         &RunDecomposeRelPose,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "For every valid pair whose both cameras have prior focal lengths, "
@@ -124,14 +124,14 @@ void BindViewGraphManipulation(py::module& m) {
 
   m.def("filter_pairs_by_inlier_num",
         &FilterPairsByInlierNum,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "min_inlier_num"_a,
         "Mark pairs invalid when their inlier count is below "
-        "min_inlier_num. Mutates view_graph.image_pairs[*].is_valid.");
+        "min_inlier_num. Mutates correspondence_graph.image_pairs[*].is_valid.");
 
   m.def("filter_pairs_by_inlier_ratio",
         &FilterPairsByInlierRatio,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "min_inlier_ratio"_a,
         "Mark pairs invalid when their inlier ratio (inliers / total "
         "matches) is below min_inlier_ratio.");

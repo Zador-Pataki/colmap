@@ -20,7 +20,7 @@ namespace py = pybind11;
 namespace {
 
 py::dict RunImagePairsInlierCount(
-    CorrespondenceGraph& view_graph,
+    CorrespondenceGraph& correspondence_graph,
     py::dict cameras_py,
     py::dict images_py,
     const InlierThresholdOptions& options,
@@ -41,7 +41,7 @@ py::dict RunImagePairsInlierCount(
   {
     py::gil_scoped_release release;
     ImagePairsInlierCount(
-        view_graph, cameras, images, options, clean_inliers);
+        correspondence_graph, cameras, images, options, clean_inliers);
   }
 
   py::dict cameras_out;
@@ -53,7 +53,7 @@ py::dict RunImagePairsInlierCount(
     images_out[py::cast(iid)] = py::cast(img);
   }
   py::dict output;
-  output["view_graph"] = view_graph;
+  output["correspondence_graph"] = correspondence_graph;
   output["cameras"] = cameras_out;
   output["images"] = images_out;
   return output;
@@ -98,7 +98,7 @@ void BindImagePairInliers(py::module& m) {
 
   m.def("image_pairs_inlier_count",
         &RunImagePairsInlierCount,
-        "view_graph"_a,
+        "correspondence_graph"_a,
         "cameras"_a,
         "images"_a,
         "options"_a,
