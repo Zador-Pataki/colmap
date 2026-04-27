@@ -1,4 +1,4 @@
-// Glomap-fork TrackFilter binding under pycolmap.glomap_ra submodule.
+// SFM-extension TrackFilter binding under pycolmap.sfm_ext submodule.
 // Mirrors the pyglomap.filter_tracks_by_angle and
 // pyglomap.filter_track_triangulation_angle Python signatures verbatim.
 // After the Track-shape collapse, the tracks dict carries
@@ -43,17 +43,17 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
     images.emplace(py::cast<image_t>(item.first),
                    py::cast<Image>(item.second));
   }
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   tracks.reserve(tracks_py.size());
   for (auto item : tracks_py) {
-    tracks.emplace(py::cast<glomap_ra::track_t>(item.first),
+    tracks.emplace(py::cast<sfm_ext::track_t>(item.first),
                    py::cast<Point3D>(item.second));
   }
 
   int counter;
   {
     py::gil_scoped_release release;
-    counter = glomap_ra::TrackFilter::FilterTracksByAngle(
+    counter = sfm_ext::TrackFilter::FilterTracksByAngle(
         view_graph, cameras, images, tracks, max_angle_error);
   }
 
@@ -77,17 +77,17 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
     images.emplace(py::cast<image_t>(item.first),
                    py::cast<Image>(item.second));
   }
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   tracks.reserve(tracks_py.size());
   for (auto item : tracks_py) {
-    tracks.emplace(py::cast<glomap_ra::track_t>(item.first),
+    tracks.emplace(py::cast<sfm_ext::track_t>(item.first),
                    py::cast<Point3D>(item.second));
   }
 
   int counter;
   {
     py::gil_scoped_release release;
-    counter = glomap_ra::TrackFilter::FilterTrackTriangulationAngle(
+    counter = sfm_ext::TrackFilter::FilterTrackTriangulationAngle(
         view_graph, images, tracks, min_angle);
   }
 
@@ -101,21 +101,21 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
   return output;
 }
 
-// Idempotent get-or-create for the `glomap_ra` submodule. Each binding TU
+// Idempotent get-or-create for the `sfm_ext` submodule. Each binding TU
 // has its own anonymous-namespace copy (internal linkage) — they all
 // observe the same Python-level submodule object via py::hasattr().
-py::module GetOrCreateGlomapRaModule(py::module& m) {
-  if (py::hasattr(m, "glomap_ra")) {
-    return m.attr("glomap_ra").cast<py::module>();
+py::module GetOrCreateSfmExtModule(py::module& m) {
+  if (py::hasattr(m, "sfm_ext")) {
+    return m.attr("sfm_ext").cast<py::module>();
   }
-  return m.def_submodule("glomap_ra");
+  return m.def_submodule("sfm_ext");
 }
 
 }  // namespace
 
 void BindTrackFilterGlomap(py::module& m) {
-  py::module m_glomap_ra = GetOrCreateGlomapRaModule(m);
-  m_glomap_ra.def("filter_tracks_by_angle",
+  py::module m_sfm_ext = GetOrCreateSfmExtModule(m);
+  m_sfm_ext.def("filter_tracks_by_angle",
                   &RunFilterTracksByAngle,
                   "view_graph"_a,
                   "cameras"_a,
@@ -124,7 +124,7 @@ void BindTrackFilterGlomap(py::module& m) {
                   "max_angle_error"_a = 1.,
                   "Filter tracks by angle error. Returns dict with keys "
                   "'tracks' (filtered subset) and 'counter' (count removed).");
-  m_glomap_ra.def(
+  m_sfm_ext.def(
       "filter_track_triangulation_angle",
       &RunFilterTrackTriangulationAngle,
       "view_graph"_a,

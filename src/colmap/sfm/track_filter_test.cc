@@ -46,7 +46,7 @@
 #include <gtest/gtest.h>
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 namespace {
 
 // Build a simple PINHOLE camera. ``has_prior`` controls the calibrated/uncalib
@@ -353,5 +353,5 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
 }
 
 }  // namespace
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

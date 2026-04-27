@@ -31,7 +31,7 @@
 //   from colmap/geometry/essential_matrix.h.
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 
 // Cheirality check for essential matrix
 bool CheckCheirality(const Rigid3d& pose,
@@ -55,5 +55,5 @@ double SampsonError(const Eigen::Matrix3d& E,
                     const Eigen::Vector3d& x1,
                     const Eigen::Vector3d& x2);
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

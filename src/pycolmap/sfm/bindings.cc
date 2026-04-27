@@ -15,7 +15,7 @@ void BindTrackFilterGlomap(py::module& m);
 // BindRotationAveragingGlomap removed — videosfm pipeline now drives
 // GP + RA through native pycolmap.GlobalPositionerOptions /
 // RotationEstimatorOptions + pycolmap.run_global_positioning /
-// run_rotation_averaging (post M7 + M12). The pycolmap.glomap_ra
+// run_rotation_averaging (post M7 + M12). The pycolmap.sfm_ext
 // submodule stays alive for track-filter / track-establishment /
 // image-pair-inliers which still bind there.
 

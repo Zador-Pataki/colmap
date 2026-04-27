@@ -10,13 +10,18 @@
 
 #include <unordered_set>
 
-// The ``colmap::glomap_ra`` namespace is kept post-collapse for binding-path
-// stability — pycolmap exposes these algorithms under a ``glomap_ra``
-// submodule (e.g. ``pycolmap.glomap_ra.filter_tracks_by_angle``) and the
-// videosfm callers depend on those import paths. The C++ types
-// underneath now reuse native colmap (``Point3D``/``Track``/``UnionFind``).
+// The ``colmap::sfm_ext`` namespace marks SFM-extension symbols added on
+// top of upstream colmap4 (track establishment + track filtering +
+// pair-inlier scoring). It lets a colmap reviewer see at a glance what is
+// fork-extension vs upstream-native code. pycolmap exposes these
+// algorithms under a ``sfm_ext`` submodule
+// (e.g. ``pycolmap.sfm_ext.filter_tracks_by_angle``); a Python-side alias
+// ``pycolmap.glomap_ra = pycolmap.sfm_ext`` keeps legacy import paths
+// working. The C++ types underneath reuse native colmap
+// (``Point3D``/``Track``/``UnionFind``). Filenames keep the ``_glomap``
+// suffix for now — file rename is a separate, larger churn.
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 // Track shape collapsed onto colmap::Point3D — its ``track`` member
@@ -73,5 +78,5 @@ class TrackEngine {
   const std::unordered_map<image_t, Image>& images_;
 };
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

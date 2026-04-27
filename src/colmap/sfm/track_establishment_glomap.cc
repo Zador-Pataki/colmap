@@ -8,7 +8,7 @@
 #include <utility>
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 
@@ -307,5 +307,5 @@ size_t TrackEngine::FindTracksForProblem(
   return tracks.size();
 }
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

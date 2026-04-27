@@ -5,7 +5,7 @@
 #include "colmap/sfm/two_view_geometry_glomap.h"
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 namespace {
 constexpr double EPS = 1e-12;
 #ifndef TWO_PI
@@ -338,5 +338,5 @@ void ImagePairsInlierCount(ViewGraph& view_graph,
   }
 }
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

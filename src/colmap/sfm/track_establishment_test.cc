@@ -302,7 +302,7 @@ TEST(FindTracksForProblem, LengthFilter) {
   images.emplace(2, MakeRegisteredImage(2, 5));
   images.emplace(3, MakeRegisteredImage(3, 5));
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 5; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
@@ -311,22 +311,22 @@ TEST(FindTracksForProblem, LengthFilter) {
   CorrespondenceGraph corr_graph;
   // High-min variant: tracks have length 3, demand 10.
   {
-    glomap_ra::TrackEstablishmentOptions options;
+    sfm_ext::TrackEstablishmentOptions options;
     options.min_num_view_per_track = 10;
     options.min_num_tracks_per_view = 1000;  // never saturate
-    glomap_ra::TrackEngine engine(corr_graph, images, options);
-    std::unordered_map<glomap_ra::track_t, Point3D> selected;
+    sfm_ext::TrackEngine engine(corr_graph, images, options);
+    std::unordered_map<sfm_ext::track_t, Point3D> selected;
     EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
     EXPECT_TRUE(selected.empty());
   }
 
   // Low-min variant: every length-3 track survives.
   {
-    glomap_ra::TrackEstablishmentOptions options;
+    sfm_ext::TrackEstablishmentOptions options;
     options.min_num_view_per_track = 2;
     options.min_num_tracks_per_view = 1000;
-    glomap_ra::TrackEngine engine(corr_graph, images, options);
-    std::unordered_map<glomap_ra::track_t, Point3D> selected;
+    sfm_ext::TrackEngine engine(corr_graph, images, options);
+    std::unordered_map<sfm_ext::track_t, Point3D> selected;
     EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 5u);
   }
 }
@@ -338,7 +338,7 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
     images.emplace(i, MakeRegisteredImage(i, 3));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 3; ++f) {
     tracks_full.emplace(
         f, MakePoint3DFromElements(
@@ -346,12 +346,12 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
   }
 
   CorrespondenceGraph corr_graph;
-  glomap_ra::TrackEstablishmentOptions options;
+  sfm_ext::TrackEstablishmentOptions options;
   options.min_num_view_per_track = 2;
   options.max_num_view_per_track = 4;
   options.min_num_tracks_per_view = 1000;
-  glomap_ra::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  sfm_ext::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<sfm_ext::track_t, Point3D> selected;
   EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
   EXPECT_TRUE(selected.empty());
 }
@@ -367,16 +367,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   images.emplace(1, std::move(img1));
   images.emplace(2, MakeRegisteredImage(2, 3));  // all valid
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
 
   CorrespondenceGraph corr_graph;
-  glomap_ra::TrackEstablishmentOptions options;
+  sfm_ext::TrackEstablishmentOptions options;
   options.min_num_view_per_track = 2;
   options.min_num_tracks_per_view = 1000;
-  glomap_ra::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  sfm_ext::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<sfm_ext::track_t, Point3D> selected;
   EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
   EXPECT_TRUE(selected.empty());
 }
@@ -393,16 +393,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   images.emplace(1, std::move(img1));
   images.emplace(2, MakeRegisteredImage(2, 3));
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
   tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
 
   CorrespondenceGraph corr_graph;
-  glomap_ra::TrackEstablishmentOptions options;
+  sfm_ext::TrackEstablishmentOptions options;
   options.min_num_view_per_track = 2;
   options.min_num_tracks_per_view = 1000;
-  glomap_ra::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  sfm_ext::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<sfm_ext::track_t, Point3D> selected;
   EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 1u);
   ASSERT_EQ(selected.count(0), 1u);
   EXPECT_EQ(selected.count(1), 0u);
@@ -417,18 +417,18 @@ TEST(FindTracksForProblem, GreedyQuota) {
     images.emplace(i, MakeRegisteredImage(i, 5));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 5; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
   CorrespondenceGraph corr_graph;
-  glomap_ra::TrackEstablishmentOptions options;
+  sfm_ext::TrackEstablishmentOptions options;
   options.min_num_view_per_track = 2;
   options.min_num_tracks_per_view = 2;
-  glomap_ra::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  sfm_ext::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<sfm_ext::track_t, Point3D> selected;
   const size_t n_selected = engine.FindTracksForProblem(tracks_full, selected);
 
   // Each track touches all 3 images so 2 tracks fully satisfy the per-view
@@ -458,18 +458,18 @@ TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
     images.emplace(i, MakeRegisteredImage(i, 3));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 3; ++f) {
     tracks_full.emplace(f,
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
   CorrespondenceGraph corr_graph;
-  glomap_ra::TrackEstablishmentOptions options;
+  sfm_ext::TrackEstablishmentOptions options;
   options.min_num_view_per_track = 2;
   // options.min_num_tracks_per_view stays at default = -1.
-  glomap_ra::TrackEngine engine(corr_graph, images, options);
-  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  sfm_ext::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<sfm_ext::track_t, Point3D> selected;
   // All 3 tracks are kept — the quota gate is disabled by the unsigned cmp.
   EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 3u);
   EXPECT_EQ(selected.size(), 3u);
@@ -575,11 +575,11 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
   auto images = MakeFeatureOnlyImages(kps);
 
-  glomap_ra::TrackEstablishmentOptions opts;
+  sfm_ext::TrackEstablishmentOptions opts;
   opts.min_num_view_per_track = 3;
   opts.thres_inconsistency = 10.0;
-  glomap_ra::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  sfm_ext::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   engine.EstablishFullTracks(tracks);
 
   // Native pass yields 5 tracks; LC pass adds reciprocal lc_elements
@@ -587,9 +587,9 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   EXPECT_EQ(tracks.size(), 5u);
 
   // Locate the two native tracks the LC match's endpoints fall on.
-  const auto kInvalid = std::numeric_limits<glomap_ra::track_t>::max();
-  glomap_ra::track_t tid_a = kInvalid;
-  glomap_ra::track_t tid_b = kInvalid;
+  const auto kInvalid = std::numeric_limits<sfm_ext::track_t>::max();
+  sfm_ext::track_t tid_a = kInvalid;
+  sfm_ext::track_t tid_b = kInvalid;
   for (const auto& [tid, p3d] : tracks) {
     if (TrackHasElement(p3d.track, 1, 0)) tid_a = tid;
     if (TrackHasElement(p3d.track, 4, 1)) tid_b = tid;
@@ -632,11 +632,11 @@ TEST(ProcessLoopClosurePairs, OneExistingTrack) {
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
   auto images = MakeFeatureOnlyImages(kps);
 
-  glomap_ra::TrackEstablishmentOptions opts;
+  sfm_ext::TrackEstablishmentOptions opts;
   opts.min_num_view_per_track = 3;
   opts.thres_inconsistency = 10.0;
-  glomap_ra::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  sfm_ext::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   engine.EstablishFullTracks(tracks);
 
   // 5 native tracks; no new track minted (one side already on a track).
@@ -680,19 +680,19 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 5);
   auto images = MakeFeatureOnlyImages(kps);
 
-  glomap_ra::TrackEstablishmentOptions opts;
+  sfm_ext::TrackEstablishmentOptions opts;
   opts.min_num_view_per_track = 3;
   opts.thres_inconsistency = 10.0;
-  glomap_ra::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  sfm_ext::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   engine.EstablishFullTracks(tracks);
 
   // 5 native tracks + 2 minted = 7.
   EXPECT_EQ(tracks.size(), 7u);
 
-  const auto kInvalid = std::numeric_limits<glomap_ra::track_t>::max();
-  glomap_ra::track_t tid_for_4_2 = kInvalid;
-  glomap_ra::track_t tid_for_5_3 = kInvalid;
+  const auto kInvalid = std::numeric_limits<sfm_ext::track_t>::max();
+  sfm_ext::track_t tid_for_4_2 = kInvalid;
+  sfm_ext::track_t tid_for_5_3 = kInvalid;
   for (const auto& [tid, p3d] : tracks) {
     if (TrackHasElement(p3d.track, 4, 2)) tid_for_4_2 = tid;
     if (TrackHasElement(p3d.track, 5, 3)) tid_for_5_3 = tid;
@@ -703,8 +703,8 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   EXPECT_GE(tid_for_4_2, 5u);
   EXPECT_GE(tid_for_5_3, 5u);
   // Sequential — they differ by exactly 1.
-  const glomap_ra::track_t lo = std::min(tid_for_4_2, tid_for_5_3);
-  const glomap_ra::track_t hi = std::max(tid_for_4_2, tid_for_5_3);
+  const sfm_ext::track_t lo = std::min(tid_for_4_2, tid_for_5_3);
+  const sfm_ext::track_t hi = std::max(tid_for_4_2, tid_for_5_3);
   EXPECT_EQ(hi, lo + 1);
 
   // Each minted track has exactly 1 regular element + 1 lc_element.
@@ -749,11 +749,11 @@ TEST(ProcessLoopClosurePairs, MultipleLCMatchesAcrossPairs) {
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5, 6}, 5);
   auto images = MakeFeatureOnlyImages(kps);
 
-  glomap_ra::TrackEstablishmentOptions opts;
+  sfm_ext::TrackEstablishmentOptions opts;
   opts.min_num_view_per_track = 3;
   opts.thres_inconsistency = 10.0;
-  glomap_ra::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  sfm_ext::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   engine.EstablishFullTracks(tracks);
 
   // 5 native + (2 minted from first LC pair processed) + (0 minted from
@@ -793,11 +793,11 @@ TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 10);
   auto images = MakeFeatureOnlyImages(kps);
 
-  glomap_ra::TrackEstablishmentOptions opts;
+  sfm_ext::TrackEstablishmentOptions opts;
   opts.min_num_view_per_track = 3;
   opts.thres_inconsistency = 10.0;
-  glomap_ra::TrackEngine engine(corr_graph, images, opts);
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  sfm_ext::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks;
   engine.EstablishFullTracks(tracks);
 
   EXPECT_EQ(tracks.size(), 12u);  // 10 native + 2 minted

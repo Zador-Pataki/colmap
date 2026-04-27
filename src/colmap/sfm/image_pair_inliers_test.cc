@@ -24,7 +24,7 @@
 #include <gtest/gtest.h>
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 namespace {
 
 // Build a calibrated pinhole camera with focal=1 and principal point at 0.
@@ -310,5 +310,5 @@ TEST(ImagePairInlierCount, DepthPriorOnVsOff) {
 }
 
 }  // namespace
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

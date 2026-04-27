@@ -23,7 +23,7 @@ namespace {
 py::dict RunEstablishFullTracks(
     CorrespondenceGraph& view_graph,
     py::dict images_py,
-    const glomap_ra::TrackEstablishmentOptions& options) {
+    const sfm_ext::TrackEstablishmentOptions& options) {
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
@@ -31,10 +31,10 @@ py::dict RunEstablishFullTracks(
                    py::cast<Image>(item.second));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   {
     py::gil_scoped_release release;
-    glomap_ra::TrackEngine engine(view_graph, images, options);
+    sfm_ext::TrackEngine engine(view_graph, images, options);
     engine.EstablishFullTracks(tracks_full);
   }
 
@@ -49,7 +49,7 @@ py::dict RunFindTracksForProblem(
     CorrespondenceGraph& view_graph,
     py::dict images_py,
     py::dict tracks_full_py,
-    const glomap_ra::TrackEstablishmentOptions& options) {
+    const sfm_ext::TrackEstablishmentOptions& options) {
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
@@ -57,17 +57,17 @@ py::dict RunFindTracksForProblem(
                    py::cast<Image>(item.second));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_full;
   tracks_full.reserve(tracks_full_py.size());
   for (auto item : tracks_full_py) {
-    tracks_full.emplace(py::cast<glomap_ra::track_t>(item.first),
+    tracks_full.emplace(py::cast<sfm_ext::track_t>(item.first),
                         py::cast<Point3D>(item.second));
   }
 
-  std::unordered_map<glomap_ra::track_t, Point3D> tracks_selected;
+  std::unordered_map<sfm_ext::track_t, Point3D> tracks_selected;
   {
     py::gil_scoped_release release;
-    glomap_ra::TrackEngine engine(view_graph, images, options);
+    sfm_ext::TrackEngine engine(view_graph, images, options);
     engine.FindTracksForProblem(tracks_full, tracks_selected);
   }
 
@@ -82,22 +82,22 @@ py::dict RunFindTracksForProblem(
 
 void BindTrackEstablishmentGlomap(py::module& m) {
   auto PyOpts =
-      py::classh<glomap_ra::TrackEstablishmentOptions>(
+      py::classh<sfm_ext::TrackEstablishmentOptions>(
           m, "TrackEstablishmentOptions")
           .def(py::init<>())
           .def_readwrite("thres_inconsistency",
-                         &glomap_ra::TrackEstablishmentOptions::thres_inconsistency)
+                         &sfm_ext::TrackEstablishmentOptions::thres_inconsistency)
           .def_readwrite(
               "min_num_tracks_per_view",
-              &glomap_ra::TrackEstablishmentOptions::min_num_tracks_per_view)
+              &sfm_ext::TrackEstablishmentOptions::min_num_tracks_per_view)
           .def_readwrite(
               "min_num_view_per_track",
-              &glomap_ra::TrackEstablishmentOptions::min_num_view_per_track)
+              &sfm_ext::TrackEstablishmentOptions::min_num_view_per_track)
           .def_readwrite(
               "max_num_view_per_track",
-              &glomap_ra::TrackEstablishmentOptions::max_num_view_per_track)
+              &sfm_ext::TrackEstablishmentOptions::max_num_view_per_track)
           .def_readwrite("max_num_tracks",
-                         &glomap_ra::TrackEstablishmentOptions::max_num_tracks);
+                         &sfm_ext::TrackEstablishmentOptions::max_num_tracks);
   MakeDataclass(PyOpts);
 
   m.def("establish_full_tracks",

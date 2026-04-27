@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
@@ -30,5 +30,5 @@ struct TrackFilter {
       double min_angle = 1.);
 };
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

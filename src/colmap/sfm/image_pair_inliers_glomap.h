@@ -17,7 +17,7 @@
 // .claude/notes/glomap_audit/audit_glomap_files_vs_colmap4.md.
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 // Vendored from glomap/types.h: thresholds used by inlier scoring +
@@ -48,5 +48,5 @@ void ImagePairsInlierCount(ViewGraph& view_graph,
                            const InlierThresholdOptions& options,
                            bool clean_inliers);
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

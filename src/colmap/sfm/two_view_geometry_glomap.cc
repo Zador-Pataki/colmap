@@ -1,7 +1,7 @@
 #include "colmap/sfm/two_view_geometry_glomap.h"
 
 namespace colmap {
-namespace glomap_ra {
+namespace sfm_ext {
 namespace {
 constexpr double EPS = 1e-12;
 #ifndef TWO_PI
@@ -60,5 +60,5 @@ double SampsonError(const Eigen::Matrix3d& E,
   return r2;
 }
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

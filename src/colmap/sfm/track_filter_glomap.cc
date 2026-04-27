@@ -1,21 +1,12 @@
 #include "colmap/sfm/track_filter_glomap.h"
 
+#include "colmap/geometry/triangulation.h"
 #include "colmap/math/math.h"
 
 namespace colmap {
-namespace glomap_ra {
-
-namespace {
-inline Eigen::Vector3d ImageCenter(const Image& image) {
-  return image.cam_from_world.rotation().inverse() *
-         -image.cam_from_world.translation();
-}
-}  // namespace
-
+namespace sfm_ext {
 
 constexpr double EPS = 1e-12;
-constexpr double HALF_PI = 3.141592653589793238462643383279502884L / 2;
-constexpr double TWO_PI = 2 * 3.141592653589793238462643383279502884L;
 
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
@@ -63,29 +54,45 @@ int TrackFilter::FilterTrackTriangulationAngle(
     const std::unordered_map<image_t, Image>& images,
     std::unordered_map<track_t, Point3D>& tracks,
     double min_angle) {
+  // Mirrors ObservationManager::FindPoints3DWithSmallTriangulationAngle but
+  // operates on the dict-of-tracks state model used by the glomap RA pipeline
+  // instead of a Reconstruction. Shares the underlying angle math via
+  // CalculateTriangulationAngle for consistency with native colmap.
   int counter = 0;
-  double thres = std::cos(DegToRad(min_angle));
+  const double min_angle_rad = DegToRad(min_angle);
+  std::unordered_map<image_t, Eigen::Vector3d> proj_centers;
   for (auto& [track_id, point3D] : tracks) {
-    std::vector<Eigen::Vector3d> pts_calc;
-    pts_calc.reserve(point3D.track.Length());
-    for (const auto& el : point3D.track.Elements()) {
-      const Image& image = images.at(el.image_id);
-      Eigen::Vector3d pt_calc =
-          (point3D.xyz - ImageCenter(image)).normalized();
-      pts_calc.emplace_back(pt_calc);
-    }
-    bool status = false;
-    for (size_t i = 0; i < pts_calc.size(); i++) {
-      for (size_t j = i + 1; j < pts_calc.size(); j++) {
-        if (pts_calc[i].dot(pts_calc[j]) < thres) {
-          status = true;
+    bool keep_point = false;
+    const auto& elements = point3D.track.Elements();
+    for (size_t i1 = 0; i1 < elements.size() && !keep_point; ++i1) {
+      const image_t image_id1 = elements[i1].image_id;
+      auto it1 = proj_centers.find(image_id1);
+      if (it1 == proj_centers.end()) {
+        // Direct read of the RA-shadow ``cam_from_world`` field instead of
+        // Image::ProjectionCenter(), which goes through frame_ptr_ that the
+        // glomap RA pipeline does not populate. This is the standard idiom
+        // throughout this file (see FilterTracksByAngle above).
+        const Rigid3d& cfw = images.at(image_id1).cam_from_world;
+        it1 = proj_centers
+                  .emplace(image_id1,
+                           cfw.rotation().inverse() * -cfw.translation())
+                  .first;
+      }
+      const Eigen::Vector3d& proj_center1 = it1->second;
+      for (size_t i2 = 0; i2 < i1; ++i2) {
+        const Eigen::Vector3d& proj_center2 =
+            proj_centers.at(elements[i2].image_id);
+        const double tri_angle = CalculateTriangulationAngle(
+            proj_center1, proj_center2, point3D.xyz);
+        if (tri_angle >= min_angle_rad) {
+          keep_point = true;
           break;
         }
       }
     }
 
     // If the triangulation angle is too small, just remove it
-    if (!status) {
+    if (!keep_point) {
       counter++;
       point3D.track.SetElements({});
     }
@@ -95,5 +102,5 @@ int TrackFilter::FilterTrackTriangulationAngle(
   return counter;
 }
 
-}  // namespace glomap_ra
+}  // namespace sfm_ext
 }  // namespace colmap

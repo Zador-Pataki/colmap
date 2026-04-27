@@ -70,3 +70,11 @@ __all__.extend(["__version__", "__ceres_version__"])
 
 __version__ = _core.__version__ + "-zador"
 __ceres_version__ = _core.__ceres_version__
+
+# Back-compat alias: the SFM-extension submodule was historically called
+# ``glomap_ra`` (origin: rotation-averaging port from the glomap fork). It
+# has since been renamed to ``sfm_ext`` to reflect that its current
+# contents are track establishment + filtering + pair-inlier scoring —
+# nothing rotation-averaging-specific. videosfm callers may still import
+# via the legacy name; the alias keeps both paths live.
+glomap_ra = sfm_ext  # noqa: F821 (sfm_ext injected by import_module_symbols above)
