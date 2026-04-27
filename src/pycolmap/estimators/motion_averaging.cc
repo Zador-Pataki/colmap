@@ -1,8 +1,11 @@
 #include "colmap/estimators/global_positioning.h"
 #include "colmap/estimators/gravity_refinement.h"
+#include "colmap/estimators/loss_config.h"
 #include "colmap/estimators/rotation_averaging.h"
 
 #include "pycolmap/helpers.h"
+
+#include <cmath>
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
@@ -12,7 +15,42 @@ using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
 
+namespace {
+
+// Helper: bind a LossFunctionConfig field on GlobalPositionerOptions as a
+// dict-typed property accepting / emitting {"name", "scale", "weight"}.
+template <LossFunctionConfig GlobalPositionerOptions::*Member>
+void BindLossField(
+    py::classh<GlobalPositionerOptions>& cls, const char* name,
+    const char* docstring) {
+  cls.def_property(
+      name,
+      [](const GlobalPositionerOptions& self) -> py::dict {
+        py::dict d;
+        d["name"] = (self.*Member).name;
+        d["scale"] = (self.*Member).scale;
+        d["weight"] = (self.*Member).weight;
+        return d;
+      },
+      [](GlobalPositionerOptions& self, const py::dict& d) {
+        (self.*Member).name =
+            d.contains("name") ? py::cast<std::string>(d["name"]) : "trivial";
+        (self.*Member).scale =
+            d.contains("scale") ? py::cast<double>(d["scale"]) : 1.0;
+        (self.*Member).weight =
+            d.contains("weight") ? py::cast<double>(d["weight"]) : 1.0;
+      },
+      docstring);
+}
+
+}  // namespace
+
 void BindGlobalPositioner(py::module& m) {
+  // Glomap-fork PointConstraintType enum (M2).
+  py::enum_<PointConstraintType>(m, "PointConstraintType")
+      .value("BATA", PointConstraintType::BATA)
+      .value("SPLIT_METRIC_DEPTH", PointConstraintType::SPLIT_METRIC_DEPTH);
+
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -50,13 +88,124 @@ void BindGlobalPositioner(py::module& m) {
           .def_readwrite("random_seed",
                          &GlobalPositionerOptions::random_seed,
                          "PRNG seed for random initialization. -1 for "
-                         "non-deterministic.")
+                         "non-deterministic. Default 1 for byte-identity.")
           .def_readwrite("loss_function_scale",
                          &GlobalPositionerOptions::loss_function_scale,
                          "Scaling factor for the loss function.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
-                         "Whether to use custom parameter block ordering.");
+                         "Whether to use custom parameter block ordering.")
+          // --- Glomap-fork additions (M2) ---
+          .def_readwrite(
+              "point_constraint_type",
+              &GlobalPositionerOptions::point_constraint_type,
+              "Per-observation residual structure: BATA (default, native "
+              "behaviour) or SPLIT_METRIC_DEPTH (BATA + 1-D MetricDepthError).")
+          .def_readwrite("use_init",
+                         &GlobalPositionerOptions::use_init,
+                         "If true, skip random init for both camera centers "
+                         "AND track xyz (collapses fork's split flags).")
+          .def_readwrite(
+              "random_init_scale",
+              &GlobalPositionerOptions::random_init_scale,
+              "Cube size for random init of camera centers / points (linear).")
+          .def_readwrite(
+              "use_log_scale_for_depth_map_scales",
+              &GlobalPositionerOptions::use_log_scale_for_depth_map_scales,
+              "If true, dmap_scales_ are log-space and use exp() in "
+              "MetricDepthError.")
+          .def_readwrite(
+              "use_log_residual_for_depth",
+              &GlobalPositionerOptions::use_log_residual_for_depth,
+              "If true, use log-space residual in MetricDepthError for "
+              "points in front of camera.")
+          .def_readwrite(
+              "zero_residual_behind",
+              &GlobalPositionerOptions::zero_residual_behind,
+              "If true, set MetricDepthError residual to 0 for points "
+              "behind camera.")
+          .def_readwrite(
+              "smooth_log_linear_transition",
+              &GlobalPositionerOptions::smooth_log_linear_transition,
+              "If true, C1-blend log<->linear residual at threshold "
+              "(use_log_residual_for_depth=true only).")
+          .def_readwrite(
+              "log_linear_threshold",
+              &GlobalPositionerOptions::log_linear_threshold,
+              "z-depth threshold for smooth_log_linear_transition.")
+          .def_readwrite(
+              "scale_prior_stddev",
+              &GlobalPositionerOptions::scale_prior_stddev,
+              "Per-image scale-prior stddev (linear or log).")
+          .def_readwrite(
+              "filter_depth_outliers",
+              &GlobalPositionerOptions::filter_depth_outliers,
+              "If true, run pre-Solve 3-sigma log-space depth-outlier "
+              "filter.")
+          .def_property(
+              "initial_dmap_scales",
+              [](const GlobalPositionerOptions& self) -> py::object {
+                if (!self.initial_dmap_scales.has_value()) {
+                  return py::none();
+                }
+                py::dict d;
+                for (const auto& [image_id, scale] :
+                     *self.initial_dmap_scales) {
+                  d[py::cast(image_id)] = scale;
+                }
+                return d;
+              },
+              [](GlobalPositionerOptions& self, py::object value) {
+                if (value.is_none()) {
+                  self.initial_dmap_scales.reset();
+                  return;
+                }
+                std::unordered_map<image_t, double> map;
+                for (auto item : py::cast<py::dict>(value)) {
+                  map[py::cast<image_t>(item.first)] =
+                      py::cast<double>(item.second);
+                }
+                self.initial_dmap_scales = std::move(map);
+              },
+              "Caller-supplied {image_id: linear_scale} seed for dmap_scales_ "
+              "(GP1 -> GP2 handoff). None = use defaults.");
+
+  // 10 LossFunctionConfig dict-typed properties (M2).
+  BindLossField<&GlobalPositionerOptions::loss_normal_geometry>(
+      PyGlobalPositionerOptions, "loss_normal_geometry",
+      "Loss config for non-LC geometry residuals (default-bucket).");
+  BindLossField<&GlobalPositionerOptions::loss_normal_depth>(
+      PyGlobalPositionerOptions, "loss_normal_depth",
+      "Loss config for non-LC metric-depth residuals (default-bucket).");
+  BindLossField<&GlobalPositionerOptions::loss_lc_geometry>(
+      PyGlobalPositionerOptions, "loss_lc_geometry",
+      "Loss config for LC-observation geometry residuals.");
+  BindLossField<&GlobalPositionerOptions::loss_lc_depth>(
+      PyGlobalPositionerOptions, "loss_lc_depth",
+      "Loss config for LC-observation metric-depth residuals.");
+  BindLossField<&GlobalPositionerOptions::loss_normal_geometry_inlier>(
+      PyGlobalPositionerOptions, "loss_normal_geometry_inlier",
+      "Loss config for non-LC geometry residuals on is_inlier observations.");
+  BindLossField<&GlobalPositionerOptions::loss_normal_depth_inlier>(
+      PyGlobalPositionerOptions, "loss_normal_depth_inlier",
+      "Loss config for non-LC metric-depth residuals on is_inlier "
+      "observations.");
+  BindLossField<&GlobalPositionerOptions::loss_normal_depth_outlier>(
+      PyGlobalPositionerOptions, "loss_normal_depth_outlier",
+      "Loss config for non-LC metric-depth residuals on MDRP-flagged outlier "
+      "observations.");
+  BindLossField<&GlobalPositionerOptions::loss_normal_geometry_trackstart>(
+      PyGlobalPositionerOptions, "loss_normal_geometry_trackstart",
+      "Loss config for non-LC geometry residuals on track-anchor "
+      "observations.");
+  BindLossField<&GlobalPositionerOptions::loss_normal_depth_trackstart>(
+      PyGlobalPositionerOptions, "loss_normal_depth_trackstart",
+      "Loss config for non-LC metric-depth residuals on track-anchor "
+      "observations.");
+  BindLossField<&GlobalPositionerOptions::loss_scale_prior>(
+      PyGlobalPositionerOptions, "loss_scale_prior",
+      "Loss config for the per-image scale-prior residual.");
+
   MakeDataclass(PyGlobalPositionerOptions);
 
   m.def(
@@ -64,16 +213,49 @@ void BindGlobalPositioner(py::module& m) {
       [](const GlobalPositionerOptions& options,
          const PoseGraph& pose_graph,
          Reconstruction& reconstruction) {
-        py::gil_scoped_release release;
-        bool success =
-            RunGlobalPositioning(options, pose_graph, reconstruction);
-        return success;
+        GlobalPositioner positioner(options);
+        bool success = false;
+        {
+          py::gil_scoped_release release;
+          success = positioner.Solve(pose_graph, reconstruction);
+        }
+        // Convert dmap_scales_ to linear-space dict for return.
+        py::dict dmap_scale_map;
+        for (const auto& [image_id, scale] : positioner.GetDmapScales()) {
+          const double linear = options.use_log_scale_for_depth_map_scales
+                                    ? std::exp(scale)
+                                    : scale;
+          dmap_scale_map[py::cast(image_id)] = linear;
+        }
+        py::dict result;
+        result["success"] = success;
+        result["dmap_scale_map"] = dmap_scale_map;
+        // Nested map: {image_id: {linear, log}}. Mirrors fork's
+        // GetDepthMapScaleMapNested return shape; videosfm pipeline reads it
+        // for viz (mostly an alias of dmap_scale_map for our linear path).
+        py::dict dmap_scale_map_nested;
+        for (const auto& [image_id, scale] : positioner.GetDmapScales()) {
+          py::dict per_image;
+          const double linear = options.use_log_scale_for_depth_map_scales
+                                    ? std::exp(scale)
+                                    : scale;
+          per_image["linear"] = linear;
+          per_image["log"] = options.use_log_scale_for_depth_map_scales
+                                 ? scale
+                                 : std::log(std::max(scale, 1e-9));
+          dmap_scale_map_nested[py::cast(image_id)] = per_image;
+        }
+        result["dmap_scale_map_nested"] = dmap_scale_map_nested;
+        return result;
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "Solve global positioning using point-to-camera constraints. Returns "
-      "True if optimization succeeded.");
+      "a dict {'success': bool, 'dmap_scale_map': Dict[image_id, float], "
+      "'dmap_scale_map_nested': Dict[image_id, {'linear', 'log'}]}. "
+      "``reconstruction`` is mutated in place with the optimized poses + "
+      "track xyz.");
 }
 
 void BindGravityRefiner(py::module& m) {

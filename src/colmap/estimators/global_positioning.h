@@ -135,6 +135,15 @@ class GlobalPositioner {
 
   GlobalPositionerOptions& GetOptions() { return options_; }
 
+  // --- Glomap-fork accessor (M7) ---
+  // Returns the per-image dmap_scales_ map after Solve(). Values are in
+  // the parameterization the optimizer ran in (log-space when
+  // options_.use_log_scale_for_depth_map_scales=true, linear otherwise).
+  // Pycolmap binding converts to linear space before returning to Python.
+  const std::unordered_map<image_t, double>& GetDmapScales() const {
+    return dmap_scales_;
+  }
+
  protected:
   void SetupProblem(const PoseGraph& pose_graph,
                     const Reconstruction& reconstruction);
