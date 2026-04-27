@@ -29,6 +29,8 @@
 
 #include "colmap/estimators/ceres_loss.h"
 
+#include "colmap/util/logging.h"
+
 namespace colmap {
 
 std::unique_ptr<ceres::LossFunction> CreateLossFunction(
@@ -43,7 +45,8 @@ std::unique_ptr<ceres::LossFunction> CreateLossFunction(
     case LossFunctionType::HUBER:
       return std::make_unique<ceres::HuberLoss>(loss_function_scale);
   }
-  return nullptr;
+  LOG(FATAL) << "Unhandled LossFunctionType: "
+             << static_cast<int>(loss_function_type);
 }
 
 }  // namespace colmap

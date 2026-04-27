@@ -266,20 +266,13 @@ void BindGlobalPositioner(py::module& m) {
         py::dict result;
         result["success"] = success;
         result["dmap_scale_map"] = dmap_scale_map;
-        // ``dmap_scale_map_nested``: alias of dmap_scale_map (Dict[image_id,
-        // linear_scale]). Mirrors fork's binding return shape — videosfm
-        // caller treats it as a flat scalar map (np.log() consumed in
-        // viz). Native colmap doesn't carry frame-vs-image nesting since
-        // trivial-rig means image_id == frame_id.
-        result["dmap_scale_map_nested"] = dmap_scale_map;
         return result;
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "Solve global positioning using point-to-camera constraints. Returns "
-      "a dict {'success': bool, 'dmap_scale_map': Dict[image_id, float], "
-      "'dmap_scale_map_nested': Dict[image_id, {'linear', 'log'}]}. "
+      "a dict {'success': bool, 'dmap_scale_map': Dict[image_id, float]}. "
       "``reconstruction`` is mutated in place with the optimized poses + "
       "track xyz.");
 }
