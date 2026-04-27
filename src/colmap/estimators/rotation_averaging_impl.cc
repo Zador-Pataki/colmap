@@ -517,11 +517,6 @@ void RotationAveragingProblem::SetFinalWeightsFromIRLS(
 }
 
 void RotationAveragingProblem::ComputeResiduals() {
-  // Set PRNG seed for deterministic jitter injection.
-  if (options_.random_seed >= 0) {
-    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
-  }
-
   for (const auto& [pair_id, constraint] : pair_constraints_) {
     const frame_t frame_id1 = image_id_to_frame_id_.at(constraint.image_id1);
     const frame_t frame_id2 = image_id_to_frame_id_.at(constraint.image_id2);
@@ -703,6 +698,14 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 }
 
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
+  // Seed the global PRNG once per solve. ComputeResiduals' boundary
+  // jitter consumer (RandomUniformReal) advances naturally across
+  // iterations from this seed; resetting per-iteration would replay
+  // the identical jitter sequence and break IRLS convergence.
+  if (options_.random_seed >= 0) {
+    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
+  }
+
   // Video-Ceres path: mutually exclusive with use_gravity. Replaces
   // L1+IRLS with a Ceres optimization over per-frame 3-DOF angle-axis
   // blocks. The LC-penalty MST initialization (also gated on
