@@ -39,18 +39,12 @@ COLMAP_ADD_LIBRARY(
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
         relative_pose_estimation.h relative_pose_estimation.cc
-        rotation_averaging_glomap.h rotation_averaging_glomap.cc
         rigid3d_glomap.h rigid3d_glomap.cc
-        tree_glomap.h tree_glomap.cc
-        l1_solver_glomap.h
         track_establishment_glomap.h track_establishment_glomap.cc
         union_find_glomap.h
         image_pair_inliers_glomap.h image_pair_inliers_glomap.cc
         two_view_geometry_glomap.h two_view_geometry_glomap.cc
         view_graph_manipulation.h view_graph_manipulation.cc
-        optimization_base_glomap.h
-        cost_function_glomap.h
-        global_positioning_glomap.h global_positioning_glomap.cc
         track_filter_glomap.h track_filter_glomap.cc
     PUBLIC_LINK_LIBS
         colmap_scene

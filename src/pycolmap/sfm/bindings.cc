@@ -7,12 +7,17 @@ void BindIncrementalTriangulator(py::module& m);
 void BindIncrementalMapper(py::module& m);
 void BindViewGraphManipulation(py::module& m);
 void BindRelativePoseEstimation(py::module& m);
-void BindRotationAveragingGlomap(py::module& m);
 void BindTrackEstablishmentGlomap(py::module& m);
 void BindImagePairInliersGlomap(py::module& m);
-void BindGlobalPositionerOptions(py::module& m);
-void BindGlobalPositioningGlomap(py::module& m);
 void BindTrackFilterGlomap(py::module& m);
+
+// M13: BindGlobalPositionerOptions, BindGlobalPositioningGlomap, and
+// BindRotationAveragingGlomap removed — videosfm pipeline now drives
+// GP + RA through native pycolmap.GlobalPositionerOptions /
+// RotationEstimatorOptions + pycolmap.run_global_positioning /
+// run_rotation_averaging (post M7 + M12). The pycolmap.glomap_ra
+// submodule stays alive for track-filter / track-establishment /
+// image-pair-inliers which still bind there.
 
 void BindSfm(py::module& m) {
   BindObservationManager(m);
@@ -20,10 +25,7 @@ void BindSfm(py::module& m) {
   BindIncrementalMapper(m);
   BindViewGraphManipulation(m);
   BindRelativePoseEstimation(m);
-  BindRotationAveragingGlomap(m);
   BindTrackEstablishmentGlomap(m);
   BindImagePairInliersGlomap(m);
-  BindGlobalPositionerOptions(m);
-  BindGlobalPositioningGlomap(m);
   BindTrackFilterGlomap(m);
 }
