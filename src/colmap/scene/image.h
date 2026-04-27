@@ -353,13 +353,21 @@ const std::vector<struct Point2D>& Image::Points2D() const { return points2D_; }
 std::vector<struct Point2D>& Image::Points2D() { return points2D_; }
 
 bool Image::operator==(const Image& other) const {
+  // Identity-equality (NOT bit-equality across pipeline state). Fork
+  // mutable-state fields (depth_priors, is_inlier, cam_from_world,
+  // features_undist, etc.) are intentionally NOT compared — two Images
+  // at different pipeline stages with the same identity should compare
+  // equal. ``pixel_cholesky_xy_`` is included because it's a per-feature
+  // immutable property of the image (and was the field that exposed
+  // the copy-ctor field-drop bug fixed in commit 985b2ecb).
   const bool result = image_id_ == other.image_id_ &&          //
                       camera_id_ == other.camera_id_ &&        //
                       frame_id_ == other.frame_id_ &&          //
                       name_ == other.name_ &&                  //
                       num_points3D_ == other.num_points3D_ &&  //
                       HasPose() == other.HasPose() &&          //
-                      points2D_ == other.points2D_;
+                      points2D_ == other.points2D_ &&          //
+                      pixel_cholesky_xy_ == other.pixel_cholesky_xy_;
   if (!HasPose()) {
     return result;
   } else {

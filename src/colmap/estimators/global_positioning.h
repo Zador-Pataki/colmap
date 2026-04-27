@@ -85,12 +85,11 @@ struct GlobalPositionerOptions {
   bool use_parameter_block_ordering = true;
 
   // Whether to apply a 0.5x ScaledLoss to BATA residuals from cameras
-  // whose focal length came from view-graph calibration rather than an
-  // EXIF prior (``Camera::has_prior_focal_length == false``). Mainline
-  // colmap heuristic: less-confident bearings get half-weight. The
-  // glomap fork did not apply this and treated all bearings as full
-  // weight; videosfm callers calibrated against fork behavior should
-  // set this to false.
+  // whose focal length came from view-graph calibration rather than
+  // an EXIF prior (``Camera::has_prior_focal_length == false``). The
+  // heuristic downweights bearings whose direction was computed using
+  // an estimated focal, since the bearing inherits the focal estimate's
+  // uncertainty. Set false to treat all cameras at full weight.
   bool apply_uncalibrated_loss_downweight = true;
 
   // The options for the solver
@@ -141,6 +140,11 @@ struct GlobalPositionerOptions {
   std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
 
   // 10-bucket per-observation loss routing.
+  // NOTE: only consumed when ``point_constraint_type ==
+  // SPLIT_METRIC_DEPTH``. In BATA mode the per-observation cascade
+  // doesn't run; only the top-level ``loss_function_*`` fields apply
+  // and these 10 buckets are silently ignored. ``loss_scale_prior`` is
+  // always consumed.
   LossConfig loss_normal_geometry;
   LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;

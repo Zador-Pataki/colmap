@@ -100,6 +100,11 @@ RotationAveragingProblem::RotationAveragingProblem(
     const CorrespondenceGraph* correspondence_graph)
     : options_(options),
       correspondence_graph_(correspondence_graph) {
+  // Fail-loud guard: skip_risky_LC_pairs reads ImagePair::are_lc from the
+  // CorrespondenceGraph; with no CG the per-pair LC filter silently never
+  // triggers. Force the caller to wire CG explicitly when opting in.
+  THROW_CHECK(!options_.skip_risky_LC_pairs || correspondence_graph_ != nullptr)
+      << "skip_risky_LC_pairs=true requires correspondence_graph; got nullptr";
   // Derive active_frame_ids from active_image_ids, and cache mappings.
   for (const image_t image_id : active_image_ids) {
     const auto& image = reconstruction.Image(image_id);
@@ -873,6 +878,13 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
     // Solve the least squares problem.
     step.setZero();
     step = llt.solve(at_weight * problem.Residuals());
+    // Mirror the L1 path's NaN guard (line 755). Without this, a singular
+    // pose-graph silently corrupts cams_from_world via UpdateState and
+    // SolveIRLS returns true with garbage residuals next iteration.
+    if (step.array().isNaN().any()) {
+      LOG(ERROR) << "IRLS step is NaN at iteration " << iteration;
+      return false;
+    }
     problem.UpdateState(step);
 
     const double avg_step = problem.AverageStepSize(step);
