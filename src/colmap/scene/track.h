@@ -34,7 +34,6 @@
 
 #include <vector>
 
-
 namespace colmap {
 
 // Track class stores all observations of a 3D point.

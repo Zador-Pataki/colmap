@@ -41,26 +41,29 @@ Image::Image()
       num_points3D_(0) {}
 
 Image::Image(const Image& other)
-    : cam_from_world(other.cam_from_world),
-      is_registered(other.is_registered),
-      features(other.features),
-      features_undist(other.features_undist),
-      angular_stddevs(other.angular_stddevs),
-      angular_cholesky_xy(other.angular_cholesky_xy),
-      depth_priors(other.depth_priors),
+    // Public fork fields (in declaration order).
+    : depth_priors(other.depth_priors),
       depth_prior_stddevs(other.depth_prior_stddevs),
-      angular_stddevs_z(other.angular_stddevs_z),
       depth_prior_validity(other.depth_prior_validity),
       is_inlier(other.is_inlier),
       is_depth_outlier(other.is_depth_outlier),
       is_track_anchor(other.is_track_anchor),
       is_excluded(other.is_excluded),
+      angular_stddevs(other.angular_stddevs),
+      angular_cholesky_xy(other.angular_cholesky_xy),
+      angular_stddevs_z(other.angular_stddevs_z),
       log_scale(other.log_scale),
       log_scale_stddev(other.log_scale_stddev),
+      cam_from_world(other.cam_from_world),
+      is_registered(other.is_registered),
+      features(other.features),
+      features_undist(other.features_undist),
+      // Private fields (in declaration order).
       name_(other.Name()),
       camera_ptr_(other.HasCameraPtr() ? other.CameraPtr() : nullptr),
       frame_ptr_(other.HasFramePtr() ? other.FramePtr() : nullptr),
       points2D_(other.Points2D()),
+      pixel_cholesky_xy_(other.PixelCholeskyXY()),
       image_id_(other.ImageId()),
       camera_id_(other.CameraId()),
       frame_id_(other.FrameId()),
@@ -84,23 +87,24 @@ Image& Image::operator=(const Image& other) {
     }
     num_points3D_ = other.NumPoints3D();
     points2D_ = other.Points2D();
-    // Glomap fork additions: copy public data members.
-    cam_from_world = other.cam_from_world;
-    is_registered = other.is_registered;
-    features = other.features;
-    features_undist = other.features_undist;
-    angular_stddevs = other.angular_stddevs;
-    angular_cholesky_xy = other.angular_cholesky_xy;
+    pixel_cholesky_xy_ = other.PixelCholeskyXY();
+    // Glomap fork additions: copy public data members (declaration order).
     depth_priors = other.depth_priors;
     depth_prior_stddevs = other.depth_prior_stddevs;
-    angular_stddevs_z = other.angular_stddevs_z;
     depth_prior_validity = other.depth_prior_validity;
     is_inlier = other.is_inlier;
     is_depth_outlier = other.is_depth_outlier;
     is_track_anchor = other.is_track_anchor;
     is_excluded = other.is_excluded;
+    angular_stddevs = other.angular_stddevs;
+    angular_cholesky_xy = other.angular_cholesky_xy;
+    angular_stddevs_z = other.angular_stddevs_z;
     log_scale = other.log_scale;
     log_scale_stddev = other.log_scale_stddev;
+    cam_from_world = other.cam_from_world;
+    is_registered = other.is_registered;
+    features = other.features;
+    features_undist = other.features_undist;
   }
   return *this;
 }

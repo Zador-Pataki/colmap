@@ -295,254 +295,254 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                                bool random_initialization,
                                                Reconstruction& reconstruction) {
   Point3D& point3D = reconstruction.Point3D(point3D_id);
-    if (!reconstruction.ExistsImage(observation.image_id)) return;
+  if (!reconstruction.ExistsImage(observation.image_id)) return;
 
-    Image& image = reconstruction.Image(observation.image_id);
-    if (!image.HasPose()) return;
+  Image& image = reconstruction.Image(observation.image_id);
+  if (!image.HasPose()) return;
 
-    if (options_.use_observation_exclusions &&
-        observation.point2D_idx < image.is_excluded.size() &&
-        image.is_excluded[observation.point2D_idx]) {
-      return;
+  if (options_.use_observation_exclusions &&
+      observation.point2D_idx < image.is_excluded.size() &&
+      image.is_excluded[observation.point2D_idx]) {
+    return;
+  }
+
+  const std::optional<Eigen::Vector2d> cam_point =
+      image.CameraPtr()->CamFromImg(
+          image.Point2D(observation.point2D_idx).xy);
+  if (!cam_point.has_value()) {
+    LOG(WARNING)
+        << "Ignoring feature because it failed to project: point3D_id="
+        << point3D_id << ", image_id=" << observation.image_id
+        << ", feature_id=" << observation.point2D_idx;
+    return;
+  }
+
+  const Eigen::Vector3d cam_from_point3D_dir =
+      image.CamFromWorld().rotation().inverse() *
+      cam_point->homogeneous().normalized();
+
+  CHECK_GE(scales_.capacity(), scales_.size())
+      << "Not enough capacity was reserved for the scales.";
+  double& scale = scales_.emplace_back(1);
+
+  if (!options_.generate_scales && random_initialization) {
+    const Eigen::Vector3d cam_from_point3D_translation =
+        point3D.xyz - frame_centers_[image.FrameId()];
+    scale = std::max(1e-5,
+                     cam_from_point3D_dir.dot(cam_from_point3D_translation) /
+                         cam_from_point3D_translation.squaredNorm());
+  }
+
+  // For calibrated and uncalibrated cameras, use different loss
+  // functions
+  // Down weight the uncalibrated cameras
+  Camera& camera = reconstruction.Camera(image.CameraId());
+  ceres::LossFunction* loss_function =
+      (camera.has_prior_focal_length)
+          ? loss_function_ptcam_calibrated_.get()
+          : loss_function_ptcam_uncalibrated_.get();
+
+  // SPLIT_METRIC_DEPTH geometry-loss cascade. Per-observation route:
+  //   is_lc           -> cached_loss_lc_geometry_
+  //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
+  //   is_inlier       -> cached_loss_normal_geometry_inlier_
+  //   else            -> cached_loss_normal_geometry_
+  if (options_.point_constraint_type ==
+      PointConstraintType::SPLIT_METRIC_DEPTH) {
+    ceres::LossFunction* cascade = nullptr;
+    if (is_lc_observation) {
+      cascade = cached_loss_lc_geometry_.get();
+    } else if (observation.point2D_idx < image.is_track_anchor.size() &&
+               image.is_track_anchor[observation.point2D_idx]) {
+      cascade = cached_loss_normal_geometry_trackstart_.get();
+    } else if (observation.point2D_idx < image.is_inlier.size() &&
+               image.is_inlier[observation.point2D_idx]) {
+      cascade = cached_loss_normal_geometry_inlier_.get();
+    } else {
+      cascade = cached_loss_normal_geometry_.get();
+    }
+    if (cascade != nullptr) {
+      loss_function = cascade;
+    }
+  }
+
+  // If the image is not part of a camera rig, use the standard BATA error
+  if (image.IsRefInFrame()) {
+    // Use anisotropic per-keypoint weighting when ``angular_stddevs``
+    // is populated; fall back to unweighted ``BATAPairwiseDirectionCostFunctor``
+    // when sigmas are absent. Without the weighted variant the
+    // SPLIT_METRIC_DEPTH geometry residuals lose their relative
+    // weighting against the metric-depth residuals.
+    ceres::CostFunction* cost_function = nullptr;
+    if (observation.point2D_idx < image.angular_stddevs.size()) {
+      const Eigen::Vector2d& angular_std =
+          image.angular_stddevs[observation.point2D_idx];
+      const double sigma_x = std::max(1e-9, angular_std[0]);
+      const double sigma_y = std::max(1e-9, angular_std[1]);
+      const double sigma_z = 0.5 * (sigma_x + sigma_y);
+      cost_function = WeightedBATADirectionalError::Create(
+          cam_from_point3D_dir,
+          image.CamFromWorld().rotation(),
+          sigma_x,
+          sigma_y,
+          sigma_z);
+    }
+    if (cost_function == nullptr) {
+      cost_function =
+          BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
     }
 
-    const std::optional<Eigen::Vector2d> cam_point =
-        image.CameraPtr()->CamFromImg(
-            image.Point2D(observation.point2D_idx).xy);
-    if (!cam_point.has_value()) {
-      LOG(WARNING)
-          << "Ignoring feature because it failed to project: point3D_id="
-          << point3D_id << ", image_id=" << observation.image_id
-          << ", feature_id=" << observation.point2D_idx;
-      return;
-    }
+    problem_->AddResidualBlock(cost_function,
+                               loss_function,
+                               frame_centers_[image.FrameId()].data(),
+                               point3D.xyz.data(),
+                               &scale);
 
-    const Eigen::Vector3d cam_from_point3D_dir =
-        image.CamFromWorld().rotation().inverse() *
-        cam_point->homogeneous().normalized();
-
-    CHECK_GE(scales_.capacity(), scales_.size())
-        << "Not enough capacity was reserved for the scales.";
-    double& scale = scales_.emplace_back(1);
-
-    if (!options_.generate_scales && random_initialization) {
-      const Eigen::Vector3d cam_from_point3D_translation =
-          point3D.xyz - frame_centers_[image.FrameId()];
-      scale = std::max(1e-5,
-                       cam_from_point3D_dir.dot(cam_from_point3D_translation) /
-                           cam_from_point3D_translation.squaredNorm());
-    }
-
-    // For calibrated and uncalibrated cameras, use different loss
-    // functions
-    // Down weight the uncalibrated cameras
-    Camera& camera = reconstruction.Camera(image.CameraId());
-    ceres::LossFunction* loss_function =
-        (camera.has_prior_focal_length)
-            ? loss_function_ptcam_calibrated_.get()
-            : loss_function_ptcam_uncalibrated_.get();
-
-    // SPLIT_METRIC_DEPTH geometry-loss cascade. Per-observation route:
-    //   is_lc           -> cached_loss_lc_geometry_
-    //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
-    //   is_inlier       -> cached_loss_normal_geometry_inlier_
-    //   else            -> cached_loss_normal_geometry_
+    // 1-D ``MetricDepthError`` residual on
+    // (frame_center, point3D.xyz, dmap_scales_[image_id]) — anchors
+    // absolute scale when a depth prior is available at this feature.
     if (options_.point_constraint_type ==
-        PointConstraintType::SPLIT_METRIC_DEPTH) {
-      ceres::LossFunction* cascade = nullptr;
-      if (is_lc_observation) {
-        cascade = cached_loss_lc_geometry_.get();
-      } else if (observation.point2D_idx < image.is_track_anchor.size() &&
-                 image.is_track_anchor[observation.point2D_idx]) {
-        cascade = cached_loss_normal_geometry_trackstart_.get();
-      } else if (observation.point2D_idx < image.is_inlier.size() &&
-                 image.is_inlier[observation.point2D_idx]) {
-        cascade = cached_loss_normal_geometry_inlier_.get();
-      } else {
-        cascade = cached_loss_normal_geometry_.get();
-      }
-      if (cascade != nullptr) {
-        loss_function = cascade;
+            PointConstraintType::SPLIT_METRIC_DEPTH &&
+        observation.point2D_idx < image.depth_prior_validity.size() &&
+        image.depth_prior_validity[observation.point2D_idx]) {
+      const double depth_prior = image.depth_priors[observation.point2D_idx];
+      const double depth_sigma =
+          image.depth_prior_stddevs[observation.point2D_idx];
+
+      if (depth_prior > 0.0 && depth_sigma > 1e-9) {
+        // Lazy-insert dmap_scales_ on first valid observation per image.
+        // Initial value: from options_.initial_dmap_scales (caller-supplied
+        // GP1→GP2 handoff) if provided, else 1.0 (linear) / 0.0 (log).
+        if (dmap_scales_.find(observation.image_id) ==
+            dmap_scales_.end()) {
+          double init_value =
+              options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+          if (options_.initial_dmap_scales.has_value()) {
+            const auto& init_map = *options_.initial_dmap_scales;
+            auto it = init_map.find(observation.image_id);
+            if (it != init_map.end()) {
+              // Caller-supplied value is in linear space; convert to
+              // log if option says so.
+              init_value = options_.use_log_scale_for_depth_map_scales
+                               ? std::log(std::max(it->second, 1e-9))
+                               : it->second;
+            }
+          }
+          dmap_scales_[observation.image_id] = init_value;
+          dmap_scale_observation_counts_[observation.image_id] = 0;
+        }
+        dmap_scale_observation_counts_[observation.image_id]++;
+
+        ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
+            image.CamFromWorld().rotation(),
+            depth_prior,
+            depth_sigma,
+            options_.use_log_scale_for_depth_map_scales,
+            options_.use_log_residual_for_depth,
+            options_.zero_residual_behind,
+            options_.smooth_log_linear_transition,
+            options_.log_linear_threshold);
+
+        if (metric_depth_cost != nullptr) {
+          // 5-way depth-loss cascade:
+          //   pre-pass outlier  -> soft fallback (skip on LC)
+          //   is_lc             -> cached_loss_lc_depth_
+          //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
+          //   is_inlier         -> cached_loss_normal_depth_inlier_
+          //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
+          //   else              -> cached_loss_normal_depth_
+          ceres::LossFunction* depth_loss = nullptr;
+          const std::pair<image_t, point2D_t> obs_key{observation.image_id,
+                                                      observation.point2D_idx};
+          if (depth_outliers_.count(obs_key) > 0) {
+            if (is_lc_observation) {
+              // LC outlier: skip the depth residual entirely (only emit
+              // BATA above). Drop this metric_depth_cost.
+              delete metric_depth_cost;
+              metric_depth_cost = nullptr;
+            } else {
+              // Non-LC outlier: hardcoded soft fallback (HuberLoss(1)
+              // wrapped in ScaledLoss(1)).
+              if (!soft_outlier_fallback_loss_) {
+                soft_outlier_fallback_loss_ =
+                    std::make_shared<ceres::ScaledLoss>(
+                        new ceres::HuberLoss(1.0),
+                        1.0,
+                        ceres::TAKE_OWNERSHIP);
+              }
+              depth_loss = soft_outlier_fallback_loss_.get();
+            }
+          } else if (is_lc_observation) {
+            depth_loss = cached_loss_lc_depth_.get();
+          } else if (observation.point2D_idx < image.is_track_anchor.size() &&
+                     image.is_track_anchor[observation.point2D_idx]) {
+            depth_loss = cached_loss_normal_depth_trackstart_.get();
+          } else if (observation.point2D_idx < image.is_inlier.size() &&
+                     image.is_inlier[observation.point2D_idx]) {
+            depth_loss = cached_loss_normal_depth_inlier_.get();
+          } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
+                     image.is_depth_outlier[observation.point2D_idx]) {
+            depth_loss = cached_loss_normal_depth_outlier_.get();
+          } else {
+            depth_loss = cached_loss_normal_depth_.get();
+          }
+
+          if (metric_depth_cost != nullptr) {
+            problem_->AddResidualBlock(
+                metric_depth_cost,
+                depth_loss,
+                frame_centers_[image.FrameId()].data(),
+                point3D.xyz.data(),
+                &dmap_scales_[observation.image_id]);
+          }
+        }
       }
     }
+  } else {
+    // If the image is part of a camera rig, use the RigBATA error.
 
-    // If the image is not part of a camera rig, use the standard BATA error
-    if (image.IsRefInFrame()) {
-      // Use anisotropic per-keypoint weighting when ``angular_stddevs``
-      // is populated; fall back to unweighted ``BATAPairwiseDirectionCostFunctor``
-      // when sigmas are absent. Without the weighted variant the
-      // SPLIT_METRIC_DEPTH geometry residuals lose their relative
-      // weighting against the metric-depth residuals.
-      ceres::CostFunction* cost_function = nullptr;
-      if (observation.point2D_idx < image.angular_stddevs.size()) {
-        const Eigen::Vector2d& angular_std =
-            image.angular_stddevs[observation.point2D_idx];
-        const double sigma_x = std::max(1e-9, angular_std[0]);
-        const double sigma_y = std::max(1e-9, angular_std[1]);
-        const double sigma_z = 0.5 * (sigma_x + sigma_y);
-        cost_function = WeightedBATADirectionalError::Create(
-            cam_from_point3D_dir,
-            image.CamFromWorld().rotation(),
-            sigma_x,
-            sigma_y,
-            sigma_z);
-      }
-      if (cost_function == nullptr) {
-        cost_function =
-            BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
-      }
+    const rig_t rig_id = image.FramePtr()->RigId();
+    Rig& rig = reconstruction.Rig(rig_id);
+    Rigid3d& cam_from_rig = rig.SensorFromRig(image.CameraPtr()->SensorId());
+
+    if (!cam_from_rig.translation().hasNaN()) {
+      const Eigen::Vector3d cam_from_rig_dir =
+          image.CamFromWorld().rotation().inverse() *
+          cam_from_rig.translation();
+
+      ceres::CostFunction* cost_function =
+          RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
+              cam_from_point3D_dir, cam_from_rig_dir);
 
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
-                                 frame_centers_[image.FrameId()].data(),
                                  point3D.xyz.data(),
+                                 frame_centers_[image.FrameId()].data(),
                                  &scale);
-
-      // 1-D ``MetricDepthError`` residual on
-      // (frame_center, point3D.xyz, dmap_scales_[image_id]) — anchors
-      // absolute scale when a depth prior is available at this feature.
-      if (options_.point_constraint_type ==
-              PointConstraintType::SPLIT_METRIC_DEPTH &&
-          observation.point2D_idx < image.depth_prior_validity.size() &&
-          image.depth_prior_validity[observation.point2D_idx]) {
-        const double depth_prior = image.depth_priors[observation.point2D_idx];
-        const double depth_sigma =
-            image.depth_prior_stddevs[observation.point2D_idx];
-
-        if (depth_prior > 0.0 && depth_sigma > 1e-9) {
-          // Lazy-insert dmap_scales_ on first valid observation per image.
-          // Initial value: from options_.initial_dmap_scales (caller-supplied
-          // GP1→GP2 handoff) if provided, else 1.0 (linear) / 0.0 (log).
-          if (dmap_scales_.find(observation.image_id) ==
-              dmap_scales_.end()) {
-            double init_value =
-                options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
-            if (options_.initial_dmap_scales.has_value()) {
-              const auto& init_map = *options_.initial_dmap_scales;
-              auto it = init_map.find(observation.image_id);
-              if (it != init_map.end()) {
-                // Caller-supplied value is in linear space; convert to
-                // log if option says so.
-                init_value = options_.use_log_scale_for_depth_map_scales
-                                 ? std::log(std::max(it->second, 1e-9))
-                                 : it->second;
-              }
-            }
-            dmap_scales_[observation.image_id] = init_value;
-            dmap_scale_observation_counts_[observation.image_id] = 0;
-          }
-          dmap_scale_observation_counts_[observation.image_id]++;
-
-          ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
-              image.CamFromWorld().rotation(),
-              depth_prior,
-              depth_sigma,
-              options_.use_log_scale_for_depth_map_scales,
-              options_.use_log_residual_for_depth,
-              options_.zero_residual_behind,
-              options_.smooth_log_linear_transition,
-              options_.log_linear_threshold);
-
-          if (metric_depth_cost != nullptr) {
-            // 5-way depth-loss cascade:
-            //   pre-pass outlier  -> soft fallback (skip on LC)
-            //   is_lc             -> cached_loss_lc_depth_
-            //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
-            //   is_inlier         -> cached_loss_normal_depth_inlier_
-            //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
-            //   else              -> cached_loss_normal_depth_
-            ceres::LossFunction* depth_loss = nullptr;
-            const std::pair<image_t, point2D_t> obs_key{observation.image_id,
-                                                        observation.point2D_idx};
-            if (depth_outliers_.count(obs_key) > 0) {
-              if (is_lc_observation) {
-                // LC outlier: skip the depth residual entirely (only emit
-                // BATA above). Drop this metric_depth_cost.
-                delete metric_depth_cost;
-                metric_depth_cost = nullptr;
-              } else {
-                // Non-LC outlier: hardcoded soft fallback (HuberLoss(1)
-                // wrapped in ScaledLoss(1)).
-                if (!soft_outlier_fallback_loss_) {
-                  soft_outlier_fallback_loss_ =
-                      std::make_shared<ceres::ScaledLoss>(
-                          new ceres::HuberLoss(1.0),
-                          1.0,
-                          ceres::TAKE_OWNERSHIP);
-                }
-                depth_loss = soft_outlier_fallback_loss_.get();
-              }
-            } else if (is_lc_observation) {
-              depth_loss = cached_loss_lc_depth_.get();
-            } else if (observation.point2D_idx < image.is_track_anchor.size() &&
-                       image.is_track_anchor[observation.point2D_idx]) {
-              depth_loss = cached_loss_normal_depth_trackstart_.get();
-            } else if (observation.point2D_idx < image.is_inlier.size() &&
-                       image.is_inlier[observation.point2D_idx]) {
-              depth_loss = cached_loss_normal_depth_inlier_.get();
-            } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
-                       image.is_depth_outlier[observation.point2D_idx]) {
-              depth_loss = cached_loss_normal_depth_outlier_.get();
-            } else {
-              depth_loss = cached_loss_normal_depth_.get();
-            }
-
-            if (metric_depth_cost != nullptr) {
-              problem_->AddResidualBlock(
-                  metric_depth_cost,
-                  depth_loss,
-                  frame_centers_[image.FrameId()].data(),
-                  point3D.xyz.data(),
-                  &dmap_scales_[observation.image_id]);
-            }
-          }
-        }
-      }
     } else {
-      // If the image is part of a camera rig, use the RigBATA error.
-
-      const rig_t rig_id = image.FramePtr()->RigId();
-      Rig& rig = reconstruction.Rig(rig_id);
-      Rigid3d& cam_from_rig = rig.SensorFromRig(image.CameraPtr()->SensorId());
-
-      if (!cam_from_rig.translation().hasNaN()) {
-        const Eigen::Vector3d cam_from_rig_dir =
-            image.CamFromWorld().rotation().inverse() *
-            cam_from_rig.translation();
-
-        ceres::CostFunction* cost_function =
-            RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
-                cam_from_point3D_dir, cam_from_rig_dir);
-
-        problem_->AddResidualBlock(cost_function,
-                                   loss_function,
-                                   point3D.xyz.data(),
-                                   frame_centers_[image.FrameId()].data(),
-                                   &scale);
-      } else {
-        // If the cam_from_rig contains nan values, it needs to be re-estimated.
-        // Initialize cams_in_rig_ if not already done.
-        const sensor_t sensor_id = image.CameraPtr()->SensorId();
-        if (cams_in_rig_.find(sensor_id) == cams_in_rig_.end()) {
-          // Will be initialized to random values in ParameterizeVariables().
-          cams_in_rig_[sensor_id] = Eigen::Vector3d::Zero();
-        }
-
-        ceres::CostFunction* cost_function =
-            RigBATAPairwiseDirectionCostFunctor::Create(
-                cam_from_point3D_dir,
-                image.FramePtr()->RigFromWorld().rotation());
-
-        problem_->AddResidualBlock(cost_function,
-                                   loss_function,
-                                   point3D.xyz.data(),
-                                   frame_centers_[image.FrameId()].data(),
-                                   cams_in_rig_[sensor_id].data(),
-                                   &scale);
+      // If the cam_from_rig contains nan values, it needs to be re-estimated.
+      // Initialize cams_in_rig_ if not already done.
+      const sensor_t sensor_id = image.CameraPtr()->SensorId();
+      if (cams_in_rig_.find(sensor_id) == cams_in_rig_.end()) {
+        // Will be initialized to random values in ParameterizeVariables().
+        cams_in_rig_[sensor_id] = Eigen::Vector3d::Zero();
       }
-    }
 
-    problem_->SetParameterLowerBound(&scale, 0, 1e-5);
+      ceres::CostFunction* cost_function =
+          RigBATAPairwiseDirectionCostFunctor::Create(
+              cam_from_point3D_dir,
+              image.FramePtr()->RigFromWorld().rotation());
+
+      problem_->AddResidualBlock(cost_function,
+                                 loss_function,
+                                 point3D.xyz.data(),
+                                 frame_centers_[image.FrameId()].data(),
+                                 cams_in_rig_[sensor_id].data(),
+                                 &scale);
+    }
+  }
+
+  problem_->SetParameterLowerBound(&scale, 0, 1e-5);
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
