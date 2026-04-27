@@ -82,6 +82,23 @@ class RotationAveragingProblem {
     return final_weights_;
   }
 
+  // --- Glomap-fork video-Ceres path accessors (M11) ---
+  // Direct mutable access to estimated_rotations_, plus the parameter
+  // index maps + fixed_frame_id, so RotationAveragingSolver::SolveCeres
+  // can build a Ceres problem over per-frame angle-axis blocks. M11 path
+  // is gated on !use_gravity, so all frames are 3-DOF blocks.
+  Eigen::VectorXd& MutableEstimatedRotations() { return estimated_rotations_; }
+  const std::unordered_map<frame_t, int>& FrameIdToParamIdx() const {
+    return frame_id_to_param_idx_;
+  }
+  const std::unordered_map<image_t, frame_t>& ImageIdToFrameId() const {
+    return image_id_to_frame_id_;
+  }
+  frame_t FixedFrameId() const { return fixed_frame_id_; }
+  const CorrespondenceGraph* CorrespondenceGraphPtr() const {
+    return correspondence_graph_;
+  }
+
  private:
   // Returns true if frame has gravity prior and gravity mode is enabled.
   bool HasFrameGravity(frame_t frame_id) const;
@@ -160,6 +177,15 @@ class RotationAveragingSolver {
 
   // Iteratively reweighted least squares phase.
   bool SolveIRLS(RotationAveragingProblem& problem);
+
+  // --- Glomap-fork video-Ceres path (M11) ---
+  // Replaces L1+IRLS with a Ceres optimization over per-frame 3-DOF
+  // angle-axis blocks when options_.use_video_constraints &&
+  // !options_.use_gravity. Each pair gets a Huber loss (tracking
+  // pairs) or Cauchy loss (LC pairs) on RelativeRotationError.
+  // Requires problem.CorrespondenceGraphPtr() != nullptr (LC
+  // classification reads ImagePair.{inliers, are_lc} fork fields).
+  bool SolveCeres(RotationAveragingProblem& problem);
 
   // Computes IRLS weights for all constraints.
   // Returns nullopt if any weight is NaN.

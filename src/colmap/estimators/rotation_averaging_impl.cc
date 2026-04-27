@@ -8,9 +8,56 @@
 #include <limits>
 
 #include <Eigen/CholmodSupport>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
 namespace {
+
+// --- Glomap-fork video-Ceres helper (M11) ---
+// AutoDiff cost functor for relative rotation error in the video-aware
+// Ceres path. Residual = AngleAxis(R2^T * R_rel * R1) where R1, R2 are
+// the per-frame rotations being optimized and R_rel is the precomputed
+// pair relative rotation. Both rotations are stored as 3-DOF angle-axis.
+struct RelativeRotationError {
+  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa)
+      : rel_rot_aa_(rel_rot_aa) {}
+
+  template <typename T>
+  bool operator()(const T* const r1_aa,
+                  const T* const r2_aa,
+                  T* residuals) const {
+    Eigen::Matrix<T, 3, 3> R1, R2, R_rel;
+    ceres::AngleAxisToRotationMatrix(r1_aa, R1.data());
+    ceres::AngleAxisToRotationMatrix(r2_aa, R2.data());
+    Eigen::Matrix<T, 3, 1> rel_aa_t = rel_rot_aa_.cast<T>();
+    ceres::AngleAxisToRotationMatrix(rel_aa_t.data(), R_rel.data());
+    Eigen::Matrix<T, 3, 3> R_err = R2.transpose() * R_rel * R1;
+    ceres::RotationMatrixToAngleAxis(R_err.data(), residuals);
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa) {
+    return new ceres::AutoDiffCostFunction<RelativeRotationError, 3, 3, 3>(
+        new RelativeRotationError(rel_rot_aa));
+  }
+
+  const Eigen::Vector3d rel_rot_aa_;
+};
+
+// Returns true if the pair has more (or equal) non-LC inliers than LC
+// inliers — i.e. tracking-dominated. Used by SolveCeres to choose the
+// per-pair loss (Huber for tracking, Cauchy for LC).
+bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair) {
+  if (image_pair.inliers.empty()) return false;
+  size_t lc_count = 0;
+  for (const auto idx : image_pair.inliers) {
+    if (idx < image_pair.are_lc.size() && image_pair.are_lc[idx]) {
+      ++lc_count;
+    }
+  }
+  return image_pair.inliers.size() - lc_count >= lc_count;
+}
 
 // Computes the 1-DOF residual for gravity-aligned rotation constraints.
 // Returns (angle_2 - angle_1) - angle_12, wrapped to [-π, π] with jitter
@@ -684,6 +731,20 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 }
 
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
+  // --- Glomap-fork video-Ceres path (M11) ---
+  // Mutually exclusive with use_gravity. Replaces L1+IRLS with a Ceres
+  // optimization over per-frame 3-DOF angle-axis blocks. M0 RA-side
+  // skip_initialization is typically false; the M10 prioritize_tracking
+  // MST initialization runs before the video-Ceres solve.
+  if (options_.use_video_constraints && !options_.use_gravity) {
+    VLOG(2) << "Solving video-aware Ceres rotation averaging";
+    return SolveCeres(problem);
+  }
+  if (options_.use_video_constraints && options_.use_gravity) {
+    LOG(WARNING) << "use_video_constraints + use_gravity both set; "
+                 << "use_video_constraints disabled (mutually exclusive).";
+  }
+
   if (options_.max_num_l1_iterations > 0) {
     VLOG(2) << "Solving L1 regression problem";
     if (!SolveL1Regression(problem)) {
@@ -868,6 +929,105 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
   }
 
   return true;
+}
+
+// --- Glomap-fork video-Ceres path (M11) ---
+// Replaces L1+IRLS with a Ceres optimization over per-frame 3-DOF
+// angle-axis blocks. Activated by use_video_constraints (and gated to
+// !use_gravity in Solve). Each pair's residual is a relative-rotation
+// error wrapped in Huber (tracking-dominated) or Cauchy (LC-dominated)
+// loss. Initialized rotations come from the M10 prioritize_tracking
+// MST (or the L1+IRLS warm-start if MST init was skipped).
+bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
+  THROW_CHECK(!options_.use_gravity)
+      << "SolveCeres is gated on !use_gravity; gravity-aware video-Ceres "
+         "is not implemented (fork is also exclusive).";
+
+  const auto* cg = problem.CorrespondenceGraphPtr();
+  if (cg == nullptr) {
+    LOG(WARNING) << "use_video_constraints requires a CorrespondenceGraph "
+                 << "to classify pairs as tracking-vs-LC; falling back to "
+                 << "Huber loss for all pairs.";
+  }
+
+  ceres::Problem ceres_problem;
+  Eigen::VectorXd& estimated_rotations = problem.MutableEstimatedRotations();
+  const auto& frame_id_to_param_idx = problem.FrameIdToParamIdx();
+  const auto& image_id_to_frame_id = problem.ImageIdToFrameId();
+  const frame_t fixed_frame_id = problem.FixedFrameId();
+
+  // Add parameter blocks for all active frames (3-DOF angle-axis).
+  for (const auto& [frame_id, param_idx] : frame_id_to_param_idx) {
+    double* param = estimated_rotations.data() + param_idx;
+    ceres_problem.AddParameterBlock(param, 3);
+    if (frame_id == fixed_frame_id) {
+      ceres_problem.SetParameterBlockConstant(param);
+    }
+  }
+
+  // Add residual blocks for each pair_constraint.
+  for (const auto& [pair_id, constraint] : problem.PairConstraints()) {
+    const auto* full_3dof =
+        std::get_if<RotationAveragingProblem::Full3DOF>(&constraint.constraint);
+    if (full_3dof == nullptr) {
+      // Gravity-aligned 1-DOF should not occur in video-Ceres path
+      // (gated on !use_gravity above).
+      continue;
+    }
+    const auto frame_it1 =
+        image_id_to_frame_id.find(constraint.image_id1);
+    const auto frame_it2 =
+        image_id_to_frame_id.find(constraint.image_id2);
+    if (frame_it1 == image_id_to_frame_id.end() ||
+        frame_it2 == image_id_to_frame_id.end()) {
+      continue;
+    }
+    const auto idx_it1 = frame_id_to_param_idx.find(frame_it1->second);
+    const auto idx_it2 = frame_id_to_param_idx.find(frame_it2->second);
+    if (idx_it1 == frame_id_to_param_idx.end() ||
+        idx_it2 == frame_id_to_param_idx.end()) {
+      continue;
+    }
+
+    Eigen::Vector3d rel_aa;
+    ceres::RotationMatrixToAngleAxis(full_3dof->R_cam2_from_cam1.data(),
+                                     rel_aa.data());
+
+    bool is_tracking = true;  // Default: Huber (tracking).
+    if (cg != nullptr) {
+      auto cg_pair_it = cg->ImagePairsMap().find(pair_id);
+      if (cg_pair_it != cg->ImagePairsMap().end()) {
+        is_tracking = IsTrackingPair(cg_pair_it->second);
+      }
+    }
+    ceres::LossFunction* loss =
+        is_tracking ? static_cast<ceres::LossFunction*>(
+                          new ceres::HuberLoss(
+                              options_.video_tracking_huber_scale))
+                    : static_cast<ceres::LossFunction*>(
+                          new ceres::CauchyLoss(
+                              options_.video_lc_cauchy_scale));
+
+    ceres::CostFunction* cost = RelativeRotationError::Create(rel_aa);
+    ceres_problem.AddResidualBlock(
+        cost,
+        loss,
+        estimated_rotations.data() + idx_it1->second,
+        estimated_rotations.data() + idx_it2->second);
+  }
+
+  ceres::Solver::Options solver_options;
+  solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+  solver_options.max_num_iterations = 100;
+  solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+  ceres::Solver::Summary summary;
+  ceres::Solve(solver_options, &ceres_problem, &summary);
+  if (VLOG_IS_ON(2)) {
+    LOG(INFO) << summary.FullReport();
+  } else {
+    LOG(INFO) << summary.BriefReport();
+  }
+  return summary.IsSolutionUsable();
 }
 
 }  // namespace colmap
