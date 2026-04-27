@@ -198,9 +198,9 @@ TEST(RigBATAPairwiseDirectionCostFunctor, Create) {
 
 // ---------------------------------------------------------------------------
 // CovarianceWeightedCostFunctor<BATAPairwiseDirectionCostFunctor> equivalence
-// to the deleted fork's WeightedBATADirectionalError.
+// to a per-axis whitened BATA residual.
 //
-// Fork:
+// Per-axis whitened reference:
 //   r_world   = t_obs - scale * (c2 - c1)
 //   r_cam     = R * r_world
 //   residual  = (r_cam.x / sigma_x, r_cam.y / sigma_y, r_cam.z / sigma_z)
@@ -265,18 +265,18 @@ TEST(CovarianceWeightedBATAPairwiseDirection, MatchesForkRandomized) {
     EXPECT_TRUE(cost_function->Evaluate(parameters, residuals.data(), nullptr));
     const double native_sqnorm = residuals.squaredNorm();
 
-    // Fork-style squared norm: r_world^T * R^T * diag(1/sigma^2) * R *
+    // Per-axis whitened squared norm: r_world^T * R^T * diag(1/sigma^2) * R *
     // r_world, computed directly.
     const Eigen::Vector3d r_world = t_obs - scale * (c2 - c1);
     const Eigen::Vector3d r_cam = R * r_world;
     const Eigen::Vector3d r_cam_whitened(
         r_cam.x() / sigma_x, r_cam.y() / sigma_y, r_cam.z() / sigma_z);
-    const double fork_sqnorm = r_cam_whitened.squaredNorm();
+    const double expected_sqnorm = r_cam_whitened.squaredNorm();
 
     // Identity-required: equal up to floating-point noise.
-    EXPECT_NEAR(native_sqnorm, fork_sqnorm, 1e-10)
+    EXPECT_NEAR(native_sqnorm, expected_sqnorm, 1e-10)
         << "trial " << trial << ": native=" << native_sqnorm
-        << " fork=" << fork_sqnorm;
+        << " expected=" << expected_sqnorm;
   }
 }
 

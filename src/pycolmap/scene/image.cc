@@ -95,8 +95,8 @@ void BindSceneImage(py::module& m) {
                     "Name of the image.")
       // Pose accessor that prefers the Frame-derived pose (so Images loaded
       // from disk via Reconstruction.read() return the correct value) and
-      // falls back to the public glomap-fork override field for standalone
-      // pipeline Images that have no Frame attached. Setter writes the field.
+      // falls back to the public ``cam_from_world`` override field for
+      // standalone Images with no Frame attached. Setter writes the field.
       // Note: writing to an Image with a Frame leaves the Frame's pose
       // unchanged; if both views are needed, use Reconstruction-level APIs.
       .def_property(
@@ -111,9 +111,9 @@ void BindSceneImage(py::module& m) {
             }
           },
           "Pose of the image (cam_from_world). Reads the Frame-derived pose "
-          "when available, else the glomap-fork override field. Setter writes "
-          "the override field and, if a Frame is attached and posed, also "
-          "updates the Frame's rig_from_world.")
+          "when available, else the ``cam_from_world`` override field. "
+          "Setter writes the override field and, if a Frame is attached and "
+          "posed, also updates the Frame's rig_from_world.")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
       .def_property(
@@ -145,9 +145,9 @@ void BindSceneImage(py::module& m) {
       .def("has_pixel_covariances",
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
-      // Fork-extension per-feature/per-image fields. Bound as def_property
-      // with Eigen-typed getters/setters so Python sees numpy.ndarray rather
-      // than list — videosfm callers do numpy fancy-indexing on these
+      // Per-feature/per-image fields. Bound as def_property with
+      // Eigen-typed getters/setters so Python sees numpy.ndarray rather than
+      // list — callers do numpy fancy-indexing on these
       // (e.g. depth_priors[matches]).
       .def_property(
           "depth_priors",

@@ -21,9 +21,10 @@ namespace {
 // Drives ViewGraphCalibrator::Solve()'s flow on top of colmap's pure
 // CalibrateFocalLengths function. Bypasses colmap4's higher-level
 // CalibrateViewGraph wrapper because that wrapper assumes a Database +
-// Reconstruction; videosfm-private issue #40 tracks adopting its richer
-// behavior (cross_validate_prior_focal_lengths, reestimate_relative_pose,
-// F/E recomputation, config flips) once the dict-state model is replaced.
+// Reconstruction; the richer wrapper behavior
+// (cross_validate_prior_focal_lengths, reestimate_relative_pose,
+// F/E recomputation, config flips) is not yet adopted because the
+// caller-side state lives in dicts rather than a Reconstruction.
 //
 // Returns a dict {"correspondence_graph", "cameras", "images"} with the mutated state.
 // Round-trips through fresh dicts because pybind11 auto-converts the input
@@ -79,7 +80,7 @@ py::dict RunViewGraphCalibration(CorrespondenceGraph& correspondence_graph,
   // has_prior_focal_length are skipped (they were locked in the optimizer
   // and never moved). Cameras whose ratio was rejected by the optimizer have
   // result.focal_lengths[id] reset to the initial focal, so writing back is a
-  // no-op for them — equivalent to glomap's "skip rejected".
+  // no-op for them — rejected cameras are effectively skipped.
   for (auto& [camera_id, camera] : cameras) {
     auto it = result.focal_lengths.find(camera_id);
     if (it == result.focal_lengths.end()) continue;
@@ -144,6 +145,6 @@ void BindViewGraphCalibration(py::module& m) {
         "options"_a,
         "Run view graph focal-length calibration on a dict-of-cameras + "
         "dict-of-images, bypassing colmap4's full CalibrateViewGraph wrapper "
-        "(which assumes a Reconstruction). Adopting the wrapper's richer "
-        "behavior is tracked in videosfm-private issue #40.");
+        "(which assumes a Reconstruction). The wrapper's richer behavior "
+        "is not yet adopted at this dict-based entry point.");
 }

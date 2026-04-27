@@ -74,7 +74,7 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   weights.reserve(pose_graph.NumEdges());
 
   // Edge weight = inlier count when a CorrespondenceGraph is plumbed
-  // through (post-RANSAC survivor count, matches the fork's MST weight),
+  // through (post-RANSAC survivor count, matches the inlier-count semantic),
   // falling back to ``edge.num_matches`` (raw match count) otherwise so
   // mainline colmap callers without a CG keep their existing behavior.
   //

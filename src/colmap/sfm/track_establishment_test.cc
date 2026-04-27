@@ -47,7 +47,7 @@ namespace colmap {
 namespace {
 
 // Build an ImagePair entry directly into the corr_graph's image_pairs map
-// with the glomap-fork-extension fields ``matches`` and ``inliers`` populated.
+// with the ``matches`` and ``inliers`` fields populated.
 // ``EstablishTracksFromCorrGraph`` only reads those two fields plus the pair
 // keys, so we bypass ``AddTwoViewGeometry`` and the colmap flat_corrs path.
 void AddImagePair(CorrespondenceGraph& corr_graph,
@@ -260,7 +260,7 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 }
 
 // ============================================================================
-// FindTracksForProblem (fork pass-2 greedy subsample + 2-view depth gate)
+// FindTracksForProblem (greedy subsample + 2-view depth gate)
 // ============================================================================
 
 // Build a registered Image with N features and (optionally) all-valid depth
@@ -318,7 +318,7 @@ SubsampleInputs MakeSubsampleInputs(
 // short, so SubsampleTracks returns empty. Loosening to 2 surfaces every input
 // track (assuming the per-view greedy quota is satisfied).
 //
-// Drives SubsampleTracks (post-TrackEngine-dedup).
+// Drives SubsampleTracks.
 TEST(FindTracksForProblem, LengthFilter) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeRegisteredImage(1, 5));
@@ -363,7 +363,7 @@ TEST(FindTracksForProblem, LengthFilter) {
 
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
 //
-// Drives SubsampleTracks (post-TrackEngine-dedup).
+// Drives SubsampleTracks.
 TEST(FindTracksForProblem, MaxLengthFilter) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 5; ++i) {
@@ -393,9 +393,9 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
 }
 
 // TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
-// valid depth prior is dropped by the fork-unique 2-view gate.
+// valid depth prior is dropped by the 2-view depth gate.
 //
-// Drives SubsampleTracks (post-TrackEngine-dedup).
+// Drives SubsampleTracks.
 TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   std::unordered_map<image_t, Image> images;
   // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
@@ -428,7 +428,7 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
 // Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
 // uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
 //
-// Drives SubsampleTracks (post-TrackEngine-dedup).
+// Drives SubsampleTracks.
 TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeRegisteredImage(1, 3);
@@ -462,7 +462,7 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 // per-view quota. Greedy keeps as soon as every image is satisfied -> 2
 // tracks suffice (each contributes to all 3 images at once).
 //
-// Drives SubsampleTracks (post-TrackEngine-dedup).
+// Drives SubsampleTracks.
 TEST(FindTracksForProblem, GreedyQuota) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
@@ -494,20 +494,16 @@ TEST(FindTracksForProblem, GreedyQuota) {
 }
 
 // MinTracksPerViewBugDocumentation: enshrines the actual behaviour of the
-// fork-default ``required_tracks_per_view = INT_MAX``.
+// default ``required_tracks_per_view = INT_MAX``.
 //
-// In the post-dedup native API the per-view quota is a signed ``int`` and
-// the default is ``std::numeric_limits<int>::max()``. The greedy gate
-// compares an ``int`` per-camera counter against this value; with INT_MAX
-// as the bar the counter can never exceed it (we'd overflow first), so the
-// gate is *never* taken. Symmetrically the cameras-left bookkeeping never
-// fires, so the loop only stops on ``max_num_tracks``. Net effect: with
-// the default, the greedy quota is disabled entirely and every length+
-// depth-filtered track is selected.
-//
-// (Historical note: the prior fork-side TrackEngine API used a signed
-// ``-1`` default that promoted to ``UINT_MAX`` via signed/unsigned mixing
-// — same observable behaviour, different mechanism.)
+// The per-view quota is a signed ``int`` and the default is
+// ``std::numeric_limits<int>::max()``. The greedy gate compares an ``int``
+// per-camera counter against this value; with INT_MAX as the bar the
+// counter can never exceed it (we'd overflow first), so the gate is *never*
+// taken. Symmetrically the cameras-left bookkeeping never fires, so the
+// loop only stops on ``max_num_tracks``. Net effect: with the default, the
+// greedy quota is disabled entirely and every length+depth-filtered track
+// is selected.
 //
 // Documented as a test so future refactors that "fix" the default to a
 // finite non-max number trip this and force a conscious update.
@@ -538,7 +534,7 @@ TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
 }
 
 // ============================================================================
-// ProcessLoopClosurePairs (fork second pass over LC-marked inlier matches)
+// ProcessLoopClosurePairs (second pass over LC-marked inlier matches)
 // ============================================================================
 //
 // These tests now drive the two-step ``EstablishTracksFromCorrGraph`` (with
@@ -598,7 +594,7 @@ bool TrackHasLCElement(const Track& track,
 }
 
 // Run the native + LC two-step end-to-end and return the populated tracks
-// dict. Mirrors what TrackEngine::EstablishFullTracks did pre-dedup.
+// dict.
 std::unordered_map<point3D_t, Point3D> EstablishFullTracks(
     const CorrespondenceGraph& corr_graph,
     const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& keypoints,

@@ -86,7 +86,7 @@ void BindGlobalPositioner(py::module& m) {
               &GlobalPositionerOptions::apply_uncalibrated_loss_downweight,
               "Apply 0.5x ScaledLoss to BATA residuals from cameras whose "
               "focal length lacks an EXIF prior. Default true (mainline "
-              "colmap heuristic). Set false for fork-faithful behavior.")
+              "colmap heuristic). Set false to disable the downweight.")
           // --- Pass-through to ceres::Solver::Options sub-fields ---
           .def_property(
               "num_threads",
@@ -133,7 +133,7 @@ void BindGlobalPositioner(py::module& m) {
                 self.solver_options.parameter_tolerance = v;
               },
               "Ceres solver parameter tolerance.")
-          // Glomap-fork additions (default OFF — vanilla call = vanilla GP).
+          // Optional extensions (default OFF — vanilla call = vanilla GP).
           .def_readwrite(
               "point_constraint_type",
               &GlobalPositionerOptions::point_constraint_type,
@@ -364,7 +364,7 @@ void BindRotationEstimator(py::module& m) {
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
               "(degrees).")
-          // --- glomap-fork additions ---
+          // --- Video / loop-closure extensions ---
           .def_readwrite(
               "skip_risky_LC_pairs",
               &RotationEstimatorOptions::skip_risky_LC_pairs,
@@ -429,8 +429,8 @@ void BindRotationEstimator(py::module& m) {
       "``extract_final_weights=True``, returns ``{success, final_weights}`` "
       "dict instead. ``correspondence_graph`` is required when "
       "``options.skip_risky_LC_pairs=True`` so the LC-majority filter can "
-      "read ImagePair.{inliers, are_lc} fork fields (PoseGraph::Edge "
-      "doesn't carry them).");
+      "read ImagePair.{inliers, are_lc} (PoseGraph::Edge does not carry "
+      "them).");
 }
 
 void BindMotionAveraging(py::module& m) {

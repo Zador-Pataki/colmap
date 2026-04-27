@@ -38,9 +38,10 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                    py::cast<Image>(item.second));
   }
 
-  // Build keypoints map from the fork's ``Image::features`` (the native
-  // helper does the same from ``image.Points2D()`` but the dict-based
-  // entry point pre-dates the rec-resident points2D).
+  // Build keypoints map from ``Image::features``. The Reconstruction-based
+  // helper reads ``image.Points2D()`` instead; this dict-based entry point
+  // operates without a Reconstruction so it consumes the per-image
+  // ``features`` vector directly.
   std::unordered_map<image_t, std::vector<Eigen::Vector2d>>
       image_id_to_keypoints;
   image_id_to_keypoints.reserve(images.size());
@@ -63,8 +64,8 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     TrackEstablishmentOptions to = options;
     if (lc_second_pass) {
       ignore_match = MakeLoopClosureMatchPredicate(valid_pair_ids, correspondence_graph);
-      // The fork-side post-pass owns subsampling; bypass the helper-side
-      // greedy gate when the LC pass is enabled.
+      // When the LC pass is enabled, the caller owns subsampling, so the
+      // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
     }
     tracks = EstablishTracksFromCorrGraph(valid_pair_ids,

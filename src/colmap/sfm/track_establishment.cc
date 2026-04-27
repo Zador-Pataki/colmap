@@ -315,8 +315,7 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full) {
   // Length filter: lower bound counts regular + LC observations; upper
-  // bound counts regular only. Asymmetry is intentional and preserved
-  // from the pre-port behavior.
+  // bound counts regular only. The asymmetry is intentional.
   std::vector<std::pair<size_t, point3D_t>> track_lengths;
   size_t dropped_by_length = 0;
   for (const auto& [track_id, point3D] : tracks_full) {
