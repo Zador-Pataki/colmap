@@ -1,6 +1,8 @@
 #include "colmap/estimators/global_positioning.h"
 
+#include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
+#include "colmap/estimators/loss_config.h"
 #include "colmap/math/random.h"
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"
@@ -124,8 +126,9 @@ void GlobalPositioner::InitializeRandomPositions(
     if (constrained_positions.find(frame_id) == constrained_positions.end()) {
       continue;
     }
-    if (options_.generate_random_positions && options_.optimize_positions) {
-      frame_centers_[frame_id] = 100.0 * RandVector3d(-1, 1);
+    if (options_.generate_random_positions && options_.optimize_positions &&
+        !options_.use_init) {
+      frame_centers_[frame_id] = options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -145,6 +148,12 @@ void GlobalPositioner::AddPointToCameraConstraints(
       loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
   loss_function_ptcam_calibrated_ = loss_function_;
 
+  // --- Glomap-fork SPLIT_METRIC_DEPTH bookkeeping (M4) ---
+  // Reset per-image scale state. Lazy-inserted from observation loop in
+  // AddPoint3DToProblem.
+  dmap_scales_.clear();
+  dmap_scale_observation_counts_.clear();
+
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     if (point3D.track.Length() <
         static_cast<size_t>(options_.min_num_view_per_track)) {
@@ -153,18 +162,53 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
     AddPoint3DToProblem(point3D_id, reconstruction);
   }
+
+  // --- Glomap-fork ScalePriorError emission (M4) ---
+  // After every observation has been added, emit one scale-prior residual
+  // per image with depth observations. Loss is scaled by observation count
+  // so dense-depth images get proportionally stronger priors.
+  if (options_.point_constraint_type ==
+      PointConstraintType::SPLIT_METRIC_DEPTH) {
+    for (auto& [image_id, scale] : dmap_scales_) {
+      auto count_it = dmap_scale_observation_counts_.find(image_id);
+      const double obs_count =
+          (count_it != dmap_scale_observation_counts_.end())
+              ? static_cast<double>(count_it->second)
+              : 1.0;
+
+      ceres::CostFunction* scale_prior_cost = nullptr;
+      if (options_.use_log_scale_for_depth_map_scales) {
+        scale_prior_cost =
+            LogScalePriorError::Create(options_.scale_prior_stddev);
+      } else {
+        scale_prior_cost =
+            ScalePriorError::Create(1.0, options_.scale_prior_stddev);
+      }
+      if (scale_prior_cost == nullptr) continue;
+
+      // Wrap a trivial loss in a ScaledLoss(obs_count) for fork's count
+      // weighting. M5 will replace with cached_loss_scale_prior_ when the
+      // loss-routing fabric lands.
+      ceres::LossFunction* obs_count_scaled_loss = new ceres::ScaledLoss(
+          new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP);
+
+      problem_->AddResidualBlock(
+          scale_prior_cost, obs_count_scaled_loss, &scale);
+    }
+  }
 }
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
   const bool random_initialization =
-      options_.optimize_points && options_.generate_random_points;
+      options_.optimize_points && options_.generate_random_points &&
+      !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
   // Only set the points to be random if they are needed to be optimized
   if (random_initialization) {
-    point3D.xyz = 100.0 * RandVector3d(-1, 1);
+    point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
 
   // For each view in the track add the point to camera correspondences.
@@ -220,6 +264,63 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                  frame_centers_[image.FrameId()].data(),
                                  point3D.xyz.data(),
                                  &scale);
+
+      // --- Glomap-fork SPLIT_METRIC_DEPTH addition (M4) ---
+      // Add a 1-D ``MetricDepthError`` residual on
+      // (frame_center, point3D.xyz, dmap_scales_[image_id]) when the image
+      // has a valid depth prior at this feature. Anchors absolute scale.
+      if (options_.point_constraint_type ==
+              PointConstraintType::SPLIT_METRIC_DEPTH &&
+          observation.point2D_idx < image.depth_prior_validity.size() &&
+          image.depth_prior_validity[observation.point2D_idx]) {
+        const double depth_prior = image.depth_priors[observation.point2D_idx];
+        const double depth_sigma =
+            image.depth_prior_stddevs[observation.point2D_idx];
+
+        if (depth_prior > 0.0 && depth_sigma > 1e-9) {
+          // Lazy-insert dmap_scales_ on first valid observation per image.
+          // Initial value: from options_.initial_dmap_scales (caller-supplied
+          // GP1→GP2 handoff) if provided, else 1.0 (linear) / 0.0 (log).
+          if (dmap_scales_.find(observation.image_id) ==
+              dmap_scales_.end()) {
+            double init_value =
+                options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+            if (options_.initial_dmap_scales.has_value()) {
+              const auto& init_map = *options_.initial_dmap_scales;
+              auto it = init_map.find(observation.image_id);
+              if (it != init_map.end()) {
+                // Caller-supplied value is in linear space; convert to
+                // log if option says so.
+                init_value = options_.use_log_scale_for_depth_map_scales
+                                 ? std::log(std::max(it->second, 1e-9))
+                                 : it->second;
+              }
+            }
+            dmap_scales_[observation.image_id] = init_value;
+            dmap_scale_observation_counts_[observation.image_id] = 0;
+          }
+          dmap_scale_observation_counts_[observation.image_id]++;
+
+          ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
+              image.CamFromWorld().rotation(),
+              depth_prior,
+              depth_sigma,
+              options_.use_log_scale_for_depth_map_scales,
+              options_.use_log_residual_for_depth,
+              options_.zero_residual_behind,
+              options_.smooth_log_linear_transition,
+              options_.log_linear_threshold);
+
+          if (metric_depth_cost != nullptr) {
+            problem_->AddResidualBlock(
+                metric_depth_cost,
+                /*loss_function=*/nullptr,  // M5 will install loss routing
+                frame_centers_[image.FrameId()].data(),
+                point3D.xyz.data(),
+                &dmap_scales_[observation.image_id]);
+          }
+        }
+      }
     } else {
       // If the image is part of a camera rig, use the RigBATA error.
 
@@ -304,6 +405,14 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
       parameter_ordering->AddElementToGroup(center.data(), group_id);
     }
   }
+
+  // --- Glomap-fork SPLIT_METRIC_DEPTH parameter group (M4) ---
+  // Per-image dmap_scales_ ride alongside frame_centers_ in group 2.
+  for (auto& [image_id, scale] : dmap_scales_) {
+    if (problem_->HasParameterBlock(&scale)) {
+      parameter_ordering->AddElementToGroup(&scale, group_id);
+    }
+  }
 }
 
 void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
@@ -343,6 +452,18 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
     for (double& scale : scales_) {
       if (problem_->HasParameterBlock(&scale)) {
         problem_->SetParameterBlockConstant(&scale);
+      }
+    }
+  }
+
+  // --- Glomap-fork SPLIT_METRIC_DEPTH parameter bound (M4) ---
+  // Lower-bound dmap_scales_ in linear space (prevents collapse to <=0).
+  // No bound in log space (parameter is unbounded; positivity comes from
+  // exp() in MetricDepthError).
+  if (!options_.use_log_scale_for_depth_map_scales) {
+    for (auto& [image_id, scale] : dmap_scales_) {
+      if (problem_->HasParameterBlock(&scale)) {
+        problem_->SetParameterLowerBound(&scale, 0, 1e-5);
       }
     }
   }
