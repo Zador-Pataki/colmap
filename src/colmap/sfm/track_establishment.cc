@@ -29,7 +29,6 @@
 
 #include "colmap/sfm/track_establishment.h"
 
-#include "colmap/feature/types.h"
 #include "colmap/math/union_find.h"
 #include "colmap/util/logging.h"
 
@@ -47,24 +46,28 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     const MatchPredicate& ignore_match) {
   using Observation = std::pair<image_t, point2D_t>;
 
-  // Union all matching observations.
+  // Union all matching observations. Iterate ``image_pair.matches`` indexed
+  // by ``image_pair.inliers`` directly — works for both the native colmap4
+  // pipeline (geom-verify writes inliers) and downstream pipelines that
+  // populate the same fields without going through the flat_corrs
+  // ``FinalizeAfterMatchingComplete`` path.
   UnionFind<Observation> uf;
-  FeatureMatches matches;
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     THROW_CHECK(image_id_to_keypoints.count(image_id1))
         << "Missing keypoints for image " << image_id1;
     THROW_CHECK(image_id_to_keypoints.count(image_id2))
         << "Missing keypoints for image " << image_id2;
-    corr_graph.ExtractMatchesBetweenImages(image_id1, image_id2, matches);
-    for (const auto& match : matches) {
-      if (ignore_match &&
-          ignore_match(
-              image_id1, match.point2D_idx1, image_id2, match.point2D_idx2)) {
+    const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
+    const Eigen::MatrixXi& matches = image_pair.matches;
+    for (const int idx : image_pair.inliers) {
+      const point2D_t p2d1 = static_cast<point2D_t>(matches(idx, 0));
+      const point2D_t p2d2 = static_cast<point2D_t>(matches(idx, 1));
+      if (ignore_match && ignore_match(image_id1, p2d1, image_id2, p2d2)) {
         continue;
       }
-      const Observation obs1(image_id1, match.point2D_idx1);
-      const Observation obs2(image_id2, match.point2D_idx2);
+      const Observation obs1(image_id1, p2d1);
+      const Observation obs2(image_id2, p2d2);
       if (obs2 < obs1) {
         uf.Union(obs1, obs2);
       } else {
