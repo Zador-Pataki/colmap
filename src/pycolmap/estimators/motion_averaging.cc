@@ -15,12 +15,10 @@ using namespace pybind11::literals;
 namespace py = pybind11;
 
 void BindGlobalPositioner(py::module& m) {
-  py::classh<LossConfig>(m, "LossConfig")
-      .def(py::init<>())
-      .def_readwrite("type", &LossConfig::type)
-      .def_readwrite("scale", &LossConfig::scale)
-      .def_readwrite("weight", &LossConfig::weight);
-
+  // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
+  // bundle_adjustment.cc), which runs earlier in ``BindEstimators``;
+  // ``GlobalPositionerOptions::main_loss`` and the per-bucket configs
+  // below reference that already-registered class.
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -62,18 +60,12 @@ void BindGlobalPositioner(py::module& m) {
                          "colmap4). When -1 the ctor honors a GP_SEED env "
                          "var as a documented escape for byte-identity "
                          "recipes; set explicitly (>=0) to override.")
-          .def_readwrite("loss_function_type",
-                         &GlobalPositionerOptions::loss_function_type,
-                         "Top-level robust loss kernel applied to the BATA "
-                         "direction residual. Default HUBER (was hardcoded "
-                         "in upstream colmap GP).")
-          .def_readwrite("loss_function_scale",
-                         &GlobalPositionerOptions::loss_function_scale,
-                         "Scaling factor for the loss function.")
-          .def_readwrite("loss_function_weight",
-                         &GlobalPositionerOptions::loss_function_weight,
-                         "Multiplicative weight; wraps the loss in "
-                         "ceres::ScaledLoss when != 1.")
+          .def_readwrite("main_loss",
+                         &GlobalPositionerOptions::main_loss,
+                         "Top-level robust loss applied to the BATA "
+                         "direction residual (LossConfig: type, scale, "
+                         "weight). Default HUBER@0.1 — was hardcoded in "
+                         "upstream colmap GP.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
                          "Whether to use custom parameter block ordering.")

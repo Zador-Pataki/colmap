@@ -41,12 +41,10 @@ struct GlobalPositionerOptions {
   int random_seed = -1;
 
   // Top-level robust loss applied to the BATA direction residual.
-  // Upstream colmap GP hardcoded ``HuberLoss(loss_function_scale)``;
-  // this surface mirrors ``CeresBundleAdjustmentOptions`` so callers can
-  // pick a different kernel without touching the GP body.
-  LossFunctionType loss_function_type = LossFunctionType::HUBER;
-  double loss_function_scale = 0.1;
-  double loss_function_weight = 1.0;
+  // Upstream colmap GP hardcoded ``HuberLoss(0.1)``; this surface mirrors
+  // ``CeresBundleAdjustmentOptions`` so callers can pick a different
+  // kernel without touching the GP body.
+  LossConfig main_loss = {LossFunctionType::HUBER, 0.1, 1.0};
 
   // Whether to use custom parameter block ordering for Schur-based solvers.
   // Disable for deterministic behavior when using a fixed random seed.
@@ -132,13 +130,8 @@ struct GlobalPositionerOptions {
   }
 
   std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
-    auto loss = colmap::CreateLossFunction(loss_function_type,
-                                           loss_function_scale);
-    if (loss_function_weight != 1.0) {
-      loss.reset(new ceres::ScaledLoss(
-          loss.release(), loss_function_weight, ceres::TAKE_OWNERSHIP));
-    }
-    return std::shared_ptr<ceres::LossFunction>(loss.release());
+    return std::shared_ptr<ceres::LossFunction>(
+        main_loss.CreateLossFunction().release());
   }
 };
 
