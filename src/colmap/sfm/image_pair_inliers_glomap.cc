@@ -1,5 +1,7 @@
 #include "colmap/sfm/image_pair_inliers_glomap.h"
 
+#include "colmap/geometry/essential_matrix.h"
+#include "colmap/geometry/homography_matrix.h"
 #include "colmap/sfm/two_view_geometry_glomap.h"
 
 namespace colmap {
@@ -90,8 +92,7 @@ double ImagePairInliers::ScoreError(PerPairStats& stats) {
 
 double ImagePairInliers::ScoreErrorEssential(PerPairStats& stats) {
   const Rigid3d& cam2_from_cam1 = (*image_pair.two_view_geometry.cam2_from_cam1);
-  Eigen::Matrix3d E;
-  EssentialFromMotion(cam2_from_cam1, &E);
+  const Eigen::Matrix3d E = EssentialMatrixFromPose(cam2_from_cam1);
 
   // eij = camera i on image j
   Eigen::Vector3d epipole12, epipole21;
@@ -240,7 +241,8 @@ double ImagePairInliers::ScoreErrorFundamental(PerPairStats& stats) {
   for (size_t k = 0; k < stats.total_matches; ++k) {
     pt1 = images.at(image_id1).features[image_pair.matches(k, 0)];
     pt2 = images.at(image_id2).features[image_pair.matches(k, 1)];
-    const double r2 = SampsonError((*image_pair.two_view_geometry.F), pt1, pt2);
+    const double r2 = ComputeSquaredSampsonError(
+        pt1.homogeneous(), pt2.homogeneous(), *image_pair.two_view_geometry.F);
 
     if (r2 < sq_threshold) {
       signums.push_back(GetOrientationSignum((*image_pair.two_view_geometry.F), epipole, pt1, pt2));
@@ -295,7 +297,8 @@ double ImagePairInliers::ScoreErrorHomography(PerPairStats& stats) {
   for (size_t k = 0; k < stats.total_matches; ++k) {
     pt1 = images.at(image_id1).features[image_pair.matches(k, 0)];
     pt2 = images.at(image_id2).features[image_pair.matches(k, 1)];
-    const double r2 = HomographyError((*image_pair.two_view_geometry.H), pt1, pt2);
+    const double r2 = ComputeSquaredHomographyError(
+        pt1, pt2, *image_pair.two_view_geometry.H);
 
     if (r2 < sq_threshold) {
       // TODO: cheirality check for homography. Is that a thing?

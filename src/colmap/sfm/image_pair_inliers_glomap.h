@@ -1,12 +1,13 @@
 #pragma once
 
-#include "colmap/sfm/rigid3d_glomap.h"
+#include "colmap/geometry/rigid3.h"
+#include "colmap/math/math.h"
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
+#include "colmap/util/logging.h"
 #include "colmap/util/types.h"
 #include <unordered_map>
-#include "colmap/util/logging.h"
 
 // TODO(dedup-glomap-vs-colmap4): ImagePairsInlierCount is unique
 // (depth-aware re-scorer for MDRP), but its interior calls fork-side

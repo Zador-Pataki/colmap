@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "colmap/sfm/union_find_glomap.h"
+#include "colmap/math/union_find.h"
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"

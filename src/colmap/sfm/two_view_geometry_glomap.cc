@@ -46,36 +46,6 @@ double GetOrientationSignum(const Eigen::Matrix3d& F,
   return signum1 * signum2;
 }
 
-void EssentialFromMotion(const Rigid3d& pose, Eigen::Matrix3d* E) {
-  *E << 0.0, -pose.translation()(2), pose.translation()(1), pose.translation()(2),
-      0.0, -pose.translation()(0), -pose.translation()(1), pose.translation()(0), 0.0;
-  *E = (*E) * pose.rotation().toRotationMatrix();
-}
-
-// Get the essential matrix from relative pose
-void FundamentalFromMotionAndCameras(const Camera& camera1,
-                                     const Camera& camera2,
-                                     const Rigid3d& pose,
-                                     Eigen::Matrix3d* F) {
-  Eigen::Matrix3d E;
-  EssentialFromMotion(pose, &E);
-  *F = camera2.CalibrationMatrix().transpose().inverse() * E * camera1.CalibrationMatrix().inverse();
-}
-
-double SampsonError(const Eigen::Matrix3d& E,
-                    const Eigen::Vector2d& x1,
-                    const Eigen::Vector2d& x2) {
-  Eigen::Vector3d Ex1 = E * x1.homogeneous();
-  Eigen::Vector3d Etx2 = E.transpose() * x2.homogeneous();
-
-  double C = Ex1.dot(x2.homogeneous());
-  double Cx = Ex1.head(2).squaredNorm();
-  double Cy = Etx2.head(2).squaredNorm();
-  double r2 = C * C / (Cx + Cy);
-
-  return r2;
-}
-
 double SampsonError(const Eigen::Matrix3d& E,
                     const Eigen::Vector3d& x1,
                     const Eigen::Vector3d& x2) {
@@ -86,16 +56,6 @@ double SampsonError(const Eigen::Matrix3d& E,
   double Cx = Ex1.head(2).squaredNorm();
   double Cy = Etx2.head(2).squaredNorm();
   double r2 = C * C / (Cx + Cy);
-
-  return r2;
-}
-
-double HomographyError(const Eigen::Matrix3d& H,
-                       const Eigen::Vector2d& x1,
-                       const Eigen::Vector2d& x2) {
-  Eigen::Vector3d Hx1 = H * x1.homogeneous();
-  Eigen::Vector2d Hx1_norm = Hx1.head(2) / (EPS + Hx1[2]);
-  double r2 = (Hx1_norm - x2).squaredNorm();
 
   return r2;
 }

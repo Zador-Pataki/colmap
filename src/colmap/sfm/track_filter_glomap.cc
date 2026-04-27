@@ -1,6 +1,6 @@
 #include "colmap/sfm/track_filter_glomap.h"
 
-#include "colmap/sfm/rigid3d_glomap.h"
+#include "colmap/math/math.h"
 
 namespace colmap {
 namespace glomap_ra {
