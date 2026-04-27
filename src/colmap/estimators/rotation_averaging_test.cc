@@ -341,7 +341,7 @@ TEST(RotationAveraging, GravityWithUnknownRigSensorsReturnsFalse) {
                                            data.reconstruction));
 }
 
-// ---- LC-penalty gate inside ComputeMaximumPoseGraphSpanningTree.
+// ---- LC-penalty branch inside ComputeMaximumPoseGraphSpanningTree.
 //
 // With ``prioritize_tracking=false`` the MST runs vanilla maximum-weight
 // Kruskal. With ``prioritize_tracking=true`` it subtracts
@@ -432,7 +432,7 @@ std::set<std::pair<image_t, image_t>> CollectTreeEdges(
   return edges;
 }
 
-TEST(RotationAveraging, Gate_PrioritizeTrackingInMst_Off_KeepsLcDominantEdge) {
+TEST(RotationAveraging, Gate_LcPenaltyMst_Off_KeepsLcDominantEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
@@ -456,7 +456,7 @@ TEST(RotationAveraging, Gate_PrioritizeTrackingInMst_Off_KeepsLcDominantEdge) {
   EXPECT_TRUE(root == 1 || root == 2 || root == 3);
 }
 
-TEST(RotationAveraging, Gate_PrioritizeTrackingInMst_On_RoutesAroundLcEdge) {
+TEST(RotationAveraging, Gate_LcPenaltyMst_On_RoutesAroundLcEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
@@ -483,7 +483,7 @@ TEST(RotationAveraging, Gate_PrioritizeTrackingInMst_On_RoutesAroundLcEdge) {
 }
 
 TEST(RotationAveraging,
-     Gate_PrioritizeTrackingInMst_OnWithoutCgFallsBackToVanilla) {
+     Gate_LcPenaltyMst_OnWithoutCgFallsBackToVanilla) {
   // With the gate ON but no correspondence graph, the helper should ignore
   // the LC penalty entirely (the second guard in the ``cg_map_ptr`` ternary).
   // Verifies that the gate alone — without a CG — does not silently change
