@@ -150,6 +150,16 @@ class GlobalPositioner {
   void AddPoint3DToProblem(point3D_t point3D_id,
                            Reconstruction& reconstruction);
 
+  // Add a single observation (regular or LC) for one point3D. Extracted as
+  // a helper so AddPoint3DToProblem can iterate ``track.Elements()`` and
+  // ``track.lc_elements`` separately and pass ``is_lc_observation``
+  // through to the loss-routing cascade (M5).
+  void AddObservationToProblem(point3D_t point3D_id,
+                               const TrackElement& observation,
+                               bool is_lc_observation,
+                               bool random_initialization,
+                               Reconstruction& reconstruction);
+
   // Set the parameter groups
   void AddCamerasAndPointsToParameterGroups(Reconstruction& reconstruction);
 

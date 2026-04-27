@@ -148,6 +148,32 @@ void GlobalPositioner::AddPointToCameraConstraints(
       loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
   loss_function_ptcam_calibrated_ = loss_function_;
 
+  // --- Glomap-fork loss-routing cascade pre-warm (M5) ---
+  // Materialize the 10 cached losses from their LossFunctionConfig fields.
+  // Default-config (all loss_*.name == "trivial", scale=1, weight=1) gives
+  // unweighted residuals — equivalent to no override. The
+  // AddObservationToProblem cascade picks one of these based on
+  // (is_lc_observation, is_track_anchor, is_inlier, is_depth_outlier,
+  // depth_outliers_) flags. ``soft_outlier_fallback_loss_`` is allocated
+  // lazily on first non-LC depth-outlier observation in the cascade.
+  cached_loss_normal_geometry_ =
+      CreateLossFromConfig(options_.loss_normal_geometry);
+  cached_loss_normal_depth_ = CreateLossFromConfig(options_.loss_normal_depth);
+  cached_loss_lc_geometry_ = CreateLossFromConfig(options_.loss_lc_geometry);
+  cached_loss_lc_depth_ = CreateLossFromConfig(options_.loss_lc_depth);
+  cached_loss_normal_geometry_inlier_ =
+      CreateLossFromConfig(options_.loss_normal_geometry_inlier);
+  cached_loss_normal_depth_inlier_ =
+      CreateLossFromConfig(options_.loss_normal_depth_inlier);
+  cached_loss_normal_depth_outlier_ =
+      CreateLossFromConfig(options_.loss_normal_depth_outlier);
+  cached_loss_normal_geometry_trackstart_ =
+      CreateLossFromConfig(options_.loss_normal_geometry_trackstart);
+  cached_loss_normal_depth_trackstart_ =
+      CreateLossFromConfig(options_.loss_normal_depth_trackstart);
+  cached_loss_scale_prior_ = CreateLossFromConfig(options_.loss_scale_prior);
+  soft_outlier_fallback_loss_.reset();
+
   // --- Glomap-fork SPLIT_METRIC_DEPTH bookkeeping (M4) ---
   // Reset per-image scale state. Lazy-inserted from observation loop in
   // AddPoint3DToProblem.
@@ -186,11 +212,20 @@ void GlobalPositioner::AddPointToCameraConstraints(
       }
       if (scale_prior_cost == nullptr) continue;
 
-      // Wrap a trivial loss in a ScaledLoss(obs_count) for fork's count
-      // weighting. M5 will replace with cached_loss_scale_prior_ when the
-      // loss-routing fabric lands.
-      ceres::LossFunction* obs_count_scaled_loss = new ceres::ScaledLoss(
-          new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP);
+      // Per-image obs_count weighting (M4) wrapped around the cached
+      // scale-prior loss (M5). When ``loss_scale_prior`` is left at default
+      // (TrivialLoss / weight=1), the ScaledLoss collapses to a plain
+      // 1/obs_count^-1 weighting — equivalent to fork's behaviour.
+      ceres::LossFunction* obs_count_scaled_loss = nullptr;
+      if (cached_loss_scale_prior_) {
+        obs_count_scaled_loss = new ceres::ScaledLoss(
+            cached_loss_scale_prior_.get(),
+            obs_count,
+            ceres::DO_NOT_TAKE_OWNERSHIP);
+      } else {
+        obs_count_scaled_loss = new ceres::ScaledLoss(
+            new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP);
+      }
 
       problem_->AddResidualBlock(
           scale_prior_cost, obs_count_scaled_loss, &scale);
@@ -211,12 +246,44 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
     point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
 
-  // For each view in the track add the point to camera correspondences.
+  // Glomap-fork two-loop iteration (M5):
+  // - First loop walks regular track elements (``is_lc_observation=false``).
+  // - Second loop walks LC elements (``is_lc_observation=true``).
+  // The fork keeps these as parallel collections rather than flagging
+  // individual elements; the caller's loss-routing cascade picks the
+  // appropriate cached loss based on the flag.
   for (const auto& observation : point3D.track.Elements()) {
-    if (!reconstruction.ExistsImage(observation.image_id)) continue;
+    AddObservationToProblem(point3D_id,
+                            observation,
+                            /*is_lc_observation=*/false,
+                            random_initialization,
+                            reconstruction);
+  }
+  for (const auto& observation : point3D.track.lc_elements) {
+    AddObservationToProblem(point3D_id,
+                            observation,
+                            /*is_lc_observation=*/true,
+                            random_initialization,
+                            reconstruction);
+  }
+}
+
+void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
+                                               const TrackElement& observation,
+                                               bool is_lc_observation,
+                                               bool random_initialization,
+                                               Reconstruction& reconstruction) {
+  Point3D& point3D = reconstruction.Point3D(point3D_id);
+    if (!reconstruction.ExistsImage(observation.image_id)) return;
 
     Image& image = reconstruction.Image(observation.image_id);
-    if (!image.HasPose()) continue;
+    if (!image.HasPose()) return;
+
+    // --- Glomap-fork is_excluded skip (M5) ---
+    if (observation.point2D_idx < image.is_excluded.size() &&
+        image.is_excluded[observation.point2D_idx]) {
+      return;
+    }
 
     const std::optional<Eigen::Vector2d> cam_point =
         image.CameraPtr()->CamFromImg(
@@ -226,7 +293,7 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
           << "Ignoring feature because it failed to project: point3D_id="
           << point3D_id << ", image_id=" << observation.image_id
           << ", feature_id=" << observation.point2D_idx;
-      continue;
+      return;
     }
 
     const Eigen::Vector3d cam_from_point3D_dir =
@@ -253,6 +320,37 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
         (camera.has_prior_focal_length)
             ? loss_function_ptcam_calibrated_.get()
             : loss_function_ptcam_uncalibrated_.get();
+
+    // --- Glomap-fork loss-routing cascade (M5) ---
+    // When SPLIT_METRIC_DEPTH path is active, the geometry loss is
+    // selected per-observation from the 4-way cached cascade:
+    //   is_lc           -> cached_loss_lc_geometry_
+    //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
+    //   is_inlier       -> cached_loss_normal_geometry_inlier_
+    //   else            -> cached_loss_normal_geometry_
+    // Default-config (all cascade losses set to TrivialLoss / weight=1)
+    // is equivalent to no override. Calibrated/uncalibrated discrimination
+    // is preserved by composing the cascade output with native's existing
+    // 0.5x ScaledLoss for !has_prior_focal_length cameras (handled by
+    // wrapping cached_loss in loss_function_ptcam_uncalibrated_).
+    if (options_.point_constraint_type ==
+        PointConstraintType::SPLIT_METRIC_DEPTH) {
+      ceres::LossFunction* cascade = nullptr;
+      if (is_lc_observation) {
+        cascade = cached_loss_lc_geometry_.get();
+      } else if (observation.point2D_idx < image.is_track_anchor.size() &&
+                 image.is_track_anchor[observation.point2D_idx]) {
+        cascade = cached_loss_normal_geometry_trackstart_.get();
+      } else if (observation.point2D_idx < image.is_inlier.size() &&
+                 image.is_inlier[observation.point2D_idx]) {
+        cascade = cached_loss_normal_geometry_inlier_.get();
+      } else {
+        cascade = cached_loss_normal_geometry_.get();
+      }
+      if (cascade != nullptr) {
+        loss_function = cascade;
+      }
+    }
 
     // If the image is not part of a camera rig, use the standard BATA error
     if (image.IsRefInFrame()) {
@@ -312,12 +410,57 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
               options_.log_linear_threshold);
 
           if (metric_depth_cost != nullptr) {
-            problem_->AddResidualBlock(
-                metric_depth_cost,
-                /*loss_function=*/nullptr,  // M5 will install loss routing
-                frame_centers_[image.FrameId()].data(),
-                point3D.xyz.data(),
-                &dmap_scales_[observation.image_id]);
+            // --- Glomap-fork depth-loss cascade (M5) ---
+            // 5-way cascade: pre-pass-flagged outlier (M6) -> soft fallback,
+            // then is_lc -> cached_loss_lc_depth_, track_anchor ->
+            // cached_loss_normal_depth_trackstart_, inlier ->
+            // cached_loss_normal_depth_inlier_, MDRP-flagged outlier ->
+            // cached_loss_normal_depth_outlier_, else ->
+            // cached_loss_normal_depth_.
+            ceres::LossFunction* depth_loss = nullptr;
+            const std::pair<image_t, point2D_t> obs_key{observation.image_id,
+                                                        observation.point2D_idx};
+            if (depth_outliers_.count(obs_key) > 0) {
+              if (is_lc_observation) {
+                // LC outlier: skip the depth residual entirely (only emit
+                // BATA above). Drop this metric_depth_cost.
+                delete metric_depth_cost;
+                metric_depth_cost = nullptr;
+              } else {
+                // Non-LC outlier: hardcoded soft fallback (HuberLoss(1)
+                // wrapped in ScaledLoss(1)).
+                if (!soft_outlier_fallback_loss_) {
+                  soft_outlier_fallback_loss_ =
+                      std::make_shared<ceres::ScaledLoss>(
+                          new ceres::HuberLoss(1.0),
+                          1.0,
+                          ceres::TAKE_OWNERSHIP);
+                }
+                depth_loss = soft_outlier_fallback_loss_.get();
+              }
+            } else if (is_lc_observation) {
+              depth_loss = cached_loss_lc_depth_.get();
+            } else if (observation.point2D_idx < image.is_track_anchor.size() &&
+                       image.is_track_anchor[observation.point2D_idx]) {
+              depth_loss = cached_loss_normal_depth_trackstart_.get();
+            } else if (observation.point2D_idx < image.is_inlier.size() &&
+                       image.is_inlier[observation.point2D_idx]) {
+              depth_loss = cached_loss_normal_depth_inlier_.get();
+            } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
+                       image.is_depth_outlier[observation.point2D_idx]) {
+              depth_loss = cached_loss_normal_depth_outlier_.get();
+            } else {
+              depth_loss = cached_loss_normal_depth_.get();
+            }
+
+            if (metric_depth_cost != nullptr) {
+              problem_->AddResidualBlock(
+                  metric_depth_cost,
+                  depth_loss,
+                  frame_centers_[image.FrameId()].data(),
+                  point3D.xyz.data(),
+                  &dmap_scales_[observation.image_id]);
+            }
           }
         }
       }
@@ -366,7 +509,6 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
     }
 
     problem_->SetParameterLowerBound(&scale, 0, 1e-5);
-  }
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
