@@ -13,8 +13,8 @@ namespace colmap {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 // Thresholds used by inlier scoring + downstream relpose / triangulation
-// gating. Includes fork-only depth-aware fields (thres_epipole /
-// thres_epipole_nodepth) consumed by the depth-flag branches in
+// gating. Includes depth-aware fields (thres_epipole /
+// thres_epipole_nodepth) used by the depth-flag-aware gating path in
 // image_pair_inliers.cc.
 struct InlierThresholdOptions {
   double max_angle_error = 1.;
@@ -27,8 +27,7 @@ struct InlierThresholdOptions {
   double min_inlier_num = 30;
   double min_inlier_ratio = 0.25;
   double max_rotation_error = 10.;  // degrees
-  // Fork additions for MDRP/depth-aware inlier scoring (the depth-flag-aware
-  // branches in image_pair_inliers.cc consult these):
+  // Depth-aware inlier scoring fields (used when depth flags are present):
   double thres_epipole = 3.;            // degrees, with depth prior
   double thres_epipole_nodepth = 3.;    // degrees, without depth prior
 };

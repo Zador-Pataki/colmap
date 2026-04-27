@@ -41,7 +41,7 @@ Image::Image()
       num_points3D_(0) {}
 
 Image::Image(const Image& other)
-    // Public fork fields (in declaration order).
+    // Public extension fields (declaration order).
     : depth_priors(other.depth_priors),
       depth_prior_stddevs(other.depth_prior_stddevs),
       depth_prior_validity(other.depth_prior_validity),
@@ -88,7 +88,7 @@ Image& Image::operator=(const Image& other) {
     num_points3D_ = other.NumPoints3D();
     points2D_ = other.Points2D();
     pixel_cholesky_xy_ = other.PixelCholeskyXY();
-    // Glomap fork additions: copy public data members (declaration order).
+    // Copy public extension data members (declaration order).
     depth_priors = other.depth_priors;
     depth_prior_stddevs = other.depth_prior_stddevs;
     depth_prior_validity = other.depth_prior_validity;

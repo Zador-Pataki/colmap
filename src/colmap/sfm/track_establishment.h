@@ -59,9 +59,9 @@ struct TrackEstablishmentOptions {
 };
 
 // Predicate: returns true to exclude a match from the union-find phase.
-// Arguments are the two endpoints of the match. Used by the glomap fork to
-// skip loop-closure matches in the regular pass (LC matches are then added
-// as parallel ``Track::lc_elements`` in a fork-side post-pass).
+// Arguments are the two endpoints of the match. Used to skip loop-closure
+// matches in the regular pass (paired with ``Track::lc_elements`` populated
+// by a downstream LC pass).
 using MatchPredicate =
     std::function<bool(image_t, point2D_t, image_t, point2D_t)>;
 
@@ -73,8 +73,8 @@ using MatchPredicate =
 //
 // Inputs:
 //   * ``valid_pair_ids``: image pairs to iterate. Native callers pass
-//     ``pose_graph.ValidEdges() | keys``; fork callers pass the subset of
-//     ``view_graph.image_pairs`` with ``is_valid==true``.
+//     ``pose_graph.ValidEdges() | keys``; callers pass the subset of edges to
+//     consider (e.g. ``view_graph.image_pairs`` with ``is_valid==true``).
 //   * ``corr_graph``: ``ExtractMatchesBetweenImages`` reads the inlier
 //     matches stored as ``flat_corrs`` (already filtered to RANSAC inliers
 //     by the geom-verify step).

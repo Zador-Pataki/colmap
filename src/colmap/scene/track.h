@@ -85,8 +85,6 @@ class Track {
   inline bool operator==(const Track& other) const;
   inline bool operator!=(const Track& other) const;
 
-  // === glomap-fork addition ===
-
   // Elements contributed by loop closures (parallel to the standard
   // elements_ list; same (image_id, point2D_idx) value type as TrackElement).
   std::vector<TrackElement> lc_elements;

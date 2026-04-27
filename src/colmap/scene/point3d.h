@@ -53,7 +53,7 @@ struct Point3D {
 
   // Whether the 3D position has been computed (e.g. via global positioning
   // or triangulation). Default false — xyz is a placeholder until set true.
-  // glomap-fork addition.
+  // Track-quality flag set by the LC pass.
   bool is_initialized = false;
 
   inline bool HasError() const;

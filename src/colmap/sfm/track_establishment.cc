@@ -41,8 +41,8 @@ namespace colmap {
 
 namespace {
 
-// Encode (image_id, feature_id) into a single 64-bit key for set
-// lookups in the LC pass. Mirrors the fork's pre-collapse encoding.
+// Encodes (image_id, point2D_idx) into a single 64-bit key for fast LC-pass
+// lookups.
 inline uint64_t EncodeObservationKey(image_t image_id, point2D_t feature_id) {
   return (static_cast<uint64_t>(image_id) << 32) |
          static_cast<uint64_t>(feature_id);

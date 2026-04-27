@@ -65,7 +65,7 @@ struct RotationEstimatorOptions {
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
 
-  // Glomap-fork additions (default OFF — vanilla call = vanilla RA).
+  // Optional extensions (default OFF; disabled = baseline RA).
 
   // If true, drop pairs whose loop-closure inlier count exceeds non-LC
   // inliers — prevents LC-contaminated pairs from breaking RA. Consumed by
@@ -100,9 +100,10 @@ class RotationEstimator {
   // active_image_ids defines which images to include.
   // ``final_weights`` (out, optional): per-pair IRLS weight from the last
   // successful iteration. Populated only when SolveIRLS runs.
-  // ``correspondence_graph`` (in, optional): videosfm-side CG carrying
-  // ImagePair.{inliers, are_lc} fork fields. Required when
-  // ``skip_risky_LC_pairs=true``; nullptr otherwise.
+  // ``correspondence_graph`` (in, optional): Optional CorrespondenceGraph
+  // carrying per-pair ImagePair.{inliers, are_lc} used by the LC-aware
+  // paths below. Required when ``skip_risky_LC_pairs=true``; nullptr
+  // otherwise.
   // Returns true on successful estimation.
   bool EstimateRotations(
       const PoseGraph& pose_graph,
@@ -157,9 +158,9 @@ bool InitializeRigRotationsFromImages(
 // ``final_weights`` (out, optional): per-pair IRLS weight from the last
 // successful iteration of the FINAL solve (if rig expansion runs, only the
 // final solve's weights are returned).
-// ``correspondence_graph`` (in, optional): videosfm-side CG carrying
-// ImagePair.{inliers, are_lc} fork fields. Required when
-// ``skip_risky_LC_pairs=true``.
+// ``correspondence_graph`` (in, optional): Optional CorrespondenceGraph
+// carrying per-pair ImagePair.{inliers, are_lc} used by the LC-aware
+// paths below. Required when ``skip_risky_LC_pairs=true``.
 bool RunRotationAveraging(
     const RotationEstimatorOptions& options,
     PoseGraph& pose_graph,

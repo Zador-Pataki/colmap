@@ -39,7 +39,7 @@
 
 namespace colmap {
 
-// Glomap-fork cost functor: 1-D residual comparing camera-frame z-depth of a
+// 1-D residual cost functor comparing camera-frame z-depth of a
 // world point against ``s_i * m_ik`` where ``s_i`` is a per-image
 // optimization variable (linear or log-space) and ``m_ik`` is a depth prior.
 //

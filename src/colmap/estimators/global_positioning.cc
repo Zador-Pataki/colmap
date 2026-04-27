@@ -152,7 +152,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   // Down-weight uncalibrated cameras (cameras whose focal length was
   // estimated by view-graph calibration rather than an EXIF prior).
   // Gated by ``apply_uncalibrated_loss_downweight`` so callers
-  // calibrated against the glomap-fork (full-weight) behavior can
+  // calibrated against the full-weight (no-uncertainty) behavior can
   // disable it.
   if (options_.apply_uncalibrated_loss_downweight) {
     loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
@@ -381,14 +381,15 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   if (image.IsRefInFrame()) {
     // Anisotropic per-keypoint covariance when ``angular_stddevs`` is
     // populated; otherwise the bare unweighted
-    // ``BATAPairwiseDirectionCostFunctor``. The fork's
-    // ``WeightedBATADirectionalError`` rotated the residual into camera
-    // frame before whitening; here we encode the rotation in the
-    // world-frame covariance ``cov_world = R^T diag(sigma^2) R`` so
-    // native ``CovarianceWeightedCostFunctor`` reproduces the same
-    // residual norm. Without this weighted variant the
-    // SPLIT_METRIC_DEPTH geometry residuals lose their relative
-    // weighting against the metric-depth residuals.
+    // ``BATAPairwiseDirectionCostFunctor``. The depth-aware variant
+    // additionally weights by per-observation uncertainty: the residual
+    // is rotated into camera frame before whitening; here we encode the
+    // rotation in the world-frame covariance
+    // ``cov_world = R^T diag(sigma^2) R`` so native
+    // ``CovarianceWeightedCostFunctor`` reproduces the same residual
+    // norm. Without this weighted variant the SPLIT_METRIC_DEPTH
+    // geometry residuals lose their relative weighting against the
+    // metric-depth residuals.
     ceres::CostFunction* cost_function = nullptr;
     if (observation.point2D_idx < image.angular_stddevs.size()) {
       const Eigen::Vector2d& angular_std =

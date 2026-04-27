@@ -17,7 +17,7 @@
 namespace colmap {
 
 // Selects which residual structure ``GlobalPositioner`` adds per
-// observation. Mirrors the glomap-fork enum.
+// observation. Track-type enum used by the global positioner.
 enum class PointConstraintType {
   // Standard BATA direction residual only (native colmap default).
   BATA = 0,
@@ -28,9 +28,9 @@ enum class PointConstraintType {
 };
 
 // (type, scale, weight) triple used by GlobalPositioner's 10-bucket
-// per-observation loss cascade. The pycolmap binding accepts
-// ``{name: str, scale, weight}`` dicts; videosfm maps the string name
-// to the enum at the boundary (see _to_native_gp_options).
+// per-observation loss cascade. Callers pass ``{name: str, scale, weight}``
+// dicts; the string name is mapped to this enum at the boundary (see
+// _to_native_gp_options).
 struct LossConfig {
   LossFunctionType type = LossFunctionType::TRIVIAL;
   double scale = 1.0;
@@ -95,16 +95,16 @@ struct GlobalPositionerOptions {
   // The options for the solver
   ceres::Solver::Options solver_options;
 
-  // --- glomap-fork additions (default OFF — vanilla call = vanilla GP) ---
+  // --- Optional extensions (default OFF; disabled = baseline GP behavior) ---
 
   // ``BATA`` = upstream behavior; ``SPLIT_METRIC_DEPTH`` adds a 1-D
   // ``MetricDepthError`` residual per observation with a valid depth prior.
   PointConstraintType point_constraint_type = PointConstraintType::BATA;
 
   // When true, observations with ``image.is_excluded[point2D_idx]`` are
-  // skipped. The flag itself is fork-only (colmap/scene/image.h); this
-  // gate keeps GP residual count unchanged when the flag is populated by
-  // downstream code but not asked for.
+  // skipped. The flag itself lives on ``Image`` (see colmap/scene/image.h);
+  // this option just gates whether GP reads it. This keeps GP residual count
+  // unchanged when the flag is populated by downstream code but not asked for.
   bool use_observation_exclusions = false;
 
   // When true, ``AddPoint3DToProblem`` also iterates
@@ -253,7 +253,7 @@ class GlobalPositioner {
   // and needs to be estimated.
   std::unordered_map<sensor_t, Eigen::Vector3d> cams_in_rig_;
 
-  // --- glomap-fork additions ---
+  // --- Optional extensions ---
 
   // Per-image depth-map scale parameter blocks (lazily inserted on
   // first valid depth-prior observation; only populated when

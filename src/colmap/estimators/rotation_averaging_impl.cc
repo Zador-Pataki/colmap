@@ -258,7 +258,8 @@ void RotationAveragingProblem::BuildPairConstraints(
     // dominated pairs are loop-closures whose relative rotation often
     // disagrees with track-based geometry and breaks RA convergence.
     // Reads ImagePair.{inliers, are_lc} from the CorrespondenceGraph
-    // plumbed in via ctor; PoseGraph::Edge doesn't carry these fork fields.
+    // plumbed in via ctor; PoseGraph::Edge doesn't carry the per-pair
+    // {inliers, are_lc} fields.
     if (options_.skip_risky_LC_pairs && correspondence_graph_ != nullptr) {
       const auto& cg_map = correspondence_graph_->ImagePairsMap();
       auto cg_pair_it = cg_map.find(pair_id);
@@ -917,7 +918,7 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
 bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   THROW_CHECK(!options_.use_gravity)
       << "SolveCeres is gated on !use_gravity; gravity-aware video-Ceres "
-         "is not implemented (fork is also exclusive).";
+         "is not implemented (this combination is unsupported).";
 
   const auto* cg = problem.CorrespondenceGraphPtr();
   if (cg == nullptr) {

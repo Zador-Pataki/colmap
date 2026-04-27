@@ -184,11 +184,11 @@ class RotationAveragingProblem {
   // path, or video-Ceres path).
   std::unordered_map<image_pair_t, double> final_weights_;
 
-  // Optional CorrespondenceGraph reference for reading fork ImagePair
-  // fields (``inliers``, ``are_lc``) — needed by skip_risky_LC_pairs in
+  // Optional CorrespondenceGraph reference for reading per-pair
+  // ImagePair fields (inliers, are_lc) — needed by skip_risky_LC_pairs in
   // BuildPairConstraints. PoseGraph::Edge is a strict subset of
-  // CorrespondenceGraph::ImagePair and doesn't carry these fork fields,
-  // so the CG must be plumbed alongside.
+  // CorrespondenceGraph::ImagePair and doesn't carry these per-pair
+  // fields, so the CG must be plumbed alongside.
   const CorrespondenceGraph* correspondence_graph_ = nullptr;
 };
 
@@ -213,7 +213,7 @@ class RotationAveragingSolver {
   // !options_.use_gravity. Each pair gets a Huber loss (tracking
   // pairs) or Cauchy loss (LC pairs) on RelativeRotationError.
   // Requires problem.CorrespondenceGraphPtr() != nullptr (LC
-  // classification reads ImagePair.{inliers, are_lc} fork fields).
+  // classification reads ImagePair.{inliers, are_lc}).
   bool SolveCeres(RotationAveragingProblem& problem);
 
   // Computes IRLS weights for all constraints.
