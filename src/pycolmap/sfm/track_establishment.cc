@@ -1,9 +1,8 @@
 // Pycolmap binding for the LC-aware track-establishment +
 // depth-aware subsample free functions in
-// ``colmap/sfm/track_establishment.{h,cc}``. After the TrackEngine
-// dedup these route through native ``EstablishTracksFromCorrGraph`` +
-// ``AppendLoopClosureObservations`` + ``SubsampleTracks`` directly;
-// the legacy ``colmap::sfm_ext::TrackEngine`` is gone.
+// ``colmap/sfm/track_establishment.{h,cc}``: routes through
+// ``EstablishTracksFromCorrGraph`` + ``AppendLoopClosureObservations``
+// + ``SubsampleTracks`` directly.
 
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
