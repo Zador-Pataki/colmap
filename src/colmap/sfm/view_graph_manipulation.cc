@@ -87,9 +87,13 @@ void UpdateImagePairsConfig(
     const camera_t cid2 = images.at(image_pair.image_id2).CameraId();
     if (!camera_validity[cid1] || !camera_validity[cid2]) continue;
 
+    // Skip pairs whose decomposition never yielded a relative pose (e.g.
+    // F-only path or RANSAC failure). Without cam2_from_cam1 we cannot
+    // recompute F from intrinsics; leaving the pair UNCALIBRATED lets
+    // downstream filters drop it instead of crashing here.
+    if (!tvg.cam2_from_cam1.has_value()) continue;
+
     tvg.config = TwoViewGeometry::CALIBRATED;
-    THROW_CHECK(tvg.cam2_from_cam1.has_value())
-        << "UNCALIBRATED pair upgraded to CALIBRATED must have cam2_from_cam1";
     const Camera& c1 = cameras.at(cid1);
     const Camera& c2 = cameras.at(cid2);
     tvg.F = FundamentalFromEssentialMatrix(
