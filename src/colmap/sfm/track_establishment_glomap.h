@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include "colmap/math/union_find.h"
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
@@ -64,22 +63,14 @@ class TrackEngine {
       std::unordered_map<track_t, Point3D>& tracks_selected);
 
  private:
-  // Blindly concatenate tracks if any matches occur
-  void BlindConcatenation();
-
-  // Iterate through the collected tracks and record the items for each track
-  void TrackCollection(std::unordered_map<track_t, Point3D>& tracks);
-
   // Iterate over loop-closure pairs and add cross-track LC observations
+  // to the dict produced by the native UF + grouping helper.
   void ProcessLoopClosurePairs(std::unordered_map<track_t, Point3D>& tracks);
 
   const TrackEstablishmentOptions& options_;
 
   ViewGraph& view_graph_;
   const std::unordered_map<image_t, Image>& images_;
-
-  // Internal structure used for concatenating tracks
-  UnionFind<image_pair_t> uf_;
 };
 
 }  // namespace glomap_ra

@@ -39,6 +39,7 @@ COLMAP_ADD_LIBRARY(
         incremental_triangulator.h incremental_triangulator.cc
         observation_manager.h observation_manager.cc
         relative_pose_estimation.h relative_pose_estimation.cc
+        track_establishment.h track_establishment.cc
         track_establishment_glomap.h track_establishment_glomap.cc
         image_pair_inliers_glomap.h image_pair_inliers_glomap.cc
         two_view_geometry_glomap.h two_view_geometry_glomap.cc

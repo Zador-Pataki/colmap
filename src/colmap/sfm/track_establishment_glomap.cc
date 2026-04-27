@@ -1,197 +1,81 @@
 #include "colmap/sfm/track_establishment_glomap.h"
 
+#include "colmap/sfm/track_establishment.h"
+
+#include <limits>
+#include <set>
+#include <utility>
+
 namespace colmap {
 namespace glomap_ra {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 
-
 size_t TrackEngine::EstablishFullTracks(
     std::unordered_map<track_t, Point3D>& tracks) {
   tracks.clear();
-  uf_.Clear();
 
-  // Blindly concatenate tracks if any matches occur
-  BlindConcatenation();
+  // Build per-image keypoint coordinates from the fork's ``Image::features``
+  // (the native helper does the same from ``image.Points2D()`` but our
+  // images_ dict pre-dates the rec-resident points2D).
+  std::unordered_map<image_t, std::vector<Eigen::Vector2d>>
+      image_id_to_keypoints;
+  image_id_to_keypoints.reserve(images_.size());
+  for (const auto& [image_id, image] : images_) {
+    image_id_to_keypoints.emplace(image_id, image.features);
+  }
 
-  // Iterate through the collected tracks and record the items for each track
-  TrackCollection(tracks);
+  // Pre-compute the LC observation set so the predicate is O(log n) per
+  // match. The set stays small (only LC inliers across all valid pairs).
+  using LCKey = std::pair<uint64_t, uint64_t>;
+  auto encode = [](image_t i, point2D_t p) {
+    return (static_cast<uint64_t>(i) << 32) | static_cast<uint64_t>(p);
+  };
+  std::set<LCKey> lc_matches;
+  std::vector<image_pair_t> valid_pair_ids;
+  valid_pair_ids.reserve(view_graph_.MutableImagePairs().size());
+  for (const auto& [pair_id, image_pair] : view_graph_.MutableImagePairs()) {
+    if (!image_pair.is_valid) continue;
+    valid_pair_ids.push_back(pair_id);
+    const auto& matches = image_pair.matches;
+    const auto& inliers = image_pair.inliers;
+    const auto& are_lc = image_pair.are_lc;
+    for (size_t i = 0; i < inliers.size(); ++i) {
+      const size_t idx = inliers[i];
+      if (idx < are_lc.size() && are_lc[idx]) {
+        lc_matches.insert(
+            {encode(image_pair.image_id1, matches(idx, 0)),
+             encode(image_pair.image_id2, matches(idx, 1))});
+      }
+    }
+  }
 
-  // Second pass: process loop-closure pairs to add lc_observations without
-  // merging
+  // Native helper handles UF + grouping + intra-image consistency + length
+  // filter + greedy subsample. The ignore_match predicate excludes LC
+  // observations from the regular pass; ProcessLoopClosurePairs adds them
+  // back as parallel ``lc_elements`` below.
+  ::colmap::TrackEstablishmentOptions to;
+  to.intra_image_consistency_threshold = options_.thres_inconsistency;
+  to.min_num_views_per_track = options_.min_num_view_per_track;
+  // Fork preserves all consistent + length-filtered tracks at this stage;
+  // FindTracksForProblem owns the subsequent greedy subsample.
+  to.required_tracks_per_view = std::numeric_limits<int>::max();
+
+  auto ignore_match = [&](image_t i1, point2D_t p1, image_t i2, point2D_t p2) {
+    return lc_matches.count({encode(i1, p1), encode(i2, p2)}) > 0;
+  };
+
+  tracks = EstablishTracksFromCorrGraph(valid_pair_ids,
+                                        view_graph_,
+                                        image_id_to_keypoints,
+                                        to,
+                                        ignore_match);
+
+  // Second pass: add LC observations to existing tracks (or mint new ones
+  // for LC-only observation pairs).
   ProcessLoopClosurePairs(tracks);
 
-
-
   return tracks.size();
-}
-
-void TrackEngine::BlindConcatenation() {
-  // Initialize the union find data structure by connecting all the
-  // correspondences
-  size_t counter = 0;
-  for (auto pair : view_graph_.MutableImagePairs()) {
-    if ((counter + 1) % 1000 == 0 ||
-        counter == view_graph_.MutableImagePairs().size() - 1) {
-      std::cout << "\r Initializing pairs " << counter + 1 << " / "
-                << view_graph_.MutableImagePairs().size() << std::flush;
-    }
-    counter++;
-
-    const image_pair_t pair_id = pair.first;
-
-    const ImagePair& image_pair = pair.second;
-    if (!image_pair.is_valid) {
-      continue;
-    }
-
-    // Get the matches
-    const Eigen::MatrixXi& matches = image_pair.matches;
-
-    // Get the inlier mask
-    const std::vector<int>& inliers = image_pair.inliers;
-
-    // Get the LC match flags
-    const std::vector<bool>& are_lc = image_pair.are_lc;
-
-    for (size_t i = 0; i < inliers.size(); i++) {
-      size_t idx = inliers[i];
-
-      // Skip LC matches - they will be handled in ProcessLoopClosurePairs
-      if (idx < are_lc.size() && are_lc[idx]) {
-        continue;
-      }
-
-      // Get point indices
-      const uint32_t& point1_idx = matches(idx, 0);
-      const uint32_t& point2_idx = matches(idx, 1);
-
-      image_pair_t point_global_id1 =
-          static_cast<image_pair_t>(image_pair.image_id1) << 32 |
-          static_cast<image_pair_t>(point1_idx);
-      image_pair_t point_global_id2 =
-          static_cast<image_pair_t>(image_pair.image_id2) << 32 |
-          static_cast<image_pair_t>(point2_idx);
-
-      // Link the first point to the second point. Take the smallest one as the
-      // root
-      if (point_global_id2 < point_global_id1) {
-        uf_.Union(point_global_id1, point_global_id2);
-      } else
-        uf_.Union(point_global_id2, point_global_id1);
-    }
-  }
-  std::cout << std::endl;
-}
-
-void TrackEngine::TrackCollection(
-    std::unordered_map<track_t, Point3D>& tracks) {
-  std::unordered_map<uint64_t, std::unordered_set<uint64_t>> track_map;
-
-  size_t counter = 0;
-  for (auto pair : view_graph_.MutableImagePairs()) {
-    if ((counter + 1) % 1000 == 0 ||
-        counter == view_graph_.MutableImagePairs().size() - 1) {
-      std::cout << "\r Establishing pairs " << counter + 1 << " / "
-                << view_graph_.MutableImagePairs().size() << std::flush;
-    }
-    counter++;
-
-    const image_pair_t pair_id = pair.first;
-
-    const ImagePair& image_pair = pair.second;
-    if (!image_pair.is_valid) {
-      continue;
-    }
-
-    // Get the matches
-    const Eigen::MatrixXi& matches = image_pair.matches;
-
-    // Get the inlier mask
-    const std::vector<int>& inliers = image_pair.inliers;
-
-    // Get the LC match flags
-    const std::vector<bool>& are_lc = image_pair.are_lc;
-
-    for (size_t i = 0; i < inliers.size(); i++) {
-      size_t idx = inliers[i];
-
-      // Skip LC matches - they will be handled in ProcessLoopClosurePairs
-      if (idx < are_lc.size() && are_lc[idx]) {
-        continue;
-      }
-
-      // Get point indices
-      const uint32_t& point1_idx = matches(idx, 0);
-      const uint32_t& point2_idx = matches(idx, 1);
-
-      image_pair_t point_global_id1 =
-          static_cast<image_pair_t>(image_pair.image_id1) << 32 |
-          static_cast<image_pair_t>(point1_idx);
-      image_pair_t point_global_id2 =
-          static_cast<image_pair_t>(image_pair.image_id2) << 32 |
-          static_cast<image_pair_t>(point2_idx);
-
-      // Only add to track_map if this correspondence was actually processed in
-      // BlindConcatenation (i.e., if it exists in the union-find structure) We
-      // check by seeing if Find returns a value that was actually connected
-      image_pair_t track_id = uf_.Find(point_global_id1);
-
-      // Check if point_global_id1 was actually in a union (not just a singleton
-      // created by Find) If it's a singleton that wasn't unioned, Find will
-      // return itself, but we only want correspondences that were actually
-      // processed. We can verify by checking if the track_id matches
-      // point_global_id1 and if point_global_id2 is also in the same track
-      image_pair_t track_id2 = uf_.Find(point_global_id2);
-
-      // Only add if both points are in the union-find and connected (or if
-      // they're the same track) This ensures we only include correspondences
-      // that were processed in BlindConcatenation
-      if (track_id == track_id2) {
-        track_map[track_id].insert(point_global_id1);
-        track_map[track_id].insert(point_global_id2);
-      }
-    }
-  }
-  std::cout << std::endl;
-
-  counter = 0;
-  for (auto& [track_id, correspondence_set] : track_map) {
-    if ((counter + 1) % 1000 == 0 || counter == track_map.size() - 1) {
-      std::cout << "\r Establishing tracks " << counter + 1 << " / "
-                << track_map.size() << std::flush;
-    }
-    counter++;
-
-    std::unordered_map<image_t, std::vector<Eigen::Vector2d>> image_id_set;
-    for (auto point_global_id : correspondence_set) {
-      // image_id is the higher 32 bits and feature_id is the lower 32 bits
-      image_t image_id = point_global_id >> 32;
-      feature_t feature_id = point_global_id & 0xFFFFFFFF;
-      if (image_id_set.find(image_id) != image_id_set.end()) {
-        for (const auto& feature : image_id_set.at(image_id)) {
-          if ((feature - images_.at(image_id).features[feature_id]).norm() >
-              options_.thres_inconsistency) {
-            tracks[track_id].track.SetElements({});
-            break;
-          }
-        }
-        if (tracks[track_id].track.Length() == 0) {
-          break;
-        }
-      } else
-        image_id_set.insert(
-            std::make_pair(image_id, std::vector<Eigen::Vector2d>()));
-
-      image_id_set[image_id].push_back(
-          images_.at(image_id).features[feature_id]);
-
-      tracks[track_id].track.AddElement(image_id, feature_id);
-    }
-  }
-
-  std::cout << std::endl;
-
 }
 
 void TrackEngine::ProcessLoopClosurePairs(
