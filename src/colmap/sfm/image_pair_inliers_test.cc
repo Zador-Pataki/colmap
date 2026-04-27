@@ -5,7 +5,7 @@
 // 4-gate degeneracy filtering (epipolar / cheirality / triangulation
 // angle / angle-from-epipole, where the epipole gate is depth-aware).
 
-#include "colmap/sfm/image_pair_inliers_glomap.h"
+#include "colmap/sfm/image_pair_inliers.h"
 
 #include "colmap/geometry/essential_matrix.h"
 #include "colmap/geometry/rigid3.h"
@@ -24,7 +24,6 @@
 #include <gtest/gtest.h>
 
 namespace colmap {
-namespace sfm_ext {
 namespace {
 
 // Build a calibrated pinhole camera with focal=1 and principal point at 0.
@@ -310,5 +309,4 @@ TEST(ImagePairInlierCount, DepthPriorOnVsOff) {
 }
 
 }  // namespace
-}  // namespace sfm_ext
 }  // namespace colmap

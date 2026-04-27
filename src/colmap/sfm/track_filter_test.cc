@@ -27,7 +27,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#include "colmap/sfm/track_filter_glomap.h"
+#include "colmap/sfm/track_filter.h"
 
 #include "colmap/geometry/rigid3.h"
 #include "colmap/math/math.h"
@@ -46,7 +46,6 @@
 #include <gtest/gtest.h>
 
 namespace colmap {
-namespace sfm_ext {
 namespace {
 
 // Build a simple PINHOLE camera. ``has_prior`` controls the calibrated/uncalib
@@ -118,7 +117,7 @@ TEST(TrackFilter, FilterByAngle_AlignedRaysKept) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTracksByAngle(
+  const int touched = FilterTracksByAngle(
       view_graph, cameras, images, tracks, /*max_angle_error=*/1.0);
   EXPECT_EQ(touched, 0);
   EXPECT_EQ(tracks.at(1).track.Length(), 2u);
@@ -153,7 +152,7 @@ TEST(TrackFilter, FilterByAngle_MisalignedRaysDropped) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTracksByAngle(
+  const int touched = FilterTracksByAngle(
       view_graph, cameras, images, tracks, /*max_angle_error=*/1.0);
   EXPECT_EQ(touched, 1);
   EXPECT_EQ(tracks.at(1).track.Length(), 0u);
@@ -191,7 +190,7 @@ TEST(TrackFilter, FilterByAngle_UncalibratedCameraDoubleThreshold) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTracksByAngle(
+  const int touched = FilterTracksByAngle(
       view_graph, cameras, images, tracks, /*max_angle_error=*/3.0);
   EXPECT_EQ(touched, 0);
   EXPECT_EQ(tracks.at(1).track.Length(), 2u);
@@ -201,7 +200,7 @@ TEST(TrackFilter, FilterByAngle_UncalibratedCameraDoubleThreshold) {
   cameras_calib.emplace(1, MakePinholeCamera(1, /*has_prior=*/true));
   std::unordered_map<point3D_t, Point3D> tracks_calib;
   tracks_calib.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
-  const int touched_calib = TrackFilter::FilterTracksByAngle(
+  const int touched_calib = FilterTracksByAngle(
       view_graph, cameras_calib, images, tracks_calib,
       /*max_angle_error=*/3.0);
   EXPECT_EQ(touched_calib, 1);
@@ -239,7 +238,7 @@ TEST(TrackFilter, FilterByAngle_PointBehindCameraSkipped) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTracksByAngle(
+  const int touched = FilterTracksByAngle(
       view_graph, cameras, images, tracks, /*max_angle_error=*/1.0);
   EXPECT_EQ(touched, 1);
   // Only image 1's observation survived.
@@ -267,7 +266,7 @@ TEST(TrackFilter, FilterTriAngle_ParallelRaysDropped) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTrackTriangulationAngle(
+  const int touched = FilterTrackTriangulationAngle(
       view_graph, images, tracks, /*min_angle=*/1.0);
   EXPECT_EQ(touched, 1);
   EXPECT_EQ(tracks.at(1).track.Length(), 0u);
@@ -299,7 +298,7 @@ TEST(TrackFilter, FilterTriAngle_PerpendicularRaysKept) {
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
-  const int touched = TrackFilter::FilterTrackTriangulationAngle(
+  const int touched = FilterTrackTriangulationAngle(
       view_graph, images, tracks, /*min_angle=*/1.0);
   EXPECT_EQ(touched, 0);
   EXPECT_EQ(tracks.at(1).track.Length(), 2u);
@@ -335,7 +334,7 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
   {
     std::unordered_map<point3D_t, Point3D> tracks_kept;
     tracks_kept.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
-    const int touched = TrackFilter::FilterTrackTriangulationAngle(
+    const int touched = FilterTrackTriangulationAngle(
         view_graph, images, tracks_kept, theta_deg - 0.1);
     EXPECT_EQ(touched, 0);
     EXPECT_EQ(tracks_kept.at(1).track.Length(), 2u);
@@ -345,7 +344,7 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
   {
     std::unordered_map<point3D_t, Point3D> tracks_dropped;
     tracks_dropped.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
-    const int touched = TrackFilter::FilterTrackTriangulationAngle(
+    const int touched = FilterTrackTriangulationAngle(
         view_graph, images, tracks_dropped, theta_deg + 0.1);
     EXPECT_EQ(touched, 1);
     EXPECT_EQ(tracks_dropped.at(1).track.Length(), 0u);
@@ -353,5 +352,4 @@ TEST(TrackFilter, FilterTriAngle_ThreshSweep) {
 }
 
 }  // namespace
-}  // namespace sfm_ext
 }  // namespace colmap

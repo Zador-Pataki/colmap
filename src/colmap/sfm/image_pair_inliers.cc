@@ -1,16 +1,67 @@
-#include "colmap/sfm/image_pair_inliers_glomap.h"
+#include "colmap/sfm/image_pair_inliers.h"
 
 #include "colmap/geometry/essential_matrix.h"
 #include "colmap/geometry/homography_matrix.h"
-#include "colmap/sfm/two_view_geometry_glomap.h"
 
 namespace colmap {
-namespace sfm_ext {
 namespace {
 constexpr double EPS = 1e-12;
 #ifndef TWO_PI
 constexpr double TWO_PI = 2.0 * EIGEN_PI;
 #endif
+
+// Single-pair PoseLib-style cheirality with min/max depth bounds.
+// Native ``CheckCheirality`` (`colmap/geometry/pose.h`) is batched and
+// has no depth bound — different surface — so this stays as a static
+// helper colocated with its only caller.
+//
+// Code from PoseLib by Viktor Larsson.
+bool CheckCheirality(const Rigid3d& pose,
+                     const Eigen::Vector3d& x1,
+                     const Eigen::Vector3d& x2,
+                     double min_depth,
+                     double max_depth) {
+  // This code assumes that x1 and x2 are unit vectors.
+  const Eigen::Vector3d Rx1 = pose.rotation() * x1;
+  const double a = -Rx1.dot(x2);
+  const double b1 = -Rx1.dot(pose.translation());
+  const double b2 = x2.dot(pose.translation());
+  // Note: we drop the factor 1.0/(1-a*a) since it is always positive.
+  const double lambda1 = b1 - a * b2;
+  const double lambda2 = -a * b1 + b2;
+  min_depth = min_depth * (1 - a * a);
+  max_depth = max_depth * (1 - a * a);
+  bool status = lambda1 > min_depth && lambda2 > min_depth;
+  status = status && (lambda1 < max_depth) && (lambda2 < max_depth);
+  return status;
+}
+
+// F-cheirality orientation signum (no native counterpart).
+// Code from GC-RANSAC by Daniel Barath.
+double GetOrientationSignum(const Eigen::Matrix3d& F,
+                            const Eigen::Vector3d& epipole,
+                            const Eigen::Vector2d& pt1,
+                            const Eigen::Vector2d& pt2) {
+  double signum1 = F(0, 0) * pt2[0] + F(1, 0) * pt2[1] + F(2, 0);
+  double signum2 = epipole(1) - epipole(2) * pt1[1];
+  return signum1 * signum2;
+}
+
+// Depth-aware Sampson on Vec3 rays (divides by ``z + EPS`` first).
+// Native ``ComputeSquaredSampsonError`` is the Vec2 overload — this is
+// the depth-aware variant used when ``z`` carries depth meaning (e.g.
+// ``Image::features_undist``).
+double SampsonError(const Eigen::Matrix3d& E,
+                    const Eigen::Vector3d& x1,
+                    const Eigen::Vector3d& x2) {
+  Eigen::Vector3d Ex1 = E * x1 / (EPS + x1[2]);
+  Eigen::Vector3d Etx2 = E.transpose() * x2 / (EPS + x2[2]);
+  double C = Ex1.dot(x2);
+  double Cx = Ex1.head(2).squaredNorm();
+  double Cy = Etx2.head(2).squaredNorm();
+  return C * C / (Cx + Cy);
+}
+
 }  // namespace
 
 using ViewGraph = colmap::CorrespondenceGraph;
@@ -338,5 +389,4 @@ void ImagePairsInlierCount(ViewGraph& view_graph,
   }
 }
 
-}  // namespace sfm_ext
 }  // namespace colmap

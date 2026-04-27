@@ -10,13 +10,12 @@
 #include <unordered_map>
 
 namespace colmap {
-namespace sfm_ext {
 using ViewGraph = colmap::CorrespondenceGraph;
 using ImagePair = colmap::CorrespondenceGraph::ImagePair;
 // Thresholds used by inlier scoring + downstream relpose / triangulation
 // gating. Includes fork-only depth-aware fields (thres_epipole /
 // thres_epipole_nodepth) consumed by the depth-flag branches in
-// image_pair_inliers_glomap.cc.
+// image_pair_inliers.cc.
 struct InlierThresholdOptions {
   double max_angle_error = 1.;
   double max_reprojection_error = 1e-2;
@@ -41,5 +40,4 @@ void ImagePairsInlierCount(ViewGraph& view_graph,
                            const InlierThresholdOptions& options,
                            bool clean_inliers);
 
-}  // namespace sfm_ext
 }  // namespace colmap

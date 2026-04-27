@@ -40,10 +40,9 @@ COLMAP_ADD_LIBRARY(
         observation_manager.h observation_manager.cc
         relative_pose_estimation.h relative_pose_estimation.cc
         track_establishment.h track_establishment.cc
-        image_pair_inliers_glomap.h image_pair_inliers_glomap.cc
-        two_view_geometry_glomap.h two_view_geometry_glomap.cc
+        image_pair_inliers.h image_pair_inliers.cc
         view_graph_manipulation.h view_graph_manipulation.cc
-        track_filter_glomap.h track_filter_glomap.cc
+        track_filter.h track_filter.cc
     PUBLIC_LINK_LIBS
         colmap_scene
         colmap_estimators

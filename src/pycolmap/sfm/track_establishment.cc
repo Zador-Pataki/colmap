@@ -130,7 +130,7 @@ py::dict RunFindTracksForProblem(CorrespondenceGraph& /*view_graph*/,
 
 }  // namespace
 
-void BindTrackEstablishmentGlomap(py::module& m) {
+void BindTrackEstablishment(py::module& m) {
   auto PyEstOpts =
       py::classh<TrackEstablishmentOptions>(m, "TrackEstablishmentOptions")
           .def(py::init<>())

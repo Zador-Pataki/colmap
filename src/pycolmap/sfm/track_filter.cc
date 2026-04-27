@@ -1,13 +1,12 @@
-// TrackFilter binding under the pycolmap.sfm_ext submodule. The tracks
-// dict carries pycolmap.Point3D directly post-Track-collapse (no
-// fork<->native round-trip).
-
-#include "colmap/sfm/track_filter_glomap.h"
+// Pycolmap binding for the dict-of-Point3D track-filter free
+// functions in ``colmap/sfm/track_filter.{h,cc}``. Bound at top-level
+// ``pycolmap.filter_tracks_by_angle`` / ``pycolmap.filter_track_triangulation_angle``.
 
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/point3d.h"
+#include "colmap/sfm/track_filter.h"
 #include "colmap/util/types.h"
 
 #include "pycolmap/helpers.h"
@@ -27,7 +26,7 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
                                 py::dict cameras_py,
                                 py::dict images_py,
                                 py::dict tracks_py,
-                                double max_angle_error) {
+                                double max_angle_error_deg) {
   std::unordered_map<camera_t, Camera> cameras;
   cameras.reserve(cameras_py.size());
   for (auto item : cameras_py) {
@@ -50,8 +49,8 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
   int counter;
   {
     py::gil_scoped_release release;
-    counter = sfm_ext::TrackFilter::FilterTracksByAngle(
-        view_graph, cameras, images, tracks, max_angle_error);
+    counter = FilterTracksByAngle(
+        view_graph, cameras, images, tracks, max_angle_error_deg);
   }
 
   py::dict tracks_out;
@@ -67,7 +66,7 @@ py::dict RunFilterTracksByAngle(CorrespondenceGraph& view_graph,
 py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
                                           py::dict images_py,
                                           py::dict tracks_py,
-                                          double min_angle) {
+                                          double min_angle_deg) {
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
@@ -84,8 +83,8 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
   int counter;
   {
     py::gil_scoped_release release;
-    counter = sfm_ext::TrackFilter::FilterTrackTriangulationAngle(
-        view_graph, images, tracks, min_angle);
+    counter = FilterTrackTriangulationAngle(
+        view_graph, images, tracks, min_angle_deg);
   }
 
   py::dict tracks_out;
@@ -98,36 +97,28 @@ py::dict RunFilterTrackTriangulationAngle(CorrespondenceGraph& view_graph,
   return output;
 }
 
-// Idempotent get-or-create for the `sfm_ext` submodule. Each binding TU
-// has its own anonymous-namespace copy (internal linkage) — they all
-// observe the same Python-level submodule object via py::hasattr().
-py::module GetOrCreateSfmExtModule(py::module& m) {
-  if (py::hasattr(m, "sfm_ext")) {
-    return m.attr("sfm_ext").cast<py::module>();
-  }
-  return m.def_submodule("sfm_ext");
-}
-
 }  // namespace
 
-void BindTrackFilterGlomap(py::module& m) {
-  py::module m_sfm_ext = GetOrCreateSfmExtModule(m);
-  m_sfm_ext.def("filter_tracks_by_angle",
-                  &RunFilterTracksByAngle,
-                  "view_graph"_a,
-                  "cameras"_a,
-                  "images"_a,
-                  "tracks"_a,
-                  "max_angle_error"_a = 1.,
-                  "Filter tracks by angle error. Returns dict with keys "
-                  "'tracks' (filtered subset) and 'counter' (count removed).");
-  m_sfm_ext.def(
-      "filter_track_triangulation_angle",
-      &RunFilterTrackTriangulationAngle,
-      "view_graph"_a,
-      "images"_a,
-      "tracks"_a,
-      "min_angle"_a = 1.,
-      "Filter tracks by triangulation angle. Returns dict with keys "
-      "'tracks' (filtered subset) and 'counter' (count removed).");
+void BindTrackFilter(py::module& m) {
+  m.def("filter_tracks_by_angle",
+        &RunFilterTracksByAngle,
+        "view_graph"_a,
+        "cameras"_a,
+        "images"_a,
+        "tracks"_a,
+        "max_angle_error"_a = 1.,
+        "Drop track elements whose bearing-vs-3D angle exceeds the "
+        "threshold (degrees). Calibrated cameras get the supplied "
+        "threshold; uncalibrated cameras get a 2x relax. Returns a "
+        "dict with keys 'tracks' (filtered subset) and 'counter' "
+        "(number of tracks whose element list shrank).");
+  m.def("filter_track_triangulation_angle",
+        &RunFilterTrackTriangulationAngle,
+        "view_graph"_a,
+        "images"_a,
+        "tracks"_a,
+        "min_angle"_a = 1.,
+        "Drop tracks whose maximum pairwise triangulation angle is "
+        "below the threshold (degrees). Mutates the dict in place; "
+        "returns 'tracks' (filtered) and 'counter' (number dropped).");
 }

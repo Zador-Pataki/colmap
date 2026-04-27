@@ -1,4 +1,4 @@
-#include "colmap/sfm/image_pair_inliers_glomap.h"
+#include "colmap/sfm/image_pair_inliers.h"
 
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
@@ -23,7 +23,7 @@ py::dict RunImagePairsInlierCount(
     CorrespondenceGraph& view_graph,
     py::dict cameras_py,
     py::dict images_py,
-    const sfm_ext::InlierThresholdOptions& options,
+    const InlierThresholdOptions& options,
     bool clean_inliers) {
   std::unordered_map<camera_t, Camera> cameras;
   cameras.reserve(cameras_py.size());
@@ -40,7 +40,7 @@ py::dict RunImagePairsInlierCount(
 
   {
     py::gil_scoped_release release;
-    sfm_ext::ImagePairsInlierCount(
+    ImagePairsInlierCount(
         view_graph, cameras, images, options, clean_inliers);
   }
 
@@ -63,37 +63,37 @@ py::dict RunImagePairsInlierCount(
 
 void BindImagePairInliersGlomap(py::module& m) {
   auto PyOpts =
-      py::classh<sfm_ext::InlierThresholdOptions>(
+      py::classh<InlierThresholdOptions>(
           m, "InlierThresholdOptions")
           .def(py::init<>())
           .def_readwrite("max_angle_error",
-                         &sfm_ext::InlierThresholdOptions::max_angle_error)
+                         &InlierThresholdOptions::max_angle_error)
           .def_readwrite(
               "max_reprojection_error",
-              &sfm_ext::InlierThresholdOptions::max_reprojection_error)
+              &InlierThresholdOptions::max_reprojection_error)
           .def_readwrite(
               "min_triangulation_angle",
-              &sfm_ext::InlierThresholdOptions::min_triangulation_angle)
+              &InlierThresholdOptions::min_triangulation_angle)
           .def_readwrite(
               "max_epipolar_error_E",
-              &sfm_ext::InlierThresholdOptions::max_epipolar_error_E)
+              &InlierThresholdOptions::max_epipolar_error_E)
           .def_readwrite(
               "max_epipolar_error_F",
-              &sfm_ext::InlierThresholdOptions::max_epipolar_error_F)
+              &InlierThresholdOptions::max_epipolar_error_F)
           .def_readwrite(
               "max_epipolar_error_H",
-              &sfm_ext::InlierThresholdOptions::max_epipolar_error_H)
+              &InlierThresholdOptions::max_epipolar_error_H)
           .def_readwrite(
               "min_angle_from_epipole",
-              &sfm_ext::InlierThresholdOptions::min_angle_from_epipole)
+              &InlierThresholdOptions::min_angle_from_epipole)
           .def_readwrite("min_inlier_num",
-                         &sfm_ext::InlierThresholdOptions::min_inlier_num)
+                         &InlierThresholdOptions::min_inlier_num)
           .def_readwrite(
               "min_inlier_ratio",
-              &sfm_ext::InlierThresholdOptions::min_inlier_ratio)
+              &InlierThresholdOptions::min_inlier_ratio)
           .def_readwrite(
               "max_rotation_error",
-              &sfm_ext::InlierThresholdOptions::max_rotation_error);
+              &InlierThresholdOptions::max_rotation_error);
   MakeDataclass(PyOpts);
 
   m.def("image_pairs_inlier_count",

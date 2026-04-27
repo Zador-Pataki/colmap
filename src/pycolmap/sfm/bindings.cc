@@ -7,9 +7,9 @@ void BindIncrementalTriangulator(py::module& m);
 void BindIncrementalMapper(py::module& m);
 void BindViewGraphManipulation(py::module& m);
 void BindRelativePoseEstimation(py::module& m);
-void BindTrackEstablishmentGlomap(py::module& m);
-void BindImagePairInliersGlomap(py::module& m);
-void BindTrackFilterGlomap(py::module& m);
+void BindTrackEstablishment(py::module& m);
+void BindImagePairInliers(py::module& m);
+void BindTrackFilter(py::module& m);
 
 // M13: BindGlobalPositionerOptions, BindGlobalPositioningGlomap, and
 // BindRotationAveragingGlomap removed — videosfm pipeline now drives
@@ -25,7 +25,7 @@ void BindSfm(py::module& m) {
   BindIncrementalMapper(m);
   BindViewGraphManipulation(m);
   BindRelativePoseEstimation(m);
-  BindTrackEstablishmentGlomap(m);
-  BindImagePairInliersGlomap(m);
-  BindTrackFilterGlomap(m);
+  BindTrackEstablishment(m);
+  BindImagePairInliers(m);
+  BindTrackFilter(m);
 }
