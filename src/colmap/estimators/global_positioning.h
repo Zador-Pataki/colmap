@@ -46,9 +46,14 @@ struct GlobalPositionerOptions {
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
-  // PRNG seed for random initialization. Default 1 to preserve byte-identity
-  // across runs out-of-the-box; explicit ``-1`` falls back to GP_SEED env var
-  // for one transition cycle (Q8), then to non-deterministic random_device.
+  // PRNG seed for random initialization.
+  // TODO(reproduce-fork, M2/Decision-9): upstream colmap4 default is -1
+  // (non-deterministic random_device). Pinned to 1 so the documented
+  // Tier-2 byte-identity recipe (CLAUDE.md § "ATE byte-identity")
+  // works without per-call-site updates. Explicit -1 then falls back
+  // to the GP_SEED env var (transition crutch — see ctor in
+  // global_positioning.cc). Restore upstream default once all callers
+  // set random_seed explicitly.
   int random_seed = 1;
 
   // Scaling factor for the loss function

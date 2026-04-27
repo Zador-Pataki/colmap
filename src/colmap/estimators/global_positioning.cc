@@ -23,12 +23,12 @@ Eigen::Vector3d RandVector3d(double low, double high) {
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
     : options_(options) {
-  // M2 / Decision 9: random_seed=1 is the default (used to be -1 upstream).
-  // Decision 3 / Q8 transition crutch: when random_seed == -1 (caller
-  // explicitly set non-deterministic), fall back to the GP_SEED env var
-  // for one transition cycle so the documented Tier-2 byte-identity
-  // recipe (CLAUDE.md § "ATE byte-identity") still works without
-  // updating call sites.
+  // TODO(reproduce-fork, M2/Decision-9, Q8): native colmap4 only honors
+  // options_.random_seed >= 0. The GP_SEED env-var fallback is a
+  // transition crutch so the documented Tier-2 byte-identity recipe
+  // (CLAUDE.md § "ATE byte-identity") works without patching every
+  // caller. Drop this branch once all callers set random_seed
+  // explicitly.
   if (options_.random_seed >= 0) {
     SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
   } else if (const char* env_seed = std::getenv("GP_SEED")) {
