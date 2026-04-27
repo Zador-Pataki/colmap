@@ -48,6 +48,10 @@ COLMAP_ADD_LIBRARY(
         image_pair_inliers_glomap.h image_pair_inliers_glomap.cc
         two_view_geometry_glomap.h two_view_geometry_glomap.cc
         view_graph_manipulation.h view_graph_manipulation.cc
+        optimization_base_glomap.h
+        cost_function_glomap.h
+        global_positioning_glomap.h global_positioning_glomap.cc
+        track_filter_glomap.h track_filter_glomap.cc
     PUBLIC_LINK_LIBS
         colmap_scene
         colmap_estimators

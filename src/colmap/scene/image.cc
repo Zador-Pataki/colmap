@@ -41,7 +41,8 @@ Image::Image()
       num_points3D_(0) {}
 
 Image::Image(const Image& other)
-    : is_registered(other.is_registered),
+    : cam_from_world(other.cam_from_world),
+      is_registered(other.is_registered),
       features(other.features),
       features_undist(other.features_undist),
       angular_stddevs(other.angular_stddevs),
@@ -84,6 +85,7 @@ Image& Image::operator=(const Image& other) {
     num_points3D_ = other.NumPoints3D();
     points2D_ = other.Points2D();
     // Glomap fork additions: copy public data members.
+    cam_from_world = other.cam_from_world;
     is_registered = other.is_registered;
     features = other.features;
     features_undist = other.features_undist;

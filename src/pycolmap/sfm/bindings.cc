@@ -10,6 +10,9 @@ void BindRelativePoseEstimation(py::module& m);
 void BindRotationAveragingGlomap(py::module& m);
 void BindTrackEstablishmentGlomap(py::module& m);
 void BindImagePairInliersGlomap(py::module& m);
+void BindGlobalPositionerOptions(py::module& m);
+void BindGlobalPositioningGlomap(py::module& m);
+void BindTrackFilterGlomap(py::module& m);
 
 void BindSfm(py::module& m) {
   BindObservationManager(m);
@@ -20,4 +23,7 @@ void BindSfm(py::module& m) {
   BindRotationAveragingGlomap(m);
   BindTrackEstablishmentGlomap(m);
   BindImagePairInliersGlomap(m);
+  BindGlobalPositionerOptions(m);
+  BindGlobalPositioningGlomap(m);
+  BindTrackFilterGlomap(m);
 }
