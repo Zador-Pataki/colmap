@@ -73,13 +73,17 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   edges.reserve(pose_graph.NumEdges());
   weights.reserve(pose_graph.NumEdges());
 
-  // When prioritize_tracking is enabled, penalize LC-dominated edges so the
-  // spanning tree picks tracking-dominated edges as parents. Native MST
-  // maximises weights, so we SUBTRACT a large penalty from LC-dominated
-  // weights.
+  // Edge weight = inlier count when a CorrespondenceGraph is plumbed
+  // through (post-RANSAC survivor count, matches the fork's MST weight),
+  // falling back to ``edge.num_matches`` (raw match count) otherwise so
+  // mainline colmap callers without a CG keep their existing behavior.
+  //
+  // When ``prioritize_tracking`` is also enabled, LC-dominated edges
+  // additionally have ``kLCPenalty`` subtracted so the spanning tree
+  // picks tracking-dominated edges as parents.
   constexpr float kLCPenalty = 1e9f;
   const auto* cg_map_ptr =
-      (prioritize_tracking && correspondence_graph != nullptr)
+      (correspondence_graph != nullptr)
           ? &correspondence_graph->ImagePairsMap()
           : nullptr;
 
@@ -91,22 +95,26 @@ image_t ComputeMaximumPoseGraphSpanningTree(
       continue;
     }
     edges.emplace_back(it1->second, it2->second);
-    float w = static_cast<float>(edge.num_matches);
+    const CorrespondenceGraph::ImagePair* cg_pair_ptr = nullptr;
     if (cg_map_ptr != nullptr) {
       auto cg_pair_it = cg_map_ptr->find(pair_id);
       if (cg_pair_it != cg_map_ptr->end()) {
-        const auto& cg_pair = cg_pair_it->second;
-        if (!cg_pair.inliers.empty() && !cg_pair.are_lc.empty()) {
-          size_t lc_count = 0;
-          for (const auto idx : cg_pair.inliers) {
-            if (idx < cg_pair.are_lc.size() && cg_pair.are_lc[idx]) {
-              ++lc_count;
-            }
-          }
-          if (lc_count > cg_pair.inliers.size() - lc_count) {
-            w -= kLCPenalty;
-          }
+        cg_pair_ptr = &cg_pair_it->second;
+      }
+    }
+    float w = (cg_pair_ptr != nullptr)
+                  ? static_cast<float>(cg_pair_ptr->inliers.size())
+                  : static_cast<float>(edge.num_matches);
+    if (prioritize_tracking && cg_pair_ptr != nullptr &&
+        !cg_pair_ptr->inliers.empty() && !cg_pair_ptr->are_lc.empty()) {
+      size_t lc_count = 0;
+      for (const auto idx : cg_pair_ptr->inliers) {
+        if (idx < cg_pair_ptr->are_lc.size() && cg_pair_ptr->are_lc[idx]) {
+          ++lc_count;
         }
+      }
+      if (lc_count > cg_pair_ptr->inliers.size() - lc_count) {
+        w -= kLCPenalty;
       }
     }
     weights.push_back(w);
@@ -504,7 +512,13 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
   std::queue<image_t> indexes;
   indexes.push(root);
 
+  // Seed the root from its current reconstruction pose so the BFS
+  // propagates relative rotations on top of the MDRP-prior root frame
+  // instead of identity. Without this, every descendant is rotated by
+  // R_root^-1 relative to the prior gauge, which can shift IRLS
+  // weights through the ``max_rotation_error_deg`` filter.
   std::unordered_map<image_t, Rigid3d> cams_from_world;
+  cams_from_world[root] = reconstruction.Image(root).CamFromWorld();
   while (!indexes.empty()) {
     image_t curr = indexes.front();
     indexes.pop();

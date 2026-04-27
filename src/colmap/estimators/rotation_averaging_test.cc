@@ -37,7 +37,9 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/synthetic.h"
 
+#include <algorithm>
 #include <array>
+#include <numeric>
 #include <set>
 
 #include <Eigen/Geometry>
@@ -391,16 +393,22 @@ LcMstFixture BuildLcMstFixture() {
 
   // Mark the 1-2 pair as LC-dominated: more than half of its inliers carry
   // are_lc=true. The MST helper inspects ImagePairsMap() entries indexed by
-  // pair_id.
+  // pair_id, and (when a CG is plumbed through) reads the edge weight from
+  // ``inliers.size()`` rather than ``edge.num_matches``. Size each inliers
+  // vector to match the corresponding pose-graph edge so the two weight
+  // sources agree.
   const image_pair_t pair_12 = ImagePairToPairId(1, 2);
   auto& cg_pair = data.correspondence_graph.MutableImagePairs()[pair_12];
   cg_pair.image_id1 = 1;
   cg_pair.image_id2 = 2;
   cg_pair.pair_id = pair_12;
-  cg_pair.inliers = {0, 1, 2, 3, 4};
-  cg_pair.are_lc = {true, true, true, true, false};
+  cg_pair.inliers.resize(100);
+  std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
+  // 80 of 100 inliers are LC -> dominated.
+  cg_pair.are_lc.assign(100, true);
+  std::fill(cg_pair.are_lc.begin() + 80, cg_pair.are_lc.end(), false);
 
-  // The other two pairs are tracking-dominated.
+  // The other two pairs are tracking-dominated, weight 10 each.
   const std::array<std::pair<image_t, image_t>, 2> tracking_pairs = {
       {{1, 3}, {2, 3}}};
   for (const auto& pair : tracking_pairs) {
@@ -411,8 +419,9 @@ LcMstFixture BuildLcMstFixture() {
     other.image_id1 = a;
     other.image_id2 = b;
     other.pair_id = pair_id;
-    other.inliers = {0, 1, 2, 3, 4};
-    other.are_lc = {false, false, false, false, false};
+    other.inliers.resize(10);
+    std::iota(other.inliers.begin(), other.inliers.end(), 0);
+    other.are_lc.assign(10, false);
   }
   return data;
 }
