@@ -3,6 +3,8 @@
 
 #include "colmap/util/logging.h"
 
+#include <utility>
+
 #include <Eigen/Core>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -16,6 +18,10 @@ namespace colmap {
 // Reference: Zhuang et al., "Baseline Desensitizing In Translation Averaging",
 // CVPR 2018.
 struct BATAPairwiseDirectionCostFunctor {
+  // Metadata for CovarianceWeightedCostFunctor compatibility.
+  static constexpr int kNumResiduals = 3;
+  using kParameterDims = std::integer_sequence<int, 3, 3, 1>;
+
   explicit BATAPairwiseDirectionCostFunctor(
       const Eigen::Vector3d& pos2_from_pos1_dir)
       : pos2_from_pos1_dir_(pos2_from_pos1_dir) {}
@@ -129,64 +135,10 @@ struct RigBATAPairwiseDirectionCostFunctor {
   const Eigen::Quaterniond world_from_rig_rot_;
 };
 
-// Glomap-fork addition. Like ``BATAPairwiseDirectionCostFunctor`` but
-// rotates the residual into camera frame via constant ``rotation`` and
-// applies anisotropic per-axis weighting ``(1/sigma_x, 1/sigma_y,
-// 1/sigma_z)``. ``GlobalPositioner`` substitutes this for the unweighted
-// variant whenever ``image.angular_stddevs[fid]`` is populated. Caller
-// computes ``sigma_z = (sigma_x + sigma_y) / 2`` (or pulls from
-// ``image.angular_stddevs_z[fid]``) when constructing.
-struct WeightedBATADirectionalError {
-  WeightedBATADirectionalError(const Eigen::Vector3d& translation_obs,
-                               const Eigen::Quaterniond& rotation,
-                               double sigma_x,
-                               double sigma_y,
-                               double sigma_z)
-      : translation_obs_(translation_obs),
-        rotation_(rotation),
-        inv_sigma_x_(1.0 / sigma_x),
-        inv_sigma_y_(1.0 / sigma_y),
-        inv_sigma_z_(1.0 / sigma_z) {
-    THROW_CHECK_GT(sigma_x, 0.0);
-    THROW_CHECK_GT(sigma_y, 0.0);
-    THROW_CHECK_GT(sigma_z, 0.0);
-  }
-
-  template <typename T>
-  bool operator()(const T* position1,
-                  const T* position2,
-                  const T* scale,
-                  T* residuals) const {
-    using Vec3T = Eigen::Matrix<T, 3, 1>;
-    const Vec3T r_world = translation_obs_.cast<T>() -
-                          scale[0] * (Eigen::Map<const Vec3T>(position2) -
-                                      Eigen::Map<const Vec3T>(position1));
-    const Vec3T r_cam = rotation_.cast<T>() * r_world;
-    residuals[0] = T(inv_sigma_x_) * r_cam[0];
-    residuals[1] = T(inv_sigma_y_) * r_cam[1];
-    residuals[2] = T(inv_sigma_z_) * r_cam[2];
-    return true;
-  }
-
-  static ceres::CostFunction* Create(const Eigen::Vector3d& translation_obs,
-                                     const Eigen::Quaterniond& rotation,
-                                     double sigma_x,
-                                     double sigma_y,
-                                     double sigma_z) {
-    return new ceres::AutoDiffCostFunction<WeightedBATADirectionalError,
-                                           3,
-                                           3,
-                                           3,
-                                           1>(
-        new WeightedBATADirectionalError(
-            translation_obs, rotation, sigma_x, sigma_y, sigma_z));
-  }
-
-  const Eigen::Vector3d translation_obs_;
-  const Eigen::Quaterniond rotation_;
-  const double inv_sigma_x_;
-  const double inv_sigma_y_;
-  const double inv_sigma_z_;
-};
+// WeightedBATADirectionalError was dropped in favor of native
+// CovarianceWeightedCostFunctor<BATAPairwiseDirectionCostFunctor>::Create(
+//     cov_world, t_obs) where cov_world = R^T diag(sigma^2) R encodes
+// the rotation from world to camera frame. See call site in
+// global_positioning.cc.
 
 }  // namespace colmap
