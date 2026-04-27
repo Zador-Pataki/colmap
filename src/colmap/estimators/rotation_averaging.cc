@@ -44,6 +44,12 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
 
 // Compute maximum spanning tree of the pose graph weighted by inlier count.
 // Returns the root image_id and populates the parents map.
+//
+// Defined in the enclosing colmap namespace (matching the public declaration
+// in rotation_averaging.h) so unit tests can exercise the
+// ``prioritize_tracking_in_mst`` gate directly.
+}  // namespace
+
 image_t ComputeMaximumPoseGraphSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& image_ids,
@@ -120,6 +126,8 @@ image_t ComputeMaximumPoseGraphSpanningTree(
 
   return idx_to_image_id[tree.root];
 }
+
+namespace {
 
 // Computes the largest connected component and returns image ids.
 std::unordered_set<image_t> ComputeLargestConnectedComponentImageIds(

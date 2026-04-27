@@ -30,8 +30,13 @@
 #include "colmap/sfm/track_establishment.h"
 
 #include "colmap/scene/correspondence_graph.h"
+#include "colmap/scene/image.h"
+#include "colmap/scene/point3d.h"
+#include "colmap/sfm/track_establishment_glomap.h"
 #include "colmap/util/types.h"
 
+#include <algorithm>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -252,6 +257,560 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
   const auto tracks =
       EstablishTracksFromCorrGraph({}, corr_graph, keypoints, options);
   EXPECT_TRUE(tracks.empty());
+}
+
+// ============================================================================
+// FindTracksForProblem (fork pass-2 greedy subsample + 2-view depth gate)
+// ============================================================================
+
+// Build a registered Image with N features and (optionally) all-valid depth
+// priors. Each prior is set to (idx + 1) so they are strictly > 1e-6.
+Image MakeRegisteredImage(image_t image_id,
+                          int num_features,
+                          bool with_valid_depths = true) {
+  Image image;
+  image.SetImageId(image_id);
+  image.is_registered = true;
+  image.features.assign(num_features, Eigen::Vector2d::Zero());
+  if (with_valid_depths) {
+    image.depth_priors.assign(num_features, 1.0);
+    image.depth_prior_validity.assign(num_features, true);
+  } else {
+    image.depth_priors.assign(num_features, 0.0);
+    image.depth_prior_validity.assign(num_features, false);
+  }
+  return image;
+}
+
+// Build a Point3D with regular elements (image_id, feature_idx) pairs; no
+// LC elements.
+Point3D MakePoint3DFromElements(
+    const std::vector<std::pair<image_t, point2D_t>>& elements) {
+  Point3D p;
+  for (const auto& [image_id, point2D_idx] : elements) {
+    p.track.AddElement(image_id, point2D_idx);
+  }
+  return p;
+}
+
+// LengthFilter: with ``min_num_view_per_track=10`` every track here is too
+// short, so FindTracksForProblem returns empty. Loosening to 2 surfaces
+// every input track (assuming the per-view greedy quota is satisfied).
+TEST(FindTracksForProblem, LengthFilter) {
+  std::unordered_map<image_t, Image> images;
+  images.emplace(1, MakeRegisteredImage(1, 5));
+  images.emplace(2, MakeRegisteredImage(2, 5));
+  images.emplace(3, MakeRegisteredImage(3, 5));
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  for (point2D_t f = 0; f < 5; ++f) {
+    tracks_full.emplace(f,
+                        MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
+  }
+
+  CorrespondenceGraph corr_graph;
+  // High-min variant: tracks have length 3, demand 10.
+  {
+    glomap_ra::TrackEstablishmentOptions options;
+    options.min_num_view_per_track = 10;
+    options.min_num_tracks_per_view = 1000;  // never saturate
+    glomap_ra::TrackEngine engine(corr_graph, images, options);
+    std::unordered_map<glomap_ra::track_t, Point3D> selected;
+    EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+    EXPECT_TRUE(selected.empty());
+  }
+
+  // Low-min variant: every length-3 track survives.
+  {
+    glomap_ra::TrackEstablishmentOptions options;
+    options.min_num_view_per_track = 2;
+    options.min_num_tracks_per_view = 1000;
+    glomap_ra::TrackEngine engine(corr_graph, images, options);
+    std::unordered_map<glomap_ra::track_t, Point3D> selected;
+    EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 5u);
+  }
+}
+
+// MaxLengthFilter: tracks of length 5 dropped when max=4.
+TEST(FindTracksForProblem, MaxLengthFilter) {
+  std::unordered_map<image_t, Image> images;
+  for (image_t i = 1; i <= 5; ++i) {
+    images.emplace(i, MakeRegisteredImage(i, 3));
+  }
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  for (point2D_t f = 0; f < 3; ++f) {
+    tracks_full.emplace(
+        f, MakePoint3DFromElements(
+               {{1, f}, {2, f}, {3, f}, {4, f}, {5, f}}));
+  }
+
+  CorrespondenceGraph corr_graph;
+  glomap_ra::TrackEstablishmentOptions options;
+  options.min_num_view_per_track = 2;
+  options.max_num_view_per_track = 4;
+  options.min_num_tracks_per_view = 1000;
+  glomap_ra::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+  EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
+// valid depth prior is dropped by the fork-unique 2-view gate.
+TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
+  std::unordered_map<image_t, Image> images;
+  // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
+  Image img1 = MakeRegisteredImage(1, 3);
+  img1.depth_prior_validity[0] = false;
+  img1.depth_priors[0] = 0.0;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeRegisteredImage(2, 3));  // all valid
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+
+  CorrespondenceGraph corr_graph;
+  glomap_ra::TrackEstablishmentOptions options;
+  options.min_num_view_per_track = 2;
+  options.min_num_tracks_per_view = 1000;
+  glomap_ra::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 0u);
+  EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Keep: both endpoints have valid depth -> track kept.
+// Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
+// uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
+TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeRegisteredImage(1, 3);
+  // Feature 0: valid, prior=1.0  -> survives
+  // Feature 1: valid flag true, prior=1e-6 -> caught by ``<= 1e-6`` -> drops
+  img1.depth_priors[1] = 1e-6;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeRegisteredImage(2, 3));
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+  tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
+
+  CorrespondenceGraph corr_graph;
+  glomap_ra::TrackEstablishmentOptions options;
+  options.min_num_view_per_track = 2;
+  options.min_num_tracks_per_view = 1000;
+  glomap_ra::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 1u);
+  ASSERT_EQ(selected.count(0), 1u);
+  EXPECT_EQ(selected.count(1), 0u);
+}
+
+// GreedyQuota: 5 length-3 tracks across 3 images, ``min_num_tracks_per_view=2``
+// per-view quota. Greedy keeps as soon as every image is satisfied -> 2
+// tracks suffice (each contributes to all 3 images at once).
+TEST(FindTracksForProblem, GreedyQuota) {
+  std::unordered_map<image_t, Image> images;
+  for (image_t i = 1; i <= 3; ++i) {
+    images.emplace(i, MakeRegisteredImage(i, 5));
+  }
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  for (point2D_t f = 0; f < 5; ++f) {
+    tracks_full.emplace(f,
+                        MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
+  }
+
+  CorrespondenceGraph corr_graph;
+  glomap_ra::TrackEstablishmentOptions options;
+  options.min_num_view_per_track = 2;
+  options.min_num_tracks_per_view = 2;
+  glomap_ra::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  const size_t n_selected = engine.FindTracksForProblem(tracks_full, selected);
+
+  // Each track touches all 3 images so 2 tracks fully satisfy the per-view
+  // quota of 2. Bound: at most all 5 input tracks; at least 2 (the quota).
+  EXPECT_GE(n_selected, 2u);
+  EXPECT_LE(n_selected, 5u);
+  EXPECT_EQ(n_selected, selected.size());
+}
+
+// MinTracksPerViewBugDocumentation: enshrines the actual behaviour of the
+// fork-default ``min_num_tracks_per_view = -1``.
+//
+// The greedy gate compares an *unsigned* per-camera counter against the
+// signed ``-1`` option:
+//   ``if (track_per_camera > options_.min_num_tracks_per_view) continue;``
+// Signed/unsigned promotion converts ``-1`` to ``uint32_t::max()``, so the
+// gate is *never* taken (the counter cannot exceed UINT_MAX). Symmetrically
+// ``cameras_left`` is never decremented, so the loop only stops on
+// ``max_num_tracks``. Net effect: with the default, the greedy quota is
+// disabled entirely and every length+depth-filtered track is selected.
+//
+// Documented as a test so future refactors that "fix" the default to a
+// non-negative number trip this and force a conscious update.
+TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
+  std::unordered_map<image_t, Image> images;
+  for (image_t i = 1; i <= 3; ++i) {
+    images.emplace(i, MakeRegisteredImage(i, 3));
+  }
+
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks_full;
+  for (point2D_t f = 0; f < 3; ++f) {
+    tracks_full.emplace(f,
+                        MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
+  }
+
+  CorrespondenceGraph corr_graph;
+  glomap_ra::TrackEstablishmentOptions options;
+  options.min_num_view_per_track = 2;
+  // options.min_num_tracks_per_view stays at default = -1.
+  glomap_ra::TrackEngine engine(corr_graph, images, options);
+  std::unordered_map<glomap_ra::track_t, Point3D> selected;
+  // All 3 tracks are kept — the quota gate is disabled by the unsigned cmp.
+  EXPECT_EQ(engine.FindTracksForProblem(tracks_full, selected), 3u);
+  EXPECT_EQ(selected.size(), 3u);
+}
+
+// ============================================================================
+// ProcessLoopClosurePairs (fork second pass over LC-marked inlier matches)
+// ============================================================================
+//
+// These tests drive ``TrackEngine::EstablishFullTracks`` (which invokes
+// ``ProcessLoopClosurePairs`` after the native UF + grouping pass). Setup:
+//   * Regular matches (``are_lc[idx]=false``) drive native track construction.
+//   * LC matches (``are_lc[idx]=true``) are skipped by the native pass via
+//     ``ignore_match`` and consumed by the LC second pass.
+// The post-condition tracks dict is what we assert on.
+
+// Variant of ``AddImagePair`` that also populates ``are_lc``. Each
+// ``lc_match_indices`` entry is a row index into ``matches`` (NOT an index
+// into ``inliers``); matching the indexing convention used inside
+// ``ProcessLoopClosurePairs``.
+void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
+                        image_t image_id1,
+                        image_t image_id2,
+                        const std::vector<std::pair<int, int>>& matches,
+                        const std::vector<int>& inliers,
+                        const std::vector<size_t>& lc_match_indices) {
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  CorrespondenceGraph::ImagePair image_pair(image_id1, image_id2);
+  Eigen::MatrixXi matches_mat(static_cast<int>(matches.size()), 2);
+  for (size_t i = 0; i < matches.size(); ++i) {
+    matches_mat(static_cast<int>(i), 0) = matches[i].first;
+    matches_mat(static_cast<int>(i), 1) = matches[i].second;
+  }
+  image_pair.matches = std::move(matches_mat);
+  image_pair.inliers = inliers;
+  image_pair.num_matches = static_cast<point2D_t>(inliers.size());
+  std::vector<bool> are_lc(matches.size(), false);
+  for (const size_t row : lc_match_indices) are_lc[row] = true;
+  image_pair.are_lc = std::move(are_lc);
+  corr_graph.MutableImagePairs().emplace(pair_id, std::move(image_pair));
+}
+
+// Build the ``images`` map TrackEngine consumes (only ``features`` is read
+// inside EstablishFullTracks).
+std::unordered_map<image_t, Image> MakeFeatureOnlyImages(
+    const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& kps) {
+  std::unordered_map<image_t, Image> images;
+  for (const auto& [image_id, features] : kps) {
+    Image image;
+    image.SetImageId(image_id);
+    image.features = features;
+    images.emplace(image_id, std::move(image));
+  }
+  return images;
+}
+
+// Helper: track contains (image_id, p2d_idx) as a regular element.
+bool TrackHasElement(const Track& track,
+                     image_t image_id,
+                     point2D_t p2d_idx) {
+  for (const auto& el : track.Elements()) {
+    if (el.image_id == image_id && el.point2D_idx == p2d_idx) return true;
+  }
+  return false;
+}
+
+// Helper: track contains (image_id, p2d_idx) as an LC element.
+bool TrackHasLCElement(const Track& track,
+                       image_t image_id,
+                       point2D_t p2d_idx) {
+  for (const auto& el : track.lc_elements) {
+    if (el.image_id == image_id && el.point2D_idx == p2d_idx) return true;
+  }
+  return false;
+}
+
+// Both endpoints of the LC match already lie on existing native tracks, but
+// on DIFFERENT tracks. Expect reciprocal lc_elements added to both; tracks
+// stay separate (no merge).
+//
+// Setup: regular triangle (1,2,3) with feature i <-> feature i, plus a
+// regular pair (3,4) extending each feature-i track to image 4 -> 5 native
+// tracks of length 4. LC pair (1,4) with one match (img1:feat=0 <->
+// img4:feat=1): feat-0 chain holds img1:0; feat-1 chain holds img4:1.
+TEST(ProcessLoopClosurePairs, BothExistingTracks) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 4; ++i) corr_graph.AddImage(i, 5);
+
+  std::vector<std::pair<int, int>> reg_matches;
+  std::vector<int> reg_inliers;
+  for (int i = 0; i < 5; ++i) {
+    reg_matches.emplace_back(i, i);
+    reg_inliers.push_back(i);
+  }
+  AddImagePairWithLC(corr_graph, 1, 2, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 1, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 2, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 3, 4, reg_matches, reg_inliers, {});
+
+  // LC-only pair (1,4) with the cross-track match.
+  AddImagePairWithLC(corr_graph, 1, 4, {{0, 1}}, {0}, {0});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
+  auto images = MakeFeatureOnlyImages(kps);
+
+  glomap_ra::TrackEstablishmentOptions opts;
+  opts.min_num_view_per_track = 3;
+  opts.thres_inconsistency = 10.0;
+  glomap_ra::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  engine.EstablishFullTracks(tracks);
+
+  // Native pass yields 5 tracks; LC pass adds reciprocal lc_elements
+  // without minting any new track.
+  EXPECT_EQ(tracks.size(), 5u);
+
+  // Locate the two native tracks the LC match's endpoints fall on.
+  const auto kInvalid = std::numeric_limits<glomap_ra::track_t>::max();
+  glomap_ra::track_t tid_a = kInvalid;
+  glomap_ra::track_t tid_b = kInvalid;
+  for (const auto& [tid, p3d] : tracks) {
+    if (TrackHasElement(p3d.track, 1, 0)) tid_a = tid;
+    if (TrackHasElement(p3d.track, 4, 1)) tid_b = tid;
+  }
+  ASSERT_NE(tid_a, kInvalid);
+  ASSERT_NE(tid_b, kInvalid);
+  EXPECT_NE(tid_a, tid_b) << "Tracks must remain separate (no merge).";
+
+  // Reciprocal lc_elements present.
+  EXPECT_TRUE(TrackHasLCElement(tracks.at(tid_a).track, 4, 1));
+  EXPECT_TRUE(TrackHasLCElement(tracks.at(tid_b).track, 1, 0));
+
+  // Sanity: the LC observation is NOT a regular element of either track.
+  EXPECT_FALSE(TrackHasElement(tracks.at(tid_a).track, 4, 1));
+  EXPECT_FALSE(TrackHasElement(tracks.at(tid_b).track, 1, 0));
+}
+
+// Exactly one LC endpoint lies on an existing native track; the other side
+// is orphan. Expect lc_element added to the existing track; no new track is
+// minted.
+TEST(ProcessLoopClosurePairs, OneExistingTrack) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 5);
+  corr_graph.AddImage(4, 5);  // image 4 has no regular pair -> orphan.
+
+  std::vector<std::pair<int, int>> reg_matches;
+  std::vector<int> reg_inliers;
+  for (int i = 0; i < 5; ++i) {
+    reg_matches.emplace_back(i, i);
+    reg_inliers.push_back(i);
+  }
+  AddImagePairWithLC(corr_graph, 1, 2, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 1, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 2, 3, reg_matches, reg_inliers, {});
+
+  // LC-only pair (1, 4): img1:feat=0 (on native track) <-> img4:feat=0
+  // (orphan).
+  AddImagePairWithLC(corr_graph, 1, 4, {{0, 0}}, {0}, {0});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4}, 5);
+  auto images = MakeFeatureOnlyImages(kps);
+
+  glomap_ra::TrackEstablishmentOptions opts;
+  opts.min_num_view_per_track = 3;
+  opts.thres_inconsistency = 10.0;
+  glomap_ra::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  engine.EstablishFullTracks(tracks);
+
+  // 5 native tracks; no new track minted (one side already on a track).
+  EXPECT_EQ(tracks.size(), 5u);
+
+  bool found_track_a = false;
+  for (const auto& [tid, p3d] : tracks) {
+    if (TrackHasElement(p3d.track, 1, 0)) {
+      EXPECT_TRUE(TrackHasLCElement(p3d.track, 4, 0));
+      found_track_a = true;
+    }
+    // (img4, feat=0) should never be a regular element.
+    EXPECT_FALSE(TrackHasElement(p3d.track, 4, 0));
+  }
+  EXPECT_TRUE(found_track_a);
+}
+
+// Both LC endpoints are orphan (neither lives on a native track). Expect 2
+// new tracks minted, each with 1 regular element + the other side as
+// lc_element. Ids land at sequential positions past the native max.
+TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 5);
+  // Images 4, 5 are orphan.
+  corr_graph.AddImage(4, 5);
+  corr_graph.AddImage(5, 5);
+
+  std::vector<std::pair<int, int>> reg_matches;
+  std::vector<int> reg_inliers;
+  for (int i = 0; i < 5; ++i) {
+    reg_matches.emplace_back(i, i);
+    reg_inliers.push_back(i);
+  }
+  AddImagePairWithLC(corr_graph, 1, 2, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 1, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 2, 3, reg_matches, reg_inliers, {});
+
+  // LC-only pair (4, 5) carrying one match img4:feat=2 <-> img5:feat=3.
+  AddImagePairWithLC(corr_graph, 4, 5, {{2, 3}}, {0}, {0});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 5);
+  auto images = MakeFeatureOnlyImages(kps);
+
+  glomap_ra::TrackEstablishmentOptions opts;
+  opts.min_num_view_per_track = 3;
+  opts.thres_inconsistency = 10.0;
+  glomap_ra::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  engine.EstablishFullTracks(tracks);
+
+  // 5 native tracks + 2 minted = 7.
+  EXPECT_EQ(tracks.size(), 7u);
+
+  const auto kInvalid = std::numeric_limits<glomap_ra::track_t>::max();
+  glomap_ra::track_t tid_for_4_2 = kInvalid;
+  glomap_ra::track_t tid_for_5_3 = kInvalid;
+  for (const auto& [tid, p3d] : tracks) {
+    if (TrackHasElement(p3d.track, 4, 2)) tid_for_4_2 = tid;
+    if (TrackHasElement(p3d.track, 5, 3)) tid_for_5_3 = tid;
+  }
+  ASSERT_NE(tid_for_4_2, kInvalid);
+  ASSERT_NE(tid_for_5_3, kInvalid);
+  // Native ids are dense [0, 5); minted ids must be >= 5.
+  EXPECT_GE(tid_for_4_2, 5u);
+  EXPECT_GE(tid_for_5_3, 5u);
+  // Sequential — they differ by exactly 1.
+  const glomap_ra::track_t lo = std::min(tid_for_4_2, tid_for_5_3);
+  const glomap_ra::track_t hi = std::max(tid_for_4_2, tid_for_5_3);
+  EXPECT_EQ(hi, lo + 1);
+
+  // Each minted track has exactly 1 regular element + 1 lc_element.
+  const auto& track_a = tracks.at(tid_for_4_2).track;
+  EXPECT_EQ(track_a.Length(), 1u);
+  EXPECT_EQ(track_a.lc_elements.size(), 1u);
+  EXPECT_TRUE(TrackHasLCElement(track_a, 5, 3));
+
+  const auto& track_b = tracks.at(tid_for_5_3).track;
+  EXPECT_EQ(track_b.Length(), 1u);
+  EXPECT_EQ(track_b.lc_elements.size(), 1u);
+  EXPECT_TRUE(TrackHasLCElement(track_b, 4, 2));
+}
+
+// Multiple LC matches across multiple pairs. The internal obs_to_track
+// lookup must be updated as each new track is minted so subsequent LC pairs
+// find them — otherwise we'd double-mint and end up with 4 minted tracks
+// instead of 2.
+//
+// Setup: regular triangle on (1,2,3) -> 5 native tracks. Then LC pairs
+// (4,5) and (5,6), each with one LC match. The two pairs share the
+// observation (img5:feat=0). Whichever pair runs first mints a track for
+// (img5:feat=0); the second pair must hit "OneExistingTrack" via that
+// observation rather than re-mint.
+TEST(ProcessLoopClosurePairs, MultipleLCMatchesAcrossPairs) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 6; ++i) corr_graph.AddImage(i, 5);
+
+  std::vector<std::pair<int, int>> reg_matches;
+  std::vector<int> reg_inliers;
+  for (int i = 0; i < 5; ++i) {
+    reg_matches.emplace_back(i, i);
+    reg_inliers.push_back(i);
+  }
+  AddImagePairWithLC(corr_graph, 1, 2, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 1, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 2, 3, reg_matches, reg_inliers, {});
+
+  AddImagePairWithLC(corr_graph, 4, 5, {{0, 0}}, {0}, {0});
+  AddImagePairWithLC(corr_graph, 5, 6, {{0, 0}}, {0}, {0});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5, 6}, 5);
+  auto images = MakeFeatureOnlyImages(kps);
+
+  glomap_ra::TrackEstablishmentOptions opts;
+  opts.min_num_view_per_track = 3;
+  opts.thres_inconsistency = 10.0;
+  glomap_ra::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  engine.EstablishFullTracks(tracks);
+
+  // 5 native + (2 minted from first LC pair processed) + (0 minted from
+  // second LC pair, "OneExistingTrack" branch on img5:feat=0) = 7.
+  // Without the obs_to_track update, the second pair would mint two more
+  // tracks (or one, depending on order) and we'd see 8 or 9.
+  EXPECT_EQ(tracks.size(), 7u);
+
+  // (img5, feat=0) appears as a regular element exactly once across the
+  // minted tracks.
+  int count_5_0_regular = 0;
+  for (const auto& [tid, p3d] : tracks) {
+    if (TrackHasElement(p3d.track, 5, 0)) ++count_5_0_regular;
+  }
+  EXPECT_EQ(count_5_0_regular, 1);
+}
+
+// Smoke test: native produces 10 dense tracks (ids in [0, 10)); minted ids
+// must start >= 10 and never collide with a native id.
+TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 10);
+  corr_graph.AddImage(4, 10);
+  corr_graph.AddImage(5, 10);
+
+  std::vector<std::pair<int, int>> reg_matches;
+  std::vector<int> reg_inliers;
+  for (int i = 0; i < 10; ++i) {
+    reg_matches.emplace_back(i, i);
+    reg_inliers.push_back(i);
+  }
+  AddImagePairWithLC(corr_graph, 1, 2, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 1, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 2, 3, reg_matches, reg_inliers, {});
+  AddImagePairWithLC(corr_graph, 4, 5, {{0, 0}}, {0}, {0});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3, 4, 5}, 10);
+  auto images = MakeFeatureOnlyImages(kps);
+
+  glomap_ra::TrackEstablishmentOptions opts;
+  opts.min_num_view_per_track = 3;
+  opts.thres_inconsistency = 10.0;
+  glomap_ra::TrackEngine engine(corr_graph, images, opts);
+  std::unordered_map<glomap_ra::track_t, Point3D> tracks;
+  engine.EstablishFullTracks(tracks);
+
+  EXPECT_EQ(tracks.size(), 12u);  // 10 native + 2 minted
+
+  // Native ids: dense [0, 10). Verify no collision: every track that holds
+  // (img4, feat=0) or (img5, feat=0) as a regular element has id >= 10.
+  for (const auto& [tid, p3d] : tracks) {
+    const bool minted_endpoint = TrackHasElement(p3d.track, 4, 0) ||
+                                 TrackHasElement(p3d.track, 5, 0);
+    if (minted_endpoint) {
+      EXPECT_GE(tid, 10u) << "minted id " << tid << " collided with native";
+    }
+  }
 }
 
 }  // namespace

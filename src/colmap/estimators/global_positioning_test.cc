@@ -240,5 +240,272 @@ TEST(LossConfig, CauchyAndSoftL1Smoke) {
   }
 }
 
+// ---- Backward-compat gates: use_observation_exclusions + use_lc_observations.
+//
+// Default-constructed ``GlobalPositionerOptions`` keeps both gates ``false``
+// so vanilla pycolmap callers get vanilla colmap4 GP behaviour even when
+// ``image.is_excluded`` / ``track.lc_elements`` carry non-empty values left
+// over from upstream code paths. These tests verify both directions of each
+// gate by counting BATA residual blocks added during ``Solve``.
+
+namespace {
+
+// Test-only subclass exposing ``scales_`` (one entry per BATA residual
+// block added by ``AddObservationToProblem``) so we can count residuals
+// without instrumenting the production class.
+class TestableGlobalPositioner : public GlobalPositioner {
+ public:
+  using GlobalPositioner::GlobalPositioner;
+  size_t NumScales() const { return scales_.size(); }
+};
+
+// Build a small synthetic GP problem with rigs of a single ref camera so
+// every observation routes through the BATA branch in
+// ``AddObservationToProblem``. Returns a freshly loaded ``Reconstruction``
+// with rotations from GT and zero translations (mirrors the nominal test).
+struct GpTestData {
+  std::shared_ptr<Database> database;
+  Reconstruction gt_reconstruction;
+  Reconstruction reconstruction;
+  PoseGraph pose_graph;
+  DatabaseCache database_cache;
+};
+
+GpTestData BuildGpTestData() {
+  GpTestData data;
+  const auto database_path = CreateTestDir() / "database.db";
+  data.database = Database::Open(database_path);
+
+  SyntheticDatasetOptions synthetic_dataset_options;
+  synthetic_dataset_options.num_rigs = 1;
+  synthetic_dataset_options.num_cameras_per_rig = 1;
+  synthetic_dataset_options.num_frames_per_rig = 5;
+  synthetic_dataset_options.num_points3D = 30;
+  synthetic_dataset_options.two_view_geometry_has_relative_pose = true;
+  SynthesizeDataset(
+      synthetic_dataset_options, &data.gt_reconstruction, data.database.get());
+
+  DatabaseCache::Options cache_options;
+  data.database_cache.Load(*data.database, cache_options);
+
+  data.pose_graph.Load(*data.database_cache.CorrespondenceGraph());
+
+  data.reconstruction = data.gt_reconstruction;
+  for (const auto& [frame_id, _] : data.reconstruction.Frames()) {
+    Frame& frame = data.reconstruction.Frame(frame_id);
+    frame.SetRigFromWorld(
+        Rigid3d(frame.RigFromWorld().rotation(), Eigen::Vector3d::Zero()));
+  }
+  return data;
+}
+
+GlobalPositionerOptions BaselineGpOptions() {
+  GlobalPositionerOptions options;
+  options.use_gpu = false;
+  options.random_seed = 42;
+  options.solver_options.minimizer_progress_to_stdout = false;
+  // Solve with a single iteration: we only care about residual blocks
+  // attached during setup, not convergence.
+  options.solver_options.max_num_iterations = 1;
+  return options;
+}
+
+// Sum of valid track elements across tracks long enough to be added by
+// ``AddPointToCameraConstraints`` (i.e. ``track.Length() >=
+// min_num_view_per_track``).
+size_t CountValidObservations(const Reconstruction& reconstruction,
+                              int min_num_view_per_track) {
+  size_t total = 0;
+  for (const auto& [_, point3D] : reconstruction.Points3D()) {
+    if (static_cast<int>(point3D.track.Length()) < min_num_view_per_track) {
+      continue;
+    }
+    total += point3D.track.Length();
+  }
+  return total;
+}
+
+// Sum of LC elements in tracks long enough to participate in GP.
+size_t CountLcObservations(const Reconstruction& reconstruction,
+                           int min_num_view_per_track) {
+  size_t total = 0;
+  for (const auto& [_, point3D] : reconstruction.Points3D()) {
+    if (static_cast<int>(point3D.track.Length()) < min_num_view_per_track) {
+      continue;
+    }
+    total += point3D.track.lc_elements.size();
+  }
+  return total;
+}
+
+// Copy regular track elements into ``lc_elements`` for every track that
+// participates in GP and return the total LC elements added.
+size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
+                             int min_num_view_per_track) {
+  size_t total_lc = 0;
+  std::vector<point3D_t> point3D_ids;
+  point3D_ids.reserve(reconstruction.NumPoints3D());
+  for (const auto& [point3D_id, _] : reconstruction.Points3D()) {
+    point3D_ids.push_back(point3D_id);
+  }
+  for (point3D_t point3D_id : point3D_ids) {
+    Point3D& point3D = reconstruction.Point3D(point3D_id);
+    if (static_cast<int>(point3D.track.Length()) < min_num_view_per_track) {
+      continue;
+    }
+    point3D.track.lc_elements = point3D.track.Elements();
+    total_lc += point3D.track.lc_elements.size();
+  }
+  return total_lc;
+}
+
+}  // namespace
+
+TEST(GlobalPositioning, Gate_UseObservationExclusions_Off_IgnoresIsExcluded) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  const size_t expected_observations =
+      CountValidObservations(data.reconstruction, options.min_num_view_per_track);
+  ASSERT_GT(expected_observations, 0);
+
+  // Mark every Point2D of every image as excluded. With the gate OFF (the
+  // default) this should be ignored entirely.
+  std::vector<image_t> image_ids;
+  image_ids.reserve(data.reconstruction.NumImages());
+  for (const auto& [image_id, _] : data.reconstruction.Images()) {
+    image_ids.push_back(image_id);
+  }
+  for (image_t image_id : image_ids) {
+    Image& image = data.reconstruction.Image(image_id);
+    image.is_excluded.assign(image.NumPoints2D(), true);
+  }
+  ASSERT_FALSE(options.use_observation_exclusions);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.NumScales(), expected_observations);
+}
+
+TEST(GlobalPositioning, Gate_UseObservationExclusions_On_RespectsIsExcluded) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_observation_exclusions = true;
+
+  // Mark every observation excluded -> when the gate is ON, GP should add
+  // zero BATA residual blocks even though the underlying tracks are valid.
+  std::vector<image_t> image_ids;
+  image_ids.reserve(data.reconstruction.NumImages());
+  for (const auto& [image_id, _] : data.reconstruction.Images()) {
+    image_ids.push_back(image_id);
+  }
+  for (image_t image_id : image_ids) {
+    Image& image = data.reconstruction.Image(image_id);
+    image.is_excluded.assign(image.NumPoints2D(), true);
+  }
+
+  TestableGlobalPositioner positioner(options);
+  // Solve still returns true on an empty problem; the contract here is the
+  // residual count, not solver success.
+  positioner.Solve(data.pose_graph, data.reconstruction);
+
+  EXPECT_EQ(positioner.NumScales(), 0u);
+}
+
+TEST(GlobalPositioning,
+     Gate_UseObservationExclusions_On_PartialExclusionDropsOnlyMarked) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_observation_exclusions = true;
+
+  // Exclude exactly the first observation of every track that participates
+  // in GP. We expect ``NumScales() = total - num_excluded``.
+  size_t expected_excluded = 0;
+  std::set<std::pair<image_t, point2D_t>> excluded_obs;
+  for (const auto& [_, point3D] : data.reconstruction.Points3D()) {
+    if (static_cast<int>(point3D.track.Length()) <
+        options.min_num_view_per_track) {
+      continue;
+    }
+    const TrackElement& first = point3D.track.Elements().front();
+    excluded_obs.emplace(first.image_id, first.point2D_idx);
+  }
+
+  std::vector<image_t> image_ids;
+  image_ids.reserve(data.reconstruction.NumImages());
+  for (const auto& [image_id, _] : data.reconstruction.Images()) {
+    image_ids.push_back(image_id);
+  }
+  for (image_t image_id : image_ids) {
+    Image& image = data.reconstruction.Image(image_id);
+    image.is_excluded.assign(image.NumPoints2D(), false);
+    for (const auto& [excl_image_id, excl_point2D_idx] : excluded_obs) {
+      if (excl_image_id == image_id) {
+        image.is_excluded[excl_point2D_idx] = true;
+        ++expected_excluded;
+      }
+    }
+  }
+  ASSERT_GT(expected_excluded, 0u);
+
+  const size_t total_observations = CountValidObservations(
+      data.reconstruction, options.min_num_view_per_track);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.NumScales(), total_observations - expected_excluded);
+}
+
+TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  ASSERT_FALSE(options.use_lc_observations);
+
+  // Duplicate the regular elements as LC elements so every track has both
+  // sets populated. Off-gate -> only regular elements added.
+  const size_t expected_lc = DuplicateElementsAsLc(
+      data.reconstruction, options.min_num_view_per_track);
+  ASSERT_GT(expected_lc, 0u);
+
+  const size_t expected_regular = CountValidObservations(
+      data.reconstruction, options.min_num_view_per_track);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.NumScales(), expected_regular);
+}
+
+TEST(GlobalPositioning, Gate_UseLcObservations_On_IteratesLcElements) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_lc_observations = true;
+
+  // Same setup as the OFF test; ON should now add both passes.
+  DuplicateElementsAsLc(data.reconstruction, options.min_num_view_per_track);
+
+  const size_t expected_regular = CountValidObservations(
+      data.reconstruction, options.min_num_view_per_track);
+  const size_t expected_lc = CountLcObservations(
+      data.reconstruction, options.min_num_view_per_track);
+  ASSERT_GT(expected_lc, 0u);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.NumScales(), expected_regular + expected_lc);
+}
+
 }  // namespace
 }  // namespace colmap

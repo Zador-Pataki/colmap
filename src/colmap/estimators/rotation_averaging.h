@@ -174,4 +174,23 @@ bool RunRotationAveraging(
     std::unordered_map<image_pair_t, double>* final_weights = nullptr,
     const class CorrespondenceGraph* correspondence_graph = nullptr);
 
+// Compute the maximum spanning tree of ``pose_graph`` over ``image_ids``,
+// weighted by ``edge.num_matches``. Returns the root image_id and populates
+// ``parents``.
+//
+// When ``prioritize_tracking=true`` and ``correspondence_graph`` is non-null,
+// LC-dominated edges (where ``are_lc`` true count > non-LC inlier count) have
+// ``kLCPenalty=1e9`` subtracted from their weight, so the MST routes around
+// them. Vanilla colmap behaviour is recovered with
+// ``prioritize_tracking=false`` (or a null correspondence_graph).
+//
+// Exposed in the public header to support unit tests of the
+// ``RotationEstimatorOptions::prioritize_tracking_in_mst`` gate.
+image_t ComputeMaximumPoseGraphSpanningTree(
+    const PoseGraph& pose_graph,
+    const std::unordered_set<image_t>& image_ids,
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    const class CorrespondenceGraph* correspondence_graph);
+
 }  // namespace colmap

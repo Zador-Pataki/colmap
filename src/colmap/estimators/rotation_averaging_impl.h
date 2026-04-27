@@ -7,8 +7,42 @@
 #include <variant>
 
 #include <Eigen/Sparse>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
+
+// AutoDiff cost functor for relative rotation error in the video-aware
+// Ceres path. Residual = AngleAxis(R2^T * R_rel * R1) where R1, R2 are
+// the per-frame rotations being optimized and R_rel is the precomputed
+// pair relative rotation. Both rotations are stored as 3-DOF angle-axis.
+// Header-visible (rather than anonymous-namespace inside the .cc) so
+// unit tests can directly instantiate the functor.
+struct RelativeRotationError {
+  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa)
+      : rel_rot_aa_(rel_rot_aa) {}
+
+  template <typename T>
+  bool operator()(const T* const r1_aa,
+                  const T* const r2_aa,
+                  T* residuals) const {
+    Eigen::Matrix<T, 3, 3> R1, R2, R_rel;
+    ceres::AngleAxisToRotationMatrix(r1_aa, R1.data());
+    ceres::AngleAxisToRotationMatrix(r2_aa, R2.data());
+    Eigen::Matrix<T, 3, 1> rel_aa_t = rel_rot_aa_.cast<T>();
+    ceres::AngleAxisToRotationMatrix(rel_aa_t.data(), R_rel.data());
+    Eigen::Matrix<T, 3, 3> R_err = R2.transpose() * R_rel * R1;
+    ceres::RotationMatrixToAngleAxis(R_err.data(), residuals);
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa) {
+    return new ceres::AutoDiffCostFunction<RelativeRotationError, 3, 3, 3>(
+        new RelativeRotationError(rel_rot_aa));
+  }
+
+  const Eigen::Vector3d rel_rot_aa_;
+};
 
 // Rotation averaging problem formulated as linear system A*x = b where:
 //   x = [rig_from_world rotations, unknown cam_from_rig rotations]
