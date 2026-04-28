@@ -27,7 +27,8 @@ namespace {
 py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                                 py::dict images_py,
                                 const TrackEstablishmentOptions& options,
-                                bool lc_second_pass) {
+                                bool lc_second_pass,
+                                CorrespondenceGraph* lc_correspondence_graph) {
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
@@ -48,7 +49,8 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
 
   std::vector<image_pair_t> valid_pair_ids;
   valid_pair_ids.reserve(correspondence_graph.NumImagePairs());
-  for (const auto& [pair_id, image_pair] : correspondence_graph.MutableImagePairs()) {
+  for (const auto& [pair_id, image_pair] :
+       correspondence_graph.MutableImagePairs()) {
     if (image_pair.is_valid) {
       valid_pair_ids.push_back(pair_id);
     }
@@ -57,21 +59,28 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
   std::unordered_map<point3D_t, Point3D> tracks;
   {
     py::gil_scoped_release release;
-    MatchPredicate ignore_match;
     TrackEstablishmentOptions to = options;
     if (lc_second_pass) {
-      ignore_match = MakeLoopClosureMatchPredicate(valid_pair_ids, correspondence_graph);
       // When the LC pass is enabled, the caller owns subsampling, so the
       // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
     }
-    tracks = EstablishTracksFromCorrGraph(valid_pair_ids,
-                                           correspondence_graph,
-                                           image_id_to_keypoints,
-                                           to,
-                                           ignore_match);
+    tracks = EstablishTracksFromCorrGraph(
+        valid_pair_ids, correspondence_graph, image_id_to_keypoints, to);
     if (lc_second_pass) {
-      AppendLoopClosureObservations(valid_pair_ids, correspondence_graph, tracks);
+      // LC observations come from the separate LC correspondence graph which
+      // retains the matches/inliers/are_lc ImagePair fields.
+      CorrespondenceGraph& lc_cg =
+          lc_correspondence_graph ? *lc_correspondence_graph
+                                  : correspondence_graph;
+      std::vector<image_pair_t> lc_pair_ids;
+      lc_pair_ids.reserve(lc_cg.NumImagePairs());
+      for (const auto& [pair_id, image_pair] : lc_cg.MutableImagePairs()) {
+        if (image_pair.is_valid) {
+          lc_pair_ids.push_back(pair_id);
+        }
+      }
+      AppendLoopClosureObservations(lc_pair_ids, lc_cg, tracks);
     }
   }
 
@@ -157,12 +166,16 @@ void BindTrackEstablishment(py::module& m) {
         "images"_a,
         "options"_a,
         "lc_second_pass"_a = false,
+        "lc_correspondence_graph"_a = nullptr,
         "Build tracks from a CorrespondenceGraph + dict-of-images via "
-        "the union-find helper. When ``lc_second_pass=True``, "
+        "the union-find helper. The ``correspondence_graph`` should "
+        "contain only inlier correspondences (populated via "
+        "``add_two_view_geometry``). When ``lc_second_pass=True``, "
         "AppendLoopClosureObservations runs after to populate "
         "``Track::lc_elements`` from inliers flagged "
-        "``ImagePair::are_lc==true`` (the helper-side greedy subsample "
-        "is bypassed in that mode).");
+        "``ImagePair::are_lc==true`` in ``lc_correspondence_graph`` "
+        "(falls back to ``correspondence_graph`` if not provided). "
+        "The helper-side greedy subsample is bypassed in LC mode.");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,

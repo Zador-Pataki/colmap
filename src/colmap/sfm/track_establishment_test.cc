@@ -2,9 +2,9 @@
 
 #include "colmap/feature/types.h"
 #include "colmap/scene/correspondence_graph.h"
-#include "colmap/scene/two_view_geometry.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/point3d.h"
+#include "colmap/scene/two_view_geometry.h"
 #include "colmap/util/types.h"
 
 #include <algorithm>
@@ -455,10 +455,11 @@ TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
 // ``ImagePair.are_lc`` to attach LC observations as ``Track::lc_elements``.
 // The post-condition tracks dict is what we assert on.
 
-// Variant of ``AddImagePair`` that also populates ``are_lc``. Each
-// ``lc_match_indices`` entry is a row index into ``matches`` (NOT an index
-// into ``inliers``); matching the indexing convention used inside
-// ``AppendLoopClosureObservations``.
+// Variant of ``AddImagePair`` for LC tests. Adds non-LC inlier matches via
+// AddTwoViewGeometry (so ExtractMatchesBetweenImages finds them), then sets
+// the ImagePair's matches/inliers/are_lc fields for
+// AppendLoopClosureObservations. ``lc_match_indices`` are row indices into
+// ``matches`` flagged as LC.
 void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
                         image_t image_id1,
                         image_t image_id2,
