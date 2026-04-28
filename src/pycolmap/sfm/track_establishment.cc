@@ -35,6 +35,10 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                    py::cast<Image>(item.second));
   }
 
+  // Build keypoints map from ``Image::features``. The Reconstruction-based
+  // helper reads ``image.Points2D()`` instead; this dict-based entry point
+  // operates without a Reconstruction so it consumes the per-image
+  // ``features`` vector directly.
   std::unordered_map<image_t, std::vector<Eigen::Vector2d>>
       image_id_to_keypoints;
   image_id_to_keypoints.reserve(images.size());
@@ -44,8 +48,7 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
 
   std::vector<image_pair_t> valid_pair_ids;
   valid_pair_ids.reserve(correspondence_graph.NumImagePairs());
-  for (const auto& [pair_id, image_pair] :
-       correspondence_graph.MutableImagePairs()) {
+  for (const auto& [pair_id, image_pair] : correspondence_graph.MutableImagePairs()) {
     if (image_pair.is_valid) {
       valid_pair_ids.push_back(pair_id);
     }
@@ -57,18 +60,18 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     MatchPredicate ignore_match;
     TrackEstablishmentOptions to = options;
     if (lc_second_pass) {
-      ignore_match = MakeLoopClosureMatchPredicate(
-          valid_pair_ids, correspondence_graph);
+      ignore_match = MakeLoopClosureMatchPredicate(valid_pair_ids, correspondence_graph);
+      // When the LC pass is enabled, the caller owns subsampling, so the
+      // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
     }
     tracks = EstablishTracksFromCorrGraph(valid_pair_ids,
-                                          correspondence_graph,
-                                          image_id_to_keypoints,
-                                          to,
-                                          ignore_match);
+                                           correspondence_graph,
+                                           image_id_to_keypoints,
+                                           to,
+                                           ignore_match);
     if (lc_second_pass) {
-      AppendLoopClosureObservations(
-          valid_pair_ids, correspondence_graph, tracks);
+      AppendLoopClosureObservations(valid_pair_ids, correspondence_graph, tracks);
     }
   }
 
@@ -83,11 +86,17 @@ py::dict RunFindTracksForProblem(py::dict images_py,
                                  py::dict tracks_full_py,
                                  const TrackSubsampleOptions& options) {
   std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
   for (auto item : images_py) {
     const auto image_id = py::cast<image_t>(item.first);
     const auto image = py::cast<Image>(item.second);
     if (image.is_registered) {
       registered_image_ids.insert(image_id);
+    }
+    if (options.two_view_depth_gate) {
+      depth_priors.emplace(image_id, image.depth_priors);
+      depth_prior_validity.emplace(image_id, image.depth_prior_validity);
     }
   }
 
@@ -101,7 +110,11 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   std::unordered_map<point3D_t, Point3D> selected;
   {
     py::gil_scoped_release release;
-    selected = SubsampleTracks(options, registered_image_ids, tracks_full);
+    selected = SubsampleTracks(options,
+                                registered_image_ids,
+                                depth_priors,
+                                depth_prior_validity,
+                                tracks_full);
   }
 
   py::dict tracks_out;
@@ -117,9 +130,8 @@ void BindTrackEstablishment(py::module& m) {
   auto PyEstOpts =
       py::classh<TrackEstablishmentOptions>(m, "TrackEstablishmentOptions")
           .def(py::init<>())
-          .def_readwrite(
-              "intra_image_consistency_threshold",
-              &TrackEstablishmentOptions::intra_image_consistency_threshold)
+          .def_readwrite("intra_image_consistency_threshold",
+                         &TrackEstablishmentOptions::intra_image_consistency_threshold)
           .def_readwrite("min_num_views_per_track",
                          &TrackEstablishmentOptions::min_num_views_per_track)
           .def_readwrite("required_tracks_per_view",
@@ -149,7 +161,8 @@ void BindTrackEstablishment(py::module& m) {
         "the union-find helper. When ``lc_second_pass=True``, "
         "AppendLoopClosureObservations runs after to populate "
         "``Track::lc_elements`` from inliers flagged "
-        "``ImagePair::are_lc==true``.");
+        "``ImagePair::are_lc==true`` (the helper-side greedy subsample "
+        "is bypassed in that mode).");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,
@@ -157,5 +170,8 @@ void BindTrackEstablishment(py::module& m) {
         "tracks_full"_a,
         "options"_a,
         "Greedy length-sorted subsample of ``tracks_full``. Reads "
-        "``Image::is_registered`` from ``images``.");
+        "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
+        "``Image::is_registered`` from ``images``. ``correspondence_graph`` is "
+        "accepted for symmetry with ``establish_full_tracks`` but "
+        "currently unused by the subsample.");
 }
