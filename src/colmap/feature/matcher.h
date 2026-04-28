@@ -99,6 +99,15 @@ struct FeatureMatchingOptions : public FeatureMatchingTypeOptions {
   // This is useful for the case of non-overlapping cameras in a rig.
   bool skip_image_pairs_in_same_frame = false;
 
+  // Tag verified pairs as loop-closure-style (true) or tracking-style
+  // (false). Persisted per-inlier into the database (``two_view_geometries.
+  // are_lc`` BLOB column) so the global mapper can route pairs into the
+  // appropriate LC code paths (track_lc_second_pass, use_lc_observations,
+  // skip_risky_LC_pairs, MST LC-penalty). Convention used by the Create*
+  // factories: sequential matcher → false; vocab-tree, retrieval, spatial,
+  // exhaustive, transitive, image-pairs matchers → true.
+  bool is_lc_pair = true;
+
   // Whether the selected matcher requires OpenGL.
   bool RequiresOpenGL() const;
 

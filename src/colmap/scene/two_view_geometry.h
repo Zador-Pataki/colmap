@@ -78,6 +78,15 @@ struct TwoViewGeometry {
   // Inlier matches of the configuration.
   FeatureMatches inlier_matches;
 
+  // Per-inlier flag: true if this match originated from a loop-closure-style
+  // matcher (vocab-tree, retrieval, spatial, exhaustive, transitive, image-
+  // pairs), false if from a tracking-style matcher (sequential). Same length
+  // as ``inlier_matches`` when populated; empty when the matcher does not
+  // tag pairs (e.g. legacy databases without the column). Persisted through
+  // the colmap database so the global mapper can route pairs into the
+  // appropriate LC code paths.
+  std::vector<bool> are_lc;
+
   // Median triangulation angle.
   double tri_angle = -1;
 

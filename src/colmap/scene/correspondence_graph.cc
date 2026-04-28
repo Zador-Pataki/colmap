@@ -33,6 +33,7 @@
 #include "colmap/util/string.h"
 
 #include <map>
+#include <numeric>
 #include <set>
 
 namespace colmap {
@@ -192,8 +193,45 @@ void CorrespondenceGraph::AddTwoViewGeometry(
     }
   }
 
-  // Clear and deallocate matches.
+  // Populate per-pair LC fields used by the global mapper's LC-aware code
+  // paths (RA skip_risky_LC_pairs / use_video_constraints, track-establishment
+  // MakeLoopClosureMatchPredicate / AppendLoopClosureObservations). The
+  // ImagePair convention is:
+  //   ``matches`` -> N x 2 (point2D_idx1, point2D_idx2) for every inlier
+  //   ``inliers`` -> identity [0, N) since vanilla colmap only stores
+  //                  geometrically-verified matches anyway
+  //   ``are_lc`` -> per-row flag matching ``two_view_geometry.are_lc``
+  // Empty are_lc (older databases / matchers that did not tag pairs) leaves
+  // the field empty, which the LC code paths treat as "no LC observations".
+  const size_t num_inliers = two_view_geometry.inlier_matches.size();
+  Eigen::MatrixXi matches_mat(static_cast<int>(num_inliers), 2);
+  for (size_t i = 0; i < num_inliers; ++i) {
+    const auto& match = two_view_geometry.inlier_matches[i];
+    matches_mat(static_cast<int>(i), 0) = static_cast<int>(match.point2D_idx1);
+    matches_mat(static_cast<int>(i), 1) = static_cast<int>(match.point2D_idx2);
+  }
+  image_pair_it->second.matches = std::move(matches_mat);
+  image_pair_it->second.inliers.resize(num_inliers);
+  std::iota(image_pair_it->second.inliers.begin(),
+            image_pair_it->second.inliers.end(),
+            0);
+  if (!two_view_geometry.are_lc.empty() &&
+      two_view_geometry.are_lc.size() != num_inliers) {
+    LOG(WARNING) << "Inconsistent are_lc size for pair " << image_id1 << "-"
+                 << image_id2 << " (" << two_view_geometry.are_lc.size()
+                 << " vs " << num_inliers
+                 << " inliers); discarding are_lc.";
+    image_pair_it->second.are_lc.clear();
+  } else {
+    image_pair_it->second.are_lc = two_view_geometry.are_lc;
+  }
+
+  // Clear and deallocate matches. ``are_lc`` lives on ImagePair from now
+  // on; clearing on the stored TwoViewGeometry keeps it consistent with the
+  // also-cleared ``inlier_matches`` (ExtractTwoViewGeometry re-fills inlier_
+  // matches but cannot re-fill are_lc).
   FeatureMatches().swap(two_view_geometry.inlier_matches);
+  std::vector<bool>().swap(two_view_geometry.are_lc);
 
   if (ShouldSwapImagePair(image_id1, image_id2)) {
     two_view_geometry.Invert();

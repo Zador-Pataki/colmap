@@ -47,6 +47,7 @@ void BindTwoViewGeometryScene(py::module& m) {
              const Eigen::Ref<const FeatureMatchesMatrix>& matrix) {
             self.inlier_matches = MatchesFromMatrix(matrix);
           })
+      .def_readwrite("are_lc", &TwoViewGeometry::are_lc)
       .def_readwrite("tri_angle", &TwoViewGeometry::tri_angle)
       .def("invert", &TwoViewGeometry::Invert);
   MakeDataclass(PyTwoViewGeometry);

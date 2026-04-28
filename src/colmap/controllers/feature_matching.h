@@ -166,6 +166,10 @@ struct GeometricVerifierOptions {
   // database. If no TwoViewGeometry is found we will fall back to geometric
   // verification with RANSAC.
   bool use_existing_relative_pose = false;
+
+  // Tag verified pairs as loop-closure-style (true) or tracking-style
+  // (false). See ``FeatureMatchingOptions::is_lc_pair``.
+  bool is_lc_pair = true;
 };
 
 // Perform geometric verification of existing matched image pairs.

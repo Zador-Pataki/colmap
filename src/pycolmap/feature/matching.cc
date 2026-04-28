@@ -185,6 +185,14 @@ void BindFeatureMatching(py::module& m) {
               &FeatureMatchingOptions::skip_image_pairs_in_same_frame,
               "Whether to skip matching images within the same frame. This is "
               "useful for the case of non-overlapping cameras in a rig.")
+          .def_readwrite(
+              "is_lc_pair",
+              &FeatureMatchingOptions::is_lc_pair,
+              "Tag verified pairs as loop-closure (true) or tracking (false). "
+              "Persisted per-inlier into the database so the global mapper can "
+              "route pairs into the LC code paths "
+              "(track_lc_second_pass, use_lc_observations, "
+              "skip_risky_LC_pairs, MST LC-penalty).")
           .def_readwrite("sift", &FeatureMatchingOptions::sift)
           .def("check", &FeatureMatchingOptions::Check);
 #ifdef COLMAP_ONNX_ENABLED

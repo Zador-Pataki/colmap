@@ -245,6 +245,47 @@ void WriteDynamicMatrixBlob(sqlite3_stmt* sql_stmt,
                                  SQLITE_STATIC));
 }
 
+// Read a vector<bool> stored as a tightly-packed BLOB of bytes (one byte per
+// flag, 0 or 1). Returns an empty vector when the column is NULL.
+std::vector<bool> ReadAreLcBlob(sqlite3_stmt* sql_stmt, const int col) {
+  if (sqlite3_column_type(sql_stmt, col) == SQLITE_NULL) {
+    return {};
+  }
+  const size_t num_bytes =
+      static_cast<size_t>(sqlite3_column_bytes(sql_stmt, col));
+  if (num_bytes == 0) {
+    return {};
+  }
+  const uint8_t* data =
+      static_cast<const uint8_t*>(sqlite3_column_blob(sql_stmt, col));
+  std::vector<bool> are_lc(num_bytes);
+  for (size_t i = 0; i < num_bytes; ++i) {
+    are_lc[i] = data[i] != 0;
+  }
+  return are_lc;
+}
+
+// Pack a vector<bool> into a heap-allocated byte buffer that lives until the
+// caller frees it (sqlite3_bind_blob does not copy when given SQLITE_STATIC).
+// We use SQLITE_TRANSIENT so sqlite3 copies the data and we can free it.
+void BindAreLcBlob(sqlite3_stmt* sql_stmt,
+                   const int col,
+                   const std::vector<bool>& are_lc) {
+  if (are_lc.empty()) {
+    SQLITE3_CALL(sqlite3_bind_null(sql_stmt, col));
+    return;
+  }
+  std::vector<uint8_t> bytes(are_lc.size());
+  for (size_t i = 0; i < are_lc.size(); ++i) {
+    bytes[i] = are_lc[i] ? 1 : 0;
+  }
+  SQLITE3_CALL(sqlite3_bind_blob(sql_stmt,
+                                 col,
+                                 bytes.data(),
+                                 static_cast<int>(bytes.size()),
+                                 SQLITE_TRANSIENT));
+}
+
 std::optional<std::stringstream> BlobColumnToStringStream(
     sqlite3_stmt* sql_stmt, const int col) {
   const size_t num_bytes =
@@ -989,6 +1030,20 @@ class SqliteDatabase : public Database {
     }
 
     two_view_geometry.inlier_matches = FeatureMatchesFromBlob(blob);
+    // Per-inlier loop-closure flags. Empty when the column is NULL (legacy
+    // databases predating this column or matchers that did not tag pairs).
+    two_view_geometry.are_lc =
+        ReadAreLcBlob(sql_stmt_read_two_view_geometry_, 9);
+    if (two_view_geometry.are_lc.size() !=
+            two_view_geometry.inlier_matches.size() &&
+        !two_view_geometry.are_lc.empty()) {
+      LOG(WARNING) << "Inconsistent are_lc size for pair "
+                   << image_id1 << "-" << image_id2 << " ("
+                   << two_view_geometry.are_lc.size() << " vs "
+                   << two_view_geometry.inlier_matches.size()
+                   << " inliers); discarding are_lc.";
+      two_view_geometry.are_lc.clear();
+    }
     if (two_view_geometry.F) {
       two_view_geometry.F->transposeInPlace();
     }
@@ -1063,6 +1118,20 @@ class SqliteDatabase : public Database {
         cam2_from_cam1.translation() = ReadStaticMatrixBlob<Eigen::Vector3d>(
             sql_stmt_read_two_view_geometries_, rc, 9);
         two_view_geometry.cam2_from_cam1 = cam2_from_cam1;
+      }
+
+      // Per-inlier loop-closure flags. Empty when the column is NULL (legacy
+      // databases predating this column or matchers that did not tag pairs).
+      two_view_geometry.are_lc =
+          ReadAreLcBlob(sql_stmt_read_two_view_geometries_, 10);
+      if (two_view_geometry.are_lc.size() !=
+              two_view_geometry.inlier_matches.size() &&
+          !two_view_geometry.are_lc.empty()) {
+        LOG(WARNING) << "Inconsistent are_lc size for pair " << pair_id << " ("
+                     << two_view_geometry.are_lc.size() << " vs "
+                     << two_view_geometry.inlier_matches.size()
+                     << " inliers); discarding are_lc.";
+        two_view_geometry.are_lc.clear();
       }
 
       if (two_view_geometry.F) {
@@ -1385,6 +1454,11 @@ class SqliteDatabase : public Database {
       SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_two_view_geometry_, 9));
       SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_two_view_geometry_, 10));
     }
+    // Per-inlier loop-closure flags. NULL when the matcher did not tag the
+    // pair (older clients) or when the are_lc vector is empty.
+    BindAreLcBlob(sql_stmt_write_two_view_geometry_,
+                  11,
+                  two_view_geometry_ptr->are_lc);
     SQLITE3_CALL(sqlite3_step(sql_stmt_write_two_view_geometry_));
   }
 
@@ -1801,11 +1875,14 @@ class SqliteDatabase : public Database {
     prepare_sql_stmt("SELECT pair_id, rows FROM matches WHERE rows > 0;",
                      &sql_stmt_read_num_matches_);
     prepare_sql_stmt(
-        "SELECT rows, cols, data, config, F, E, H, qvec, tvec FROM "
+        "SELECT rows, cols, data, config, F, E, H, qvec, tvec, are_lc FROM "
         "two_view_geometries WHERE pair_id = ?;",
         &sql_stmt_read_two_view_geometry_);
+    // Explicit column list (instead of *) so the are_lc column has a stable
+    // index regardless of schema-migration ordering on legacy databases.
     prepare_sql_stmt(
-        "SELECT * FROM two_view_geometries WHERE rows > 0 OR F IS NOT NULL OR "
+        "SELECT pair_id, rows, cols, data, config, F, E, H, qvec, tvec, "
+        "are_lc FROM two_view_geometries WHERE rows > 0 OR F IS NOT NULL OR "
         "E IS NOT NULL OR H IS NOT NULL OR qvec IS NOT NULL OR tvec IS NOT "
         "NULL;",
         &sql_stmt_read_two_view_geometries_);
@@ -1855,7 +1932,7 @@ class SqliteDatabase : public Database {
         &sql_stmt_write_matches_);
     prepare_sql_stmt(
         "INSERT INTO two_view_geometries(pair_id, rows, cols, data, config, F, "
-        "E, H, qvec, tvec) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+        "E, H, qvec, tvec, are_lc) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
         &sql_stmt_write_two_view_geometry_);
 
     //////////////////////////////////////////////////////////////////////////////
@@ -2060,7 +2137,8 @@ class SqliteDatabase : public Database {
           "    E        BLOB,"
           "    H        BLOB,"
           "    qvec     BLOB,"
-          "    tvec     BLOB);";
+          "    tvec     BLOB,"
+          "    are_lc   BLOB);";
       SQLITE3_EXEC(database_, sql.c_str(), nullptr);
     }
   }
@@ -2094,6 +2172,9 @@ class SqliteDatabase : public Database {
     maybe_add_two_view_geometries_blob_column("H");
     maybe_add_two_view_geometries_blob_column("qvec");
     maybe_add_two_view_geometries_blob_column("tvec");
+    // Per-inlier loop-closure flag column. Older databases without this
+    // column simply read NULL (treated as empty are_lc → no LC effect).
+    maybe_add_two_view_geometries_blob_column("are_lc");
 
     // Read current user_version for migration gating.
     int user_version = 0;

@@ -510,6 +510,13 @@ void FeatureMatcherController::Match(
       output.two_view_geometry = TwoViewGeometry();
     }
 
+    // Tag every inlier with the controller-level LC flag so the database row
+    // records pair-origin (sequential = tracking, retrieval/spatial/etc =
+    // LC). DatabaseCache::Build() reads this back into ImagePair.are_lc.
+    output.two_view_geometry.are_lc.assign(
+        output.two_view_geometry.inlier_matches.size(),
+        matching_options_.is_lc_pair);
+
     cache_->WriteMatches(output.image_id1, output.image_id2, output.matches);
     cache_->WriteTwoViewGeometry(
         output.image_id1, output.image_id2, output.two_view_geometry);
@@ -654,6 +661,10 @@ void GeometricVerifierController::Verify(
         static_cast<size_t>(geometry_options_.min_num_inliers)) {
       output.two_view_geometry = TwoViewGeometry();
     }
+
+    // Tag every inlier with the verifier-level LC flag.
+    output.two_view_geometry.are_lc.assign(
+        output.two_view_geometry.inlier_matches.size(), options_.is_lc_pair);
 
     if (cache_->ExistsTwoViewGeometry(output.image_id1, output.image_id2)) {
       cache_->DeleteTwoViewGeometry(output.image_id1, output.image_id2);

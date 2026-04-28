@@ -89,8 +89,17 @@ bool GlobalMapper::RotationAveraging(const RotationEstimatorOptions& options) {
   // connected component.
   RotationEstimatorOptions custom_options = options;
   custom_options.filter_unregistered = false;
+  // Pass the correspondence_graph so RA's LC-aware code paths
+  // (skip_risky_LC_pairs / use_video_constraints' IsTrackingPair) can read
+  // ImagePair.{inliers, are_lc}. Required: skip_risky_LC_pairs=true otherwise
+  // THROW_CHECKs inside RotationAveragingProblem's ctor.
   if (!RunRotationAveraging(
-          custom_options, *pose_graph_, *reconstruction_, pose_priors)) {
+          custom_options,
+          *pose_graph_,
+          *reconstruction_,
+          pose_priors,
+          /*final_weights=*/nullptr,
+          database_cache_->CorrespondenceGraph().get())) {
     return false;
   }
 
@@ -98,7 +107,12 @@ bool GlobalMapper::RotationAveraging(const RotationEstimatorOptions& options) {
   // after outlier removal.
   custom_options.filter_unregistered = true;
   if (!RunRotationAveraging(
-          custom_options, *pose_graph_, *reconstruction_, pose_priors)) {
+          custom_options,
+          *pose_graph_,
+          *reconstruction_,
+          pose_priors,
+          /*final_weights=*/nullptr,
+          database_cache_->CorrespondenceGraph().get())) {
     return false;
   }
 

@@ -253,7 +253,8 @@ void BindMatchFeatures(py::module& m) {
           .def_readwrite("rig_verification",
                          &GeometricVerifierOptions::rig_verification)
           .def_readwrite("use_existing_relative_pose",
-                         &GeometricVerifierOptions::use_existing_relative_pose);
+                         &GeometricVerifierOptions::use_existing_relative_pose)
+          .def_readwrite("is_lc_pair", &GeometricVerifierOptions::is_lc_pair);
   MakeDataclass(PyGeometricVerifierOptions);
 
   m.def(

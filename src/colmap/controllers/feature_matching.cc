@@ -139,10 +139,17 @@ void RigVerification(const std::shared_ptr<Database>& database,
         }
       }
 
-      for (const auto& [image_pair, two_view_geometry] :
+      for (auto& [image_pair, two_view_geometry] :
            EstimateRigTwoViewGeometries(
                rig1, rig2, images, cameras, matches, geometry_options)) {
         const auto& [image_id1, image_id2] = image_pair;
+        // Rig verification re-writes a previously verified pair, so preserve
+        // the existing pair-origin tag if any was stored. We can't read it
+        // here without an extra DB query, so default to is_lc=true (the
+        // CLI-side controllers all default to true except the sequential
+        // matcher, which doesn't run rig verification).
+        two_view_geometry.are_lc.assign(
+            two_view_geometry.inlier_matches.size(), true);
         cache->DeleteTwoViewGeometry(image_id1, image_id2);
         cache->WriteTwoViewGeometry(image_id1, image_id2, two_view_geometry);
       }
@@ -349,8 +356,11 @@ std::unique_ptr<Thread> CreateSequentialFeatureMatcher(
     const FeatureMatchingOptions& matching_options,
     const TwoViewGeometryOptions& geometry_options,
     const std::filesystem::path& database_path) {
+  // Sequential matcher implies tracking-style pairs.
+  FeatureMatchingOptions tagged_options = matching_options;
+  tagged_options.is_lc_pair = false;
   return FeatureMatcherThread::Create<SequentialPairGenerator>(
-      pairing_options, matching_options, geometry_options, database_path);
+      pairing_options, tagged_options, geometry_options, database_path);
 }
 
 std::unique_ptr<Thread> CreateSpatialFeatureMatcher(
@@ -514,6 +524,10 @@ class FeaturePairsFeatureMatcher : public Thread {
         }
         two_view_geometry.inlier_matches = std::move(matches);
       }
+
+      // Tag inliers with the controller-level LC flag.
+      two_view_geometry.are_lc.assign(
+          two_view_geometry.inlier_matches.size(), matching_options_.is_lc_pair);
 
       database_->WriteTwoViewGeometry(
           image1.ImageId(), image2.ImageId(), two_view_geometry);
