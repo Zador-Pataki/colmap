@@ -154,12 +154,28 @@ class Image {
   inline bool operator==(const Image& other) const;
   inline bool operator!=(const Image& other) const;
 
+  // Per-feature monocular depth priors.
+  std::vector<double> depth_priors;
+  std::vector<double> depth_prior_stddevs;
+  std::vector<bool> depth_prior_validity;
+
   // Per-feature inlier flag for GP loss routing.
   std::vector<bool> is_inlier;
+  // Per-feature depth outlier flag for GP loss routing.
+  std::vector<bool> is_depth_outlier;
   // Per-feature track-anchor flag for GP loss routing.
   std::vector<bool> is_track_anchor;
   // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.
   std::vector<Eigen::Vector2d> angular_stddevs;
+  // Per-feature z-component angular stddev.
+  std::vector<double> angular_stddevs_z;
+
+  // Per-image depth-map log-scale and its uncertainty.
+  double log_scale = 0.0;
+  double log_scale_stddev = 0.0;
+
+  // Direct cam_from_world override for standalone pipeline.
+  Rigid3d cam_from_world;
 
   // Whether this image is currently registered.
   bool is_registered = false;
@@ -320,10 +336,12 @@ std::vector<struct Point2D>& Image::Points2D() { return points2D_; }
 
 bool Image::operator==(const Image& other) const {
   // Identity-equality (NOT bit-equality across pipeline state). Mutable
-  // per-pipeline-phase fields (is_inlier, features_undist, ...) are
-  // intentionally NOT compared — two Images at different pipeline stages
-  // with the same identity should compare equal. pixel_cholesky_xy_ is
-  // included because it's a per-feature immutable property.
+  // per-pipeline-phase fields (depth_priors, is_inlier, cam_from_world,
+  // features_undist, ...) are intentionally NOT compared — two Images
+  // at different pipeline stages with the same identity should compare
+  // equal. ``pixel_cholesky_xy_`` is included because it's a per-feature
+  // immutable property of the image (this field surfaced a copy-ctor
+  // field-drop regression — keep it in the comparison).
   const bool result = image_id_ == other.image_id_ &&          //
                       camera_id_ == other.camera_id_ &&        //
                       frame_id_ == other.frame_id_ &&          //

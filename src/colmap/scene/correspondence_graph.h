@@ -67,7 +67,7 @@ class CorrespondenceGraph {
 
   // Two-view image pair with geometry, matches, and metadata.
   // Extends colmap core with image IDs, validity flags,
-  // loop closure markers, covariance, and full match data.
+  // loop closure markers, depth scale, covariance, and full match data.
   struct ImagePair {
     // Default constructor.
     ImagePair() = default;
@@ -96,6 +96,11 @@ class CorrespondenceGraph {
 
     // Weight is the initial inlier rate.
     double weight = 0.0;
+
+    // Relative depth scale between depth maps of image1 and image2.
+    // Represents the scale factor: depth_2 = rel_depth_scale * depth_1.
+    // Initialized to -1 to indicate it hasn't been computed yet.
+    double rel_depth_scale = -1.0;
 
     // Covariance matrix (3x3) for the relative translation.
     // Initialized to zero matrix to indicate it hasn't been computed yet.
