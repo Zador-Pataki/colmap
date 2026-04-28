@@ -37,7 +37,6 @@ COLMAP_ADD_LIBRARY(
         calibration.h
         depth_prior.h
         manifold.h
-        metric_depth.h
         motion_averaging.h
         pose_prior.h
         reprojection_error.h
@@ -89,10 +88,5 @@ COLMAP_ADD_TEST(
 COLMAP_ADD_TEST(
     NAME depth_prior_test
     SRCS depth_prior_test.cc
-    LINK_LIBS colmap_estimators_cost_functions
-)
-COLMAP_ADD_TEST(
-    NAME metric_depth_test
-    SRCS metric_depth_test.cc
     LINK_LIBS colmap_estimators_cost_functions
 )

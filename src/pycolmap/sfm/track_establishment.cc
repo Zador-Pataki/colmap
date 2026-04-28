@@ -90,17 +90,11 @@ py::dict RunFindTracksForProblem(CorrespondenceGraph& /*correspondence_graph*/,
                                   py::dict tracks_full_py,
                                   const TrackSubsampleOptions& options) {
   std::unordered_set<image_t> registered_image_ids;
-  std::unordered_map<image_t, std::vector<double>> depth_priors;
-  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
   for (auto item : images_py) {
     const auto image_id = py::cast<image_t>(item.first);
     const auto image = py::cast<Image>(item.second);
     if (image.is_registered) {
       registered_image_ids.insert(image_id);
-    }
-    if (options.two_view_depth_gate) {
-      depth_priors.emplace(image_id, image.depth_priors);
-      depth_prior_validity.emplace(image_id, image.depth_prior_validity);
     }
   }
 
@@ -114,11 +108,7 @@ py::dict RunFindTracksForProblem(CorrespondenceGraph& /*correspondence_graph*/,
   std::unordered_map<point3D_t, Point3D> selected;
   {
     py::gil_scoped_release release;
-    selected = SubsampleTracks(options,
-                                registered_image_ids,
-                                depth_priors,
-                                depth_prior_validity,
-                                tracks_full);
+    selected = SubsampleTracks(options, registered_image_ids, tracks_full);
   }
 
   py::dict tracks_out;
@@ -152,9 +142,7 @@ void BindTrackEstablishment(py::module& m) {
           .def_readwrite("required_tracks_per_view",
                          &TrackSubsampleOptions::required_tracks_per_view)
           .def_readwrite("max_num_tracks",
-                         &TrackSubsampleOptions::max_num_tracks)
-          .def_readwrite("two_view_depth_gate",
-                         &TrackSubsampleOptions::two_view_depth_gate);
+                         &TrackSubsampleOptions::max_num_tracks);
   MakeDataclass(PySubOpts);
 
   m.def("establish_full_tracks",
@@ -177,8 +165,7 @@ void BindTrackEstablishment(py::module& m) {
         "tracks_full"_a,
         "options"_a,
         "Greedy length-sorted subsample of ``tracks_full``. Reads "
-        "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
-        "``Image::is_registered`` from ``images``. ``correspondence_graph`` is "
-        "accepted for symmetry with ``establish_full_tracks`` but "
+        "``Image::is_registered`` from ``images``. ``correspondence_graph`` "
+        "is accepted for symmetry with ``establish_full_tracks`` but "
         "currently unused by the subsample.");
 }

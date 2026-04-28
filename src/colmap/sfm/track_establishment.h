@@ -137,27 +137,16 @@ struct TrackSubsampleOptions {
   // Hard cap on selected track count. When the count exceeds this the
   // greedy walk stops.
   int max_num_tracks = std::numeric_limits<int>::max();
-  // 2-view depth-validity gate: if true, drop any track with exactly two
-  // distinct images unless both observations satisfy
-  // ``depth_prior_validity[idx] && depth_priors[idx] > 1e-6``.
-  // Tracks with three or more distinct images bypass the gate.
-  bool two_view_depth_gate = false;
 };
 
 // Greedy length-sorted subsample. Walks tracks in descending
 // ``Track::Length()`` order; for each, increments per-image counters
 // for every observation regardless of whether the track is kept, and
 // inserts the track if any observation's pre-increment count was within
-// the ``required_tracks_per_view`` quota. The 2-view depth gate
-// requires ``depth_priors`` and ``depth_prior_validity`` to be
-// populated for both images of a 2-view track; pass empty maps to
-// disable the gate (or set ``two_view_depth_gate=false``). Returns the
-// selected subset.
+// the ``required_tracks_per_view`` quota. Returns the selected subset.
 std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const TrackSubsampleOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
-    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
-    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full);
 
 }  // namespace colmap

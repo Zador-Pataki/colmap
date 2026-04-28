@@ -46,14 +46,10 @@ Image::Image(const Image& other)
       depth_prior_stddevs(other.depth_prior_stddevs),
       depth_prior_validity(other.depth_prior_validity),
       is_inlier(other.is_inlier),
-      is_depth_outlier(other.is_depth_outlier),
       is_track_anchor(other.is_track_anchor),
       is_excluded(other.is_excluded),
       angular_stddevs(other.angular_stddevs),
       angular_cholesky_xy(other.angular_cholesky_xy),
-      angular_stddevs_z(other.angular_stddevs_z),
-      log_scale(other.log_scale),
-      log_scale_stddev(other.log_scale_stddev),
       cam_from_world(other.cam_from_world),
       is_registered(other.is_registered),
       features(other.features),
@@ -93,14 +89,10 @@ Image& Image::operator=(const Image& other) {
     depth_prior_stddevs = other.depth_prior_stddevs;
     depth_prior_validity = other.depth_prior_validity;
     is_inlier = other.is_inlier;
-    is_depth_outlier = other.is_depth_outlier;
     is_track_anchor = other.is_track_anchor;
     is_excluded = other.is_excluded;
     angular_stddevs = other.angular_stddevs;
     angular_cholesky_xy = other.angular_cholesky_xy;
-    angular_stddevs_z = other.angular_stddevs_z;
-    log_scale = other.log_scale;
-    log_scale_stddev = other.log_scale_stddev;
     cam_from_world = other.cam_from_world;
     is_registered = other.is_registered;
     features = other.features;

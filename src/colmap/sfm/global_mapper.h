@@ -79,11 +79,6 @@ struct GlobalMapperOptions {
   // forced to INT_MAX); call SubsampleTracksForProblem afterwards if a
   // post-LC subsample is desired. Default off (vanilla colmap behavior).
   bool track_lc_second_pass = false;
-  // If true, SubsampleTracksForProblem drops 2-view tracks unless both
-  // observations satisfy
-  // ``image.depth_prior_validity[idx] && image.depth_priors[idx] > 1e-6``.
-  // Tracks with three or more views bypass the gate.
-  bool track_two_view_depth_gate = false;
 
   // Thresholds for each component.
   double max_angular_reproj_error_deg = 1.;   // for global positioning
@@ -132,11 +127,11 @@ class GlobalMapper {
   void EstablishTracks(const GlobalMapperOptions& options);
 
   // Greedy length-sorted subsample of the current reconstruction's
-  // tracks, with optional 2-view depth-validity gate. Only meaningful
-  // after ``EstablishTracks`` has populated ``reconstruction_->Points3D()``.
-  // Reads the ``track_max_num_views_per_track``, ``track_max_num_tracks``,
-  // ``track_required_tracks_per_view``, ``track_min_num_views_per_track``,
-  // and ``track_two_view_depth_gate`` fields of ``options``.
+  // tracks. Only meaningful after ``EstablishTracks`` has populated
+  // ``reconstruction_->Points3D()``. Reads the
+  // ``track_max_num_views_per_track``, ``track_max_num_tracks``,
+  // ``track_required_tracks_per_view``, and
+  // ``track_min_num_views_per_track`` fields of ``options``.
   void SubsampleTracksForProblem(const GlobalMapperOptions& options);
 
   // Estimate global camera positions.

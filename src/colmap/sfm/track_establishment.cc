@@ -311,8 +311,6 @@ void AppendLoopClosureObservations(
 std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const TrackSubsampleOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
-    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
-    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full) {
   // Length filter: lower bound counts regular + LC observations; upper
   // bound counts regular only. The asymmetry is intentional.
@@ -344,12 +342,10 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
 
     // Restrict to selection domain + lc-elements that fall in the
     // selection domain.
-    std::unordered_set<image_t> distinct_image_ids;
     Point3D candidate;
     for (const auto& el : src.track.Elements()) {
       if (tracks_per_camera.count(el.image_id) == 0) continue;
       candidate.track.AddElement(el);
-      distinct_image_ids.insert(el.image_id);
     }
     for (const auto& lc_el : src.track.lc_elements) {
       if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
@@ -358,23 +354,6 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     if (candidate.track.Length() <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
-    }
-    if (options.two_view_depth_gate && distinct_image_ids.size() == 2) {
-      bool depth_ok = true;
-      for (const auto& el : candidate.track.Elements()) {
-        const auto valid_it = depth_prior_validity.find(el.image_id);
-        const auto prior_it = depth_priors.find(el.image_id);
-        if (valid_it == depth_prior_validity.end() ||
-            prior_it == depth_priors.end() ||
-            el.point2D_idx >= valid_it->second.size() ||
-            !valid_it->second[el.point2D_idx] ||
-            el.point2D_idx >= prior_it->second.size() ||
-            prior_it->second[el.point2D_idx] <= 1e-6) {
-          depth_ok = false;
-          break;
-        }
-      }
-      if (!depth_ok) continue;
     }
 
     // Greedy quota: a track is added if any element's PRE-increment

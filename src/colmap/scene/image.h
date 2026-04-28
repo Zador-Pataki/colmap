@@ -162,9 +162,9 @@ class Image {
   // --- Per-feature flags (set from Python during pipeline phases) ---
   // Inlier flag for second GP — if true, use trivial loss for this observation.
   std::vector<bool> is_inlier;
-  // MDRP depth outlier — if true, use robust loss for depth constraint.
-  std::vector<bool> is_depth_outlier;
-  // Track anchor — if true, use loss_normal_geometry_trackstart for geometry.
+  // Track anchor — if true, observation is treated as a track-anchor in
+  // downstream consumers (e.g. videosfm BA recipe). GP itself ignores it
+  // on this branch.
   std::vector<bool> is_track_anchor;
   // Hard exclusion — if true, observation is NOT added to the BA problem.
   std::vector<bool> is_excluded;
@@ -176,12 +176,6 @@ class Image {
   // (L00, L10, L11) for lower triangular 2x2: L * L^T = Sigma^-1.
   // Distinct from pixel_cholesky_xy_ (which is in pixel space).
   std::vector<Eigen::Vector3d> angular_cholesky_xy;
-  // Z-component stddev (sqrt of average trace of XY covariance).
-  std::vector<double> angular_stddevs_z;
-
-  // --- Per-image scale parameters (optimizable) ---
-  double log_scale = 0.0;
-  double log_scale_stddev = 0.0;
 
   // --- Pose / registration / features (override-style fields) ---
   // Direct cam_from_world override. Independent of the Frame-derived

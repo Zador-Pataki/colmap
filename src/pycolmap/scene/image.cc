@@ -198,21 +198,6 @@ void BindSceneImage(py::module& m) {
               self.is_inlier[i] = v[i];
           })
       .def_property(
-          "is_depth_outlier",
-          [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
-            Eigen::Array<bool, Eigen::Dynamic, 1> arr(
-                self.is_depth_outlier.size());
-            for (size_t i = 0; i < self.is_depth_outlier.size(); ++i)
-              arr[i] = self.is_depth_outlier[i];
-            return arr;
-          },
-          [](Image& self,
-             const Eigen::Array<bool, Eigen::Dynamic, 1>& v) {
-            self.is_depth_outlier.assign(v.size(), false);
-            for (Eigen::Index i = 0; i < v.size(); ++i)
-              self.is_depth_outlier[i] = v[i];
-          })
-      .def_property(
           "is_track_anchor",
           [](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {
             Eigen::Array<bool, Eigen::Dynamic, 1> arr(
@@ -243,17 +228,6 @@ void BindSceneImage(py::module& m) {
           })
       .def_readwrite("angular_stddevs", &Image::angular_stddevs)
       .def_readwrite("angular_cholesky_xy", &Image::angular_cholesky_xy)
-      .def_property(
-          "angular_stddevs_z",
-          [](const Image& self) -> Eigen::VectorXd {
-            return Eigen::Map<const Eigen::VectorXd>(
-                self.angular_stddevs_z.data(), self.angular_stddevs_z.size());
-          },
-          [](Image& self, const Eigen::VectorXd& v) {
-            self.angular_stddevs_z.assign(v.data(), v.data() + v.size());
-          })
-      .def_readwrite("log_scale", &Image::log_scale)
-      .def_readwrite("log_scale_stddev", &Image::log_scale_stddev)
       .def_readwrite("is_registered", &Image::is_registered)
       .def_readwrite("features", &Image::features)
       .def_readwrite("features_undist", &Image::features_undist)
