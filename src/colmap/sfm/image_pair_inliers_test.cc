@@ -1,10 +1,3 @@
-// Copyright (c), ETH Zurich and UNC Chapel Hill.
-// All rights reserved.
-//
-// Tests for ImagePairsInlierCount: MDRP re-scorer with 4-gate
-// degeneracy filtering (epipolar / cheirality / triangulation angle /
-// angle-from-epipole).
-
 #include "colmap/sfm/image_pair_inliers.h"
 
 #include "colmap/geometry/essential_matrix.h"

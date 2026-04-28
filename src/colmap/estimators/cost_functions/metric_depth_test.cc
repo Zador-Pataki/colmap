@@ -1,7 +1,3 @@
-// Copyright (c), ETH Zurich and UNC Chapel Hill.
-// All rights reserved.
-// (BSD-3-Clause license, see LICENSE)
-
 #include "colmap/estimators/cost_functions/metric_depth.h"
 
 #include <cmath>
