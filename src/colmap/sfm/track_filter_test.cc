@@ -42,6 +42,7 @@ Reconstruction MakeRec(
     image.SetImageId(image_id);
     image.SetCameraId(camera.camera_id);
     image.features_undist.assign(num_features, Eigen::Vector3d::UnitZ());
+    image.cam_from_world = pose;
     rec.AddImageWithTrivialFrame(std::move(image), pose);
   }
   return rec;
@@ -78,9 +79,9 @@ TEST(TrackFilter, FilterByAngle_AlignedRaysKept) {
 
   // Set features_undist to the normalized rays of the projection in each cam.
   rec.Image(1).features_undist[0] =
-      (rec.Image(1).CamFromWorld() * xyz).normalized();
+      (rec.Image(1).cam_from_world * xyz).normalized();
   rec.Image(2).features_undist[0] =
-      (rec.Image(2).CamFromWorld() * xyz).normalized();
+      (rec.Image(2).cam_from_world * xyz).normalized();
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
@@ -109,9 +110,9 @@ TEST(TrackFilter, FilterByAngle_MisalignedRaysDropped) {
   const double angle_rad = DegToRad(5.0);
   Eigen::AngleAxisd tilt(angle_rad, Eigen::Vector3d::UnitY());
   rec.Image(1).features_undist[0] =
-      (tilt * (rec.Image(1).CamFromWorld() * xyz)).normalized();
+      (tilt * (rec.Image(1).cam_from_world * xyz)).normalized();
   rec.Image(2).features_undist[0] =
-      (tilt * (rec.Image(2).CamFromWorld() * xyz)).normalized();
+      (tilt * (rec.Image(2).cam_from_world * xyz)).normalized();
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
@@ -140,9 +141,9 @@ TEST(TrackFilter, FilterByAngle_UncalibratedCameraDoubleThreshold) {
   const double angle_rad = DegToRad(5.0);
   Eigen::AngleAxisd tilt(angle_rad, Eigen::Vector3d::UnitY());
   rec.Image(1).features_undist[0] =
-      (tilt * (rec.Image(1).CamFromWorld() * xyz)).normalized();
+      (tilt * (rec.Image(1).cam_from_world * xyz)).normalized();
   rec.Image(2).features_undist[0] =
-      (tilt * (rec.Image(2).CamFromWorld() * xyz)).normalized();
+      (tilt * (rec.Image(2).cam_from_world * xyz)).normalized();
 
   tracks.emplace(1, MakePoint3D(xyz, {{1, 0}, {2, 0}}));
 
@@ -182,7 +183,7 @@ TEST(TrackFilter, FilterByAngle_PointBehindCameraSkipped) {
   Eigen::Vector3d xyz(0.0, 0.0, 5.0);
 
   rec.Image(1).features_undist[0] =
-      (rec.Image(1).CamFromWorld() * xyz).normalized();
+      (rec.Image(1).cam_from_world * xyz).normalized();
   // For img2, give a perfectly aligned feature_undist regardless: the
   // ``z < EPS`` early continue kicks in before the angle check.
   rec.Image(2).features_undist[0] = Eigen::Vector3d::UnitZ();
@@ -210,6 +211,7 @@ Reconstruction MakeRecImagesOnly(
     Image image;
     image.SetImageId(image_id);
     image.SetCameraId(1);
+    image.cam_from_world = pose;
     rec.AddImageWithTrivialFrame(std::move(image), pose);
   }
   return rec;

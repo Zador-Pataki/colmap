@@ -176,12 +176,22 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 // FindTracksForProblem (greedy subsample + 2-view depth gate)
 // ============================================================================
 
-// Build a registered Image with N features.
-Image MakeRegisteredImage(image_t image_id, int num_features) {
+// Build a registered Image with N features and (optionally) all-valid depth
+// priors. Each prior is set to (idx + 1) so they are strictly > 1e-6.
+Image MakeRegisteredImage(image_t image_id,
+                          int num_features,
+                          bool with_valid_depths = true) {
   Image image;
   image.SetImageId(image_id);
   image.is_registered = true;
   image.features.assign(num_features, Eigen::Vector2d::Zero());
+  if (with_valid_depths) {
+    image.depth_priors.assign(num_features, 1.0);
+    image.depth_prior_validity.assign(num_features, true);
+  } else {
+    image.depth_priors.assign(num_features, 0.0);
+    image.depth_prior_validity.assign(num_features, false);
+  }
   return image;
 }
 
@@ -196,14 +206,25 @@ Point3D MakePoint3DFromElements(
   return p;
 }
 
-// Collect registered image ids from a test fixture.
-std::unordered_set<image_t> MakeRegisteredImageIds(
+// Project an ``images`` test fixture into the three dict inputs SubsampleTracks
+// consumes: registered_image_ids, depth_priors, depth_prior_validity.
+struct SubsampleInputs {
+  std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
+};
+
+SubsampleInputs MakeSubsampleInputs(
     const std::unordered_map<image_t, Image>& images) {
-  std::unordered_set<image_t> ids;
+  SubsampleInputs inputs;
   for (const auto& [image_id, image] : images) {
-    if (image.is_registered) ids.insert(image_id);
+    if (image.is_registered) {
+      inputs.registered_image_ids.insert(image_id);
+    }
+    inputs.depth_priors.emplace(image_id, image.depth_priors);
+    inputs.depth_prior_validity.emplace(image_id, image.depth_prior_validity);
   }
-  return ids;
+  return inputs;
 }
 
 // LengthFilter: with ``min_num_views_per_track=10`` every track here is too
@@ -223,15 +244,18 @@ TEST(FindTracksForProblem, LengthFilter) {
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto reg_ids = MakeRegisteredImageIds(images);
+  const auto inputs = MakeSubsampleInputs(images);
 
   // High-min variant: tracks have length 3, demand 10.
   {
     TrackSubsampleOptions options;
     options.min_num_views_per_track = 10;
     options.required_tracks_per_view = 1000;  // never saturate
-    const auto selected = SubsampleTracks(
-        options, reg_ids, tracks_full);
+    const auto selected = SubsampleTracks(options,
+                                          inputs.registered_image_ids,
+                                          inputs.depth_priors,
+                                          inputs.depth_prior_validity,
+                                          tracks_full);
     EXPECT_EQ(selected.size(), 0u);
     EXPECT_TRUE(selected.empty());
   }
@@ -241,8 +265,11 @@ TEST(FindTracksForProblem, LengthFilter) {
     TrackSubsampleOptions options;
     options.min_num_views_per_track = 2;
     options.required_tracks_per_view = 1000;
-    const auto selected = SubsampleTracks(
-        options, reg_ids, tracks_full);
+    const auto selected = SubsampleTracks(options,
+                                          inputs.registered_image_ids,
+                                          inputs.depth_priors,
+                                          inputs.depth_prior_validity,
+                                          tracks_full);
     EXPECT_EQ(selected.size(), 5u);
   }
 }
@@ -263,16 +290,85 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
                {{1, f}, {2, f}, {3, f}, {4, f}, {5, f}}));
   }
 
-  const auto reg_ids = MakeRegisteredImageIds(images);
+  const auto inputs = MakeSubsampleInputs(images);
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
   options.max_num_views_per_track = 4;
   options.required_tracks_per_view = 1000;
-  const auto selected = SubsampleTracks(
-      options, reg_ids, tracks_full);
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
   EXPECT_EQ(selected.size(), 0u);
   EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
+// valid depth prior is dropped by the 2-view depth gate.
+//
+// Drives SubsampleTracks.
+TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
+  std::unordered_map<image_t, Image> images;
+  // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
+  Image img1 = MakeRegisteredImage(1, 3);
+  img1.depth_prior_validity[0] = false;
+  img1.depth_priors[0] = 0.0;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeRegisteredImage(2, 3));  // all valid
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_EQ(selected.size(), 0u);
+  EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Keep: both endpoints have valid depth -> track kept.
+// Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
+// uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
+//
+// Drives SubsampleTracks.
+TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeRegisteredImage(1, 3);
+  // Feature 0: valid, prior=1.0  -> survives
+  // Feature 1: valid flag true, prior=1e-6 -> caught by ``<= 1e-6`` -> drops
+  img1.depth_priors[1] = 1e-6;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeRegisteredImage(2, 3));
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+  tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
+
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_EQ(selected.size(), 1u);
+  ASSERT_EQ(selected.count(0), 1u);
+  EXPECT_EQ(selected.count(1), 0u);
 }
 
 // GreedyQuota: 5 length-3 tracks across 3 images, ``required_tracks_per_view=2``
@@ -292,13 +388,16 @@ TEST(FindTracksForProblem, GreedyQuota) {
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto reg_ids = MakeRegisteredImageIds(images);
+  const auto inputs = MakeSubsampleInputs(images);
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
   options.required_tracks_per_view = 2;
-  const auto selected = SubsampleTracks(
-      options, reg_ids, tracks_full);
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
   const size_t n_selected = selected.size();
 
   // Each track touches all 3 images so 2 tracks fully satisfy the per-view
@@ -309,6 +408,18 @@ TEST(FindTracksForProblem, GreedyQuota) {
 
 // MinTracksPerViewBugDocumentation: enshrines the actual behaviour of the
 // default ``required_tracks_per_view = INT_MAX``.
+//
+// The per-view quota is a signed ``int`` and the default is
+// ``std::numeric_limits<int>::max()``. The greedy gate compares an ``int``
+// per-camera counter against this value; with INT_MAX as the bar the
+// counter can never exceed it (we'd overflow first), so the gate is *never*
+// taken. Symmetrically the cameras-left bookkeeping never fires, so the
+// loop only stops on ``max_num_tracks``. Net effect: with the default, the
+// greedy quota is disabled entirely and every length+depth-filtered track
+// is selected.
+//
+// Documented as a test so future refactors that "fix" the default to a
+// finite non-max number trip this and force a conscious update.
 TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
@@ -321,13 +432,16 @@ TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto reg_ids = MakeRegisteredImageIds(images);
+  const auto inputs = MakeSubsampleInputs(images);
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
   // options.required_tracks_per_view stays at default = INT_MAX.
-  const auto selected = SubsampleTracks(
-      options, reg_ids, tracks_full);
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
   // All 3 tracks are kept — the quota gate is disabled by INT_MAX bar.
   EXPECT_EQ(selected.size(), 3u);
 }
