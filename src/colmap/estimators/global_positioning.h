@@ -218,6 +218,10 @@ class GlobalPositioner {
   // ScaledLoss(HuberLoss(1), 1) used for non-LC depth outliers.
   // Lazily allocated.
   std::shared_ptr<ceres::LossFunction> soft_outlier_fallback_loss_;
+
+  // Per-image ScaledLoss wrappers created in the scale-prior loop.
+  // Owned here because problem_ uses DO_NOT_TAKE_OWNERSHIP.
+  std::vector<std::unique_ptr<ceres::LossFunction>> per_image_scale_losses_;
 };
 
 // Solve global positioning using point-to-camera constraints.

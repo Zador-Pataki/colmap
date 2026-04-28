@@ -265,18 +265,17 @@ void GlobalPositioner::AddPointToCameraConstraints(
               cov_1x1, prior_vec);
       if (scale_prior_cost == nullptr) continue;
 
-      // Wrap cached_loss_scale_prior_ with a ScaledLoss(obs_count) so
-      // dense-depth images get proportionally stronger priors.
       ceres::LossFunction* obs_count_scaled_loss = nullptr;
       if (cached_loss_scale_prior_) {
-        obs_count_scaled_loss = new ceres::ScaledLoss(
+        per_image_scale_losses_.push_back(std::make_unique<ceres::ScaledLoss>(
             cached_loss_scale_prior_.get(),
             obs_count,
-            ceres::DO_NOT_TAKE_OWNERSHIP);
+            ceres::DO_NOT_TAKE_OWNERSHIP));
       } else {
-        obs_count_scaled_loss = new ceres::ScaledLoss(
-            new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP);
+        per_image_scale_losses_.push_back(std::make_unique<ceres::ScaledLoss>(
+            new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP));
       }
+      obs_count_scaled_loss = per_image_scale_losses_.back().get();
 
       problem_->AddResidualBlock(
           scale_prior_cost, obs_count_scaled_loss, &scale);

@@ -115,9 +115,10 @@ struct MetricDepthError {
           const T z_est_safe = std::max(z_est, T(1e-6));
           r_depth = ceres::log(z_est_safe / scaled_prior_safe);
         } else {
-          // Linear continuation below threshold (C¹ at boundary).
+          // Linear continuation below threshold (C¹ at boundary):
+          // d/dz log(z/p) = 1/z, so slope at threshold is 1/threshold.
           const T r_at_threshold = ceres::log(thresh / scaled_prior_safe);
-          r_depth = r_at_threshold + (z_est - thresh);
+          r_depth = r_at_threshold + (z_est - thresh) / thresh;
         }
         weight = weight_log;
       } else if (z_est > T(0.0)) {
