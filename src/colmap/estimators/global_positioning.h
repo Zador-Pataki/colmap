@@ -187,23 +187,12 @@ class GlobalPositioner {
 
   // --- Optional extensions ---
 
-  // Per-image depth-map scale parameter blocks (lazily inserted on
-  // first valid depth-prior observation; only populated when
-  // use_metric_depth_constraint is true). Must be ``std::map`` not
-  // ``unordered_map``: Ceres residuals store ``&dmap_scales_[image_id]``
-  // and a hash rehash during insert would invalidate them.
+  // std::map (not unordered) — Ceres stores &dmap_scales_[id] pointers.
   std::map<image_t, double> dmap_scales_;
-
-  // Per-image count of MetricDepthError residuals. Used by the
-  // per-image ScalePriorError to weight by observation density.
   std::unordered_map<image_t, int> dmap_scale_observation_counts_;
-
-  // Observations flagged by ``FilterDepthOutliers``. Routed to
-  // soft-fallback loss (non-LC) or skipped entirely (LC).
   std::set<std::pair<image_t, point2D_t>> depth_outliers_;
 
-  // 10 cached loss buckets, one per ``options_.loss_*`` field.
-  // Pre-warmed once in ``AddPointToCameraConstraints``.
+  // Cached loss buckets for the depth cascade.
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_;
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_;
   std::shared_ptr<ceres::LossFunction> cached_loss_lc_geometry_;

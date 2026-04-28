@@ -188,10 +188,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   }
   loss_function_ptcam_calibrated_ = loss_function_;
 
-  // Pre-warm the 10 cascade losses; default trivial/1/1 gives unweighted
-  // residuals (equivalent to no override). Selection happens per-observation
-  // in ``AddObservationToProblem``. ``soft_outlier_fallback_loss_`` is
-  // allocated lazily on first non-LC depth-outlier.
+  // Initialize cascade losses.
   cached_loss_normal_geometry_ =
       options_.loss_normal_geometry.CreateLossFunction();
   cached_loss_normal_depth_ = options_.loss_normal_depth.CreateLossFunction();
@@ -213,10 +210,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   dmap_scales_.clear();
   dmap_scale_observation_counts_.clear();
 
-  // Seed dmap_scales_ from caller-supplied initial values (e.g. GP2
-  // continuing from GP1) BEFORE FilterDepthOutliers so the log-space
-  // residual check uses the right per-image scale. Subsequent lazy
-  // inserts in AddObservationToProblem skip already-seeded images.
+  // Seed dmap_scales_ from initial values before outlier filtering.
   if (options_.use_metric_depth_constraint &&
       options_.initial_dmap_scales.has_value()) {
     for (const auto& [image_id, linear_scale] :
