@@ -196,27 +196,12 @@ TEST(RigBATAPairwiseDirectionCostFunctor, Create) {
   ASSERT_NE(cost_function, nullptr);
 }
 
-// ---------------------------------------------------------------------------
-// CovarianceWeightedCostFunctor<BATAPairwiseDirectionCostFunctor> equivalence
-// to a per-axis whitened BATA residual.
-//
-// Per-axis whitened reference:
-//   r_world   = t_obs - scale * (c2 - c1)
-//   r_cam     = R * r_world
-//   residual  = (r_cam.x / sigma_x, r_cam.y / sigma_y, r_cam.z / sigma_z)
-//   ||r||^2   = r_world^T * R^T * diag(1/sigma^2) * R * r_world
-//             = r_world^T * cov_world^{-1} * r_world,
-//             where cov_world = R^T * diag(sigma^2) * R.
-//
-// Native CWCF<BATA>::Create(cov_world, t_obs):
-//   r_world   = t_obs - scale * (c2 - c1)
-//   residual  = L * r_world, with L^T L = cov_world^{-1}
-//   ||r||^2   = r_world^T * cov_world^{-1} * r_world.
-//
-// => identical squared norm. The tests below verify this algebraically.
-// ---------------------------------------------------------------------------
+// CWCF<BATA>(cov_world, t_obs) should produce the same squared residual norm
+// as a per-axis whitened BATA residual (residual.{x,y,z} / sigma_{x,y,z}),
+// when cov_world = R^T diag(sigma^2) R. The tests below verify this both
+// on randomized inputs and on the closed-form identity / isotropic case.
 
-TEST(CovarianceWeightedBATAPairwiseDirection, MatchesForkRandomized) {
+TEST(CovarianceWeightedBATAPairwiseDirection, MatchesPerAxisWhitened) {
   std::mt19937 rng(42);
   std::uniform_real_distribution<double> uni(-1.0, 1.0);
   std::uniform_real_distribution<double> sigma_uni(0.05, 1.5);

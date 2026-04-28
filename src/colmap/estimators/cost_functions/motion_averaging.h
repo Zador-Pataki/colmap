@@ -135,10 +135,4 @@ struct RigBATAPairwiseDirectionCostFunctor {
   const Eigen::Quaterniond world_from_rig_rot_;
 };
 
-// WeightedBATADirectionalError was dropped in favor of native
-// CovarianceWeightedCostFunctor<BATAPairwiseDirectionCostFunctor>::Create(
-//     cov_world, t_obs) where cov_world = R^T diag(sigma^2) R encodes
-// the rotation from world to camera frame. See call site in
-// global_positioning.cc.
-
 }  // namespace colmap
