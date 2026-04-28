@@ -240,13 +240,13 @@ TEST(LossConfig, CauchyAndSoftL1Smoke) {
   }
 }
 
-// ---- Backward-compat gates: use_observation_exclusions + use_lc_observations.
+// ---- Backward-compat gate: use_lc_observations.
 //
-// Default-constructed ``GlobalPositionerOptions`` keeps both gates ``false``
+// Default-constructed ``GlobalPositionerOptions`` keeps the gate ``false``
 // so vanilla pycolmap callers get vanilla colmap4 GP behaviour even when
-// ``image.is_excluded`` / ``track.lc_elements`` carry non-empty values left
-// over from upstream code paths. These tests verify both directions of each
-// gate by counting BATA residual blocks added during ``Solve``.
+// ``track.lc_elements`` carry non-empty values left over from upstream code
+// paths. These tests verify both directions of the gate by counting BATA
+// residual blocks added during ``Solve``.
 
 namespace {
 
@@ -360,108 +360,6 @@ size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
 }
 
 }  // namespace
-
-TEST(GlobalPositioning, Gate_UseObservationExclusions_Off_IgnoresIsExcluded) {
-  SetPRNGSeed(0);
-  GpTestData data = BuildGpTestData();
-
-  GlobalPositionerOptions options = BaselineGpOptions();
-  const size_t expected_observations =
-      CountValidObservations(data.reconstruction, options.min_num_view_per_track);
-  ASSERT_GT(expected_observations, 0);
-
-  // Mark every Point2D of every image as excluded. With the gate OFF (the
-  // default) this should be ignored entirely.
-  std::vector<image_t> image_ids;
-  image_ids.reserve(data.reconstruction.NumImages());
-  for (const auto& [image_id, _] : data.reconstruction.Images()) {
-    image_ids.push_back(image_id);
-  }
-  for (image_t image_id : image_ids) {
-    Image& image = data.reconstruction.Image(image_id);
-    image.is_excluded.assign(image.NumPoints2D(), true);
-  }
-  ASSERT_FALSE(options.use_observation_exclusions);
-
-  TestableGlobalPositioner positioner(options);
-  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
-
-  EXPECT_EQ(positioner.NumScales(), expected_observations);
-}
-
-TEST(GlobalPositioning, Gate_UseObservationExclusions_On_RespectsIsExcluded) {
-  SetPRNGSeed(0);
-  GpTestData data = BuildGpTestData();
-
-  GlobalPositionerOptions options = BaselineGpOptions();
-  options.use_observation_exclusions = true;
-
-  // Mark every observation excluded -> when the gate is ON, GP should add
-  // zero BATA residual blocks even though the underlying tracks are valid.
-  std::vector<image_t> image_ids;
-  image_ids.reserve(data.reconstruction.NumImages());
-  for (const auto& [image_id, _] : data.reconstruction.Images()) {
-    image_ids.push_back(image_id);
-  }
-  for (image_t image_id : image_ids) {
-    Image& image = data.reconstruction.Image(image_id);
-    image.is_excluded.assign(image.NumPoints2D(), true);
-  }
-
-  TestableGlobalPositioner positioner(options);
-  // Solve still returns true on an empty problem; the contract here is the
-  // residual count, not solver success.
-  positioner.Solve(data.pose_graph, data.reconstruction);
-
-  EXPECT_EQ(positioner.NumScales(), 0u);
-}
-
-TEST(GlobalPositioning,
-     Gate_UseObservationExclusions_On_PartialExclusionDropsOnlyMarked) {
-  SetPRNGSeed(0);
-  GpTestData data = BuildGpTestData();
-
-  GlobalPositionerOptions options = BaselineGpOptions();
-  options.use_observation_exclusions = true;
-
-  // Exclude exactly the first observation of every track that participates
-  // in GP. We expect ``NumScales() = total - num_excluded``.
-  size_t expected_excluded = 0;
-  std::set<std::pair<image_t, point2D_t>> excluded_obs;
-  for (const auto& [_, point3D] : data.reconstruction.Points3D()) {
-    if (static_cast<int>(point3D.track.Length()) <
-        options.min_num_view_per_track) {
-      continue;
-    }
-    const TrackElement& first = point3D.track.Elements().front();
-    excluded_obs.emplace(first.image_id, first.point2D_idx);
-  }
-
-  std::vector<image_t> image_ids;
-  image_ids.reserve(data.reconstruction.NumImages());
-  for (const auto& [image_id, _] : data.reconstruction.Images()) {
-    image_ids.push_back(image_id);
-  }
-  for (image_t image_id : image_ids) {
-    Image& image = data.reconstruction.Image(image_id);
-    image.is_excluded.assign(image.NumPoints2D(), false);
-    for (const auto& [excl_image_id, excl_point2D_idx] : excluded_obs) {
-      if (excl_image_id == image_id) {
-        image.is_excluded[excl_point2D_idx] = true;
-        ++expected_excluded;
-      }
-    }
-  }
-  ASSERT_GT(expected_excluded, 0u);
-
-  const size_t total_observations = CountValidObservations(
-      data.reconstruction, options.min_num_view_per_track);
-
-  TestableGlobalPositioner positioner(options);
-  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
-
-  EXPECT_EQ(positioner.NumScales(), total_observations - expected_excluded);
-}
 
 TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {
   SetPRNGSeed(0);
