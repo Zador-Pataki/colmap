@@ -6,8 +6,11 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include <ceres/ceres.h>
 
@@ -55,6 +58,9 @@ struct GlobalPositionerOptions {
   // The options for the solver
   ceres::Solver::Options solver_options;
 
+  // Add per-observation MetricDepthError residual alongside BATA.
+  bool use_metric_depth_constraint = false;
+
   // Include loop-closure observations in point3D problems.
   bool use_lc_observations = false;
 
@@ -64,9 +70,34 @@ struct GlobalPositionerOptions {
   // Cube half-extent for random initialization of positions and points.
   double random_init_scale = 100.0;
 
-  // Per-observation loss configs for LC routing.
+  // --- Metric-depth path toggles (only consulted when
+  //     use_metric_depth_constraint == true) ---
+  bool use_log_scale_for_depth_map_scales = false;
+  bool use_log_residual_for_depth = false;
+  bool zero_residual_behind = false;
+  bool smooth_log_linear_transition = false;
+  double log_linear_threshold = 1.0;
+  double scale_prior_stddev = 1.0;
+
+  // Pre-Solve 3-sigma log-space depth-residual filter. Flagged
+  // observations route through a hardcoded soft fallback in the
+  // depth-loss cascade.
+  bool filter_depth_outliers = false;
+
+  // Caller-supplied initial dmap_scales (linear space). nullopt = auto.
+  std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
+
+  // Per-observation loss routing (only active when use_metric_depth_constraint).
+  LossConfig loss_normal_geometry;
+  LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;
   LossConfig loss_lc_depth;
+  LossConfig loss_normal_geometry_inlier;
+  LossConfig loss_normal_depth_inlier;
+  LossConfig loss_normal_depth_outlier;
+  LossConfig loss_normal_geometry_trackstart;
+  LossConfig loss_normal_depth_trackstart;
+  LossConfig loss_scale_prior;
 
   GlobalPositionerOptions() {
     solver_options.num_threads = -1;
@@ -91,6 +122,11 @@ class GlobalPositioner {
 
   GlobalPositionerOptions& GetOptions() { return options_; }
 
+  // Per-image dmap_scales_ after Solve() (log or linear per options).
+  const std::map<image_t, double>& GetDmapScales() const {
+    return dmap_scales_;
+  }
+
  protected:
   void SetupProblem(const PoseGraph& pose_graph,
                     const Reconstruction& reconstruction);
@@ -110,6 +146,13 @@ class GlobalPositioner {
                                const TrackElement& observation,
                                bool random_initialization,
                                Reconstruction& reconstruction);
+
+  // Seed dmap_scales_ from per-image median z_est / depth_prior.
+  void InitializeDepthMapScalesFromObservations(
+      const Reconstruction& reconstruction);
+
+  // Flag observations with depth residual exceeding 3 sigma.
+  void FilterDepthOutliers(const Reconstruction& reconstruction);
 
   // Set the parameter groups
   void AddCamerasAndPointsToParameterGroups(Reconstruction& reconstruction);
@@ -141,6 +184,40 @@ class GlobalPositioner {
   // Temporary storage for camera-in-rig positions when cam_from_rig is unknown
   // and needs to be estimated.
   std::unordered_map<sensor_t, Eigen::Vector3d> cams_in_rig_;
+
+  // --- Optional extensions ---
+
+  // Per-image depth-map scale parameter blocks (lazily inserted on
+  // first valid depth-prior observation; only populated when
+  // use_metric_depth_constraint is true). Must be ``std::map`` not
+  // ``unordered_map``: Ceres residuals store ``&dmap_scales_[image_id]``
+  // and a hash rehash during insert would invalidate them.
+  std::map<image_t, double> dmap_scales_;
+
+  // Per-image count of MetricDepthError residuals. Used by the
+  // per-image ScalePriorError to weight by observation density.
+  std::unordered_map<image_t, int> dmap_scale_observation_counts_;
+
+  // Observations flagged by ``FilterDepthOutliers``. Routed to
+  // soft-fallback loss (non-LC) or skipped entirely (LC).
+  std::set<std::pair<image_t, point2D_t>> depth_outliers_;
+
+  // 10 cached loss buckets, one per ``options_.loss_*`` field.
+  // Pre-warmed once in ``AddPointToCameraConstraints``.
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_lc_geometry_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_lc_depth_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_inlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_inlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_outlier_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_trackstart_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_trackstart_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_scale_prior_;
+
+  // ScaledLoss(HuberLoss(1), 1) used for non-LC depth outliers.
+  // Lazily allocated.
+  std::shared_ptr<ceres::LossFunction> soft_outlier_fallback_loss_;
 };
 
 // Solve global positioning using point-to-camera constraints.
