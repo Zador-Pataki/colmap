@@ -77,6 +77,10 @@ struct MetricDepthError {
       throw std::invalid_argument(
           "MetricDepthError: Standard deviation must be positive.");
     }
+    if (smooth_transition && threshold <= 0.0) {
+      throw std::invalid_argument(
+          "MetricDepthError: threshold must be > 0 when smooth_transition=true.");
+    }
   }
 
   template <typename T>

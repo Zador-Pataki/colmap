@@ -111,6 +111,7 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   // Clear temporary storage from previous runs.
   frame_centers_.clear();
   cams_in_rig_.clear();
+  per_image_scale_losses_.clear();
 
   // Reserve to avoid pointer-invalidating reallocs.
   scales_.clear();
