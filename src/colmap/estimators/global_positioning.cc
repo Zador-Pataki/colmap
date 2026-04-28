@@ -39,12 +39,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     return false;
   }
 
-  // TODO: extend the rig branch in AddObservationToProblem to also add a
-  // MetricDepthError residual (parameterized over rig_from_world +
-  // cam_from_rig instead of cam_from_world). Until then, multi-camera
-  // rigs combined with use_metric_depth_constraint=true would silently
-  // drop depth residuals on non-ref images. Fail loud rather than
-  // produce an inconsistent optimization.
+  // TODO: extend rig branch in AddObservationToProblem to add MetricDepthError
+  // for non-ref images. Until then, fail loud on multi-camera rigs +
+  // use_metric_depth_constraint.
   if (options_.use_metric_depth_constraint) {
     for (const auto& [image_id, image] : reconstruction.Images()) {
       THROW_CHECK(image.IsRefInFrame())
@@ -248,9 +245,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
               ? static_cast<double>(count_it->second)
               : 1.0;
 
-      // The dmap_scale parameter is in log-space when
-      // ``use_log_scale_for_depth_map_scales=true`` (prior pulls log_s
-      // toward 0), in linear space otherwise (prior pulls s toward 1).
+      // Prior: pulls log_s toward 0 (log-space) or s toward 1 (linear).
       const Eigen::Matrix<double, 1, 1> prior_vec(
           options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0);
       const Eigen::Matrix<double, 1, 1> cov_1x1(
@@ -385,17 +380,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
 
   // If the image is not part of a camera rig, use the standard BATA error
   if (image.IsRefInFrame()) {
-    // Anisotropic per-keypoint covariance when ``angular_stddevs`` is
-    // populated; otherwise the bare unweighted
-    // ``BATAPairwiseDirectionCostFunctor``. The depth-aware variant
-    // additionally weights by per-observation uncertainty: the residual
-    // is rotated into camera frame before whitening; here we encode the
-    // rotation in the world-frame covariance
-    // ``cov_world = R^T diag(sigma^2) R`` so native
-    // ``CovarianceWeightedCostFunctor`` reproduces the same residual
-    // norm. Without this weighted variant the metric-depth
-    // geometry residuals lose their relative weighting against the
-    // metric-depth residuals.
+    // Anisotropic per-keypoint covariance via CovarianceWeightedCostFunctor
+    // when angular_stddevs is populated; otherwise bare BATA functor.
+    // cov_world = R^T diag(sigma^2) R.
     ceres::CostFunction* cost_function = nullptr;
     if (observation.point2D_idx < image.angular_stddevs.size()) {
       const Eigen::Vector2d& angular_std =
@@ -427,9 +414,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                point3D.xyz.data(),
                                &scale);
 
-    // 1-D ``MetricDepthError`` residual on
-    // (frame_center, point3D.xyz, dmap_scales_[image_id]) — anchors
-    // absolute scale when a depth prior is available at this feature.
+    // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint &&
         observation.point2D_idx < image.depth_prior_validity.size() &&
         image.depth_prior_validity[observation.point2D_idx]) {
@@ -439,8 +424,6 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
 
       if (depth_prior > 0.0 && depth_sigma > 1e-9) {
         // Lazy-insert dmap_scales_ on first valid observation per image.
-        // Initial value: from options_.initial_dmap_scales (caller-supplied
-        // GP1→GP2 handoff) if provided, else 1.0 (linear) / 0.0 (log).
         if (dmap_scales_.find(observation.image_id) ==
             dmap_scales_.end()) {
           double init_value =
@@ -449,8 +432,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
             const auto& init_map = *options_.initial_dmap_scales;
             auto it = init_map.find(observation.image_id);
             if (it != init_map.end()) {
-              // Caller-supplied value is in linear space; convert to
-              // log if option says so.
+              // Convert caller-supplied linear value to log if needed.
               init_value = options_.use_log_scale_for_depth_map_scales
                                ? std::log(std::max(it->second, 1e-9))
                                : it->second;
@@ -484,13 +466,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                                       observation.point2D_idx};
           if (depth_outliers_.count(obs_key) > 0) {
             if (is_lc_observation) {
-              // LC outlier: skip the depth residual entirely (only emit
-              // BATA above). Drop this metric_depth_cost.
+              // LC outlier: skip depth residual entirely.
               delete metric_depth_cost;
               metric_depth_cost = nullptr;
             } else {
-              // Non-LC outlier: hardcoded soft fallback (HuberLoss(1)
-              // wrapped in ScaledLoss(1)).
+              // Non-LC outlier: soft fallback (HuberLoss(1)).
               if (!soft_outlier_fallback_loss_) {
                 soft_outlier_fallback_loss_ =
                     std::make_shared<ceres::ScaledLoss>(
@@ -610,9 +590,7 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
     }
   }
 
-  // dmap_scales_ in their own group: Ceres' Schur preprocessor needs
-  // each group to have uniform block size, and these are 1-D blocks vs
-  // 3-D frame_centers/cams_in_rig.
+  // dmap_scales_ in own group (1-D vs 3-D frame_centers/cams_in_rig).
   ++group_id;
   for (auto& [image_id, scale] : dmap_scales_) {
     if (problem_->HasParameterBlock(&scale)) {
@@ -662,9 +640,7 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
     }
   }
 
-  // Lower-bound dmap_scales_ in linear space (prevents collapse to <=0).
-  // No bound in log space (parameter is unbounded; positivity comes from
-  // exp() in MetricDepthError).
+  // Lower-bound dmap_scales_ in linear space (no bound needed in log space).
   if (!options_.use_log_scale_for_depth_map_scales) {
     for (auto& [image_id, scale] : dmap_scales_) {
       if (problem_->HasParameterBlock(&scale)) {
@@ -672,11 +648,8 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
       }
     }
   }
-  // Set the first scale to be constant to remove the gauge ambiguity. Skip
-  // when the metric-depth path is active: ``ScalePriorError`` plus the
-  // depth-prior observations themselves anchor the gauge, and the redundant
-  // pin would over-constrain the system. Gating preserves native colmap GP
-  // unit tests under default ``BATA`` mode.
+  // Pin first scale to remove gauge ambiguity. Skip when metric-depth is
+  // active (depth priors + scale priors already anchor the gauge).
   if (!options_.use_metric_depth_constraint) {
     for (double& scale : scales_) {
       if (problem_->HasParameterBlock(&scale)) {
@@ -773,14 +746,9 @@ void GlobalPositioner::ConvertBackResults(Reconstruction& reconstruction) {
   }
 }
 
-// FilterDepthOutliers: sweep regular + LC observations per track. For each,
-// compute estimated camera-frame z-depth via the WORLD pose (not the in-Solve
-// flipped frame_centers_ convention — Solve is about to start, frame_centers_
-// is raw initial-cam-position). Flag
-// |log(z_est) - log(scale*prior)| >= 3 sigma_log where
-// sigma_log = std::log(1 + relative_stddev). Insert (image_id, point2D_idx)
-// into depth_outliers_; the geometry-loss cascade then routes flagged
-// observations to soft fallback (non-LC) or skip-residual (LC).
+// Flag observations where |log(z_est/scaled_prior)| >= 3*sigma_log.
+// Uses world poses (not frame_centers_). Flagged observations route to
+// soft fallback (non-LC) or skip (LC) in the depth-loss cascade.
 namespace {
 
 // Helper: per-observation outlier check. Returns true to insert into

@@ -10,23 +10,11 @@
 
 namespace colmap {
 
-// 1-D residual cost functor comparing camera-frame z-depth of a
-// world point against ``s_i * m_ik`` where ``s_i`` is a per-image
-// optimization variable (linear or log-space) and ``m_ik`` is a depth prior.
-//
-// Five toggles control residual shape (NOT mutually orthogonal —
-// ``smooth_transition`` only takes effect inside the
-// ``use_log_residual=true`` branch; reachable combinations: 12, not 32):
-//   - ``use_log_scale`` — parameter is ``log(s)`` instead of linear ``s``.
-//   - ``use_log_residual`` — residual is ``log(z/sp) / sigma_log`` instead
-//     of ``(z - sp) / (s * sigma_m)`` for points in front.
-//   - ``zero_residual_behind`` — force r=0 when ``z <= 0``.
-//   - ``smooth_transition`` — C¹ blend between linear-below and log-above
-//     ``threshold``. Only active when ``use_log_residual=true``.
-//   - ``threshold`` — blend point for ``smooth_transition``.
-//
-// AutoDiff signature: ``<1, 3, 3, 1>`` on ``(c_i, X_k, dmap_scale)``.
-// Rotation is baked in (constant ``R_W_C``).
+// 1-D residual: camera-frame z-depth vs scaled depth prior (s_i * m_ik).
+// Five toggles (use_log_scale, use_log_residual, zero_residual_behind,
+// smooth_transition, threshold) control residual shape; 12 reachable
+// combinations since smooth_transition requires use_log_residual.
+// AutoDiff<1, 3, 3, 1> over (frame_center, point3D, dmap_scale).
 struct MetricDepthError {
   MetricDepthError(const Eigen::Quaterniond& rotation,
                    double depth_prior,
@@ -150,10 +138,8 @@ struct MetricDepthError {
   const double threshold_;
 };
 
-// ScalePriorError + LogScalePriorError were dropped in favor of native
-// CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(cov, prior)
-// in cost_functions/utils.h. See the call site in global_positioning.cc
-// where the linear/log branch collapses to a single Create() with
-// prior=1.0 (linear) or 0.0 (log) and cov=stddev^2.
+// ScalePriorError + LogScalePriorError replaced by native
+// CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>> (see
+// global_positioning.cc): prior=1.0 (linear) or 0.0 (log), cov=stddev^2.
 
 }  // namespace colmap
