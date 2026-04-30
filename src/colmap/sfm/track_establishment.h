@@ -65,12 +65,16 @@ struct TrackSubsampleOptions {
   int max_num_views_per_track = std::numeric_limits<int>::max();
   int required_tracks_per_view = std::numeric_limits<int>::max();
   int max_num_tracks = std::numeric_limits<int>::max();
+  bool two_view_depth_gate = false;
 };
 
-// Greedy length-sorted subsample with per-image quota. Returns selected tracks.
+// Greedy length-sorted subsample with per-image quota and optional
+// 2-view depth gate. Returns selected tracks.
 std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const TrackSubsampleOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full);
 
 }  // namespace colmap

@@ -157,7 +157,9 @@ void BindTrackEstablishment(py::module& m) {
           .def_readwrite("required_tracks_per_view",
                          &TrackSubsampleOptions::required_tracks_per_view)
           .def_readwrite("max_num_tracks",
-                         &TrackSubsampleOptions::max_num_tracks);
+                         &TrackSubsampleOptions::max_num_tracks)
+          .def_readwrite("two_view_depth_gate",
+                         &TrackSubsampleOptions::two_view_depth_gate);
   MakeDataclass(PySubOpts);
 
   m.def("establish_full_tracks",

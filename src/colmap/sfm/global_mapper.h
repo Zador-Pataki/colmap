@@ -72,6 +72,8 @@ struct GlobalMapperOptions {
   int track_max_num_views_per_track = std::numeric_limits<int>::max();
   // Hard cap on the number of tracks kept after subsampling.
   int track_max_num_tracks = std::numeric_limits<int>::max();
+  // Drop 2-view tracks without valid depth priors on both observations.
+  bool track_two_view_depth_gate = false;
   // Append LC observations to tracks after establishment. Bypasses
   // helper-side subsample; call SubsampleTracksForProblem after.
   bool track_lc_second_pass = false;
