@@ -39,17 +39,16 @@ MatchPredicate MakeLoopClosureMatchPredicate(
     for (const int idx : inliers) {
       if (static_cast<size_t>(idx) < are_lc.size() && are_lc[idx]) {
         lc_obs->insert(EncodeObservationKey(
-            image_pair.image_id1,
-            static_cast<point2D_t>(matches(idx, 0))));
+            image_pair.image_id1, static_cast<point2D_t>(matches(idx, 0))));
         lc_obs->insert(EncodeObservationKey(
-            image_pair.image_id2,
-            static_cast<point2D_t>(matches(idx, 1))));
+            image_pair.image_id2, static_cast<point2D_t>(matches(idx, 1))));
       }
     }
   }
-  return [lc_obs = std::move(lc_obs)](
-             image_t image_id1, point2D_t p1,
-             image_t image_id2, point2D_t p2) -> bool {
+  return [lc_obs = std::move(lc_obs)](image_t image_id1,
+                                      point2D_t p1,
+                                      image_t image_id2,
+                                      point2D_t p2) -> bool {
     return lc_obs->count(EncodeObservationKey(image_id1, p1)) ||
            lc_obs->count(EncodeObservationKey(image_id2, p2));
   };
@@ -75,8 +74,9 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
         << "Missing keypoints for image " << image_id2;
     corr_graph.ExtractMatchesBetweenImages(image_id1, image_id2, matches);
     for (const auto& match : matches) {
-      if (ignore_match && ignore_match(image_id1, match.point2D_idx1,
-                                      image_id2, match.point2D_idx2)) {
+      if (ignore_match &&
+          ignore_match(
+              image_id1, match.point2D_idx1, image_id2, match.point2D_idx2)) {
         continue;
       }
       const Observation obs1(image_id1, match.point2D_idx1);
@@ -185,7 +185,6 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
             << ", after: " << selected.size();
   return selected;
 }
-
 
 void AppendLoopClosureObservations(
     const std::vector<image_pair_t>& valid_pair_ids,
@@ -327,7 +326,9 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
       if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
     }
-    if (candidate.track.Length() <
+    const size_t candidate_total =
+        candidate.track.Length() + candidate.track.lc_elements.size();
+    if (candidate_total <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
     }
