@@ -324,6 +324,13 @@ class TestableGlobalPositioner : public GlobalPositioner {
  public:
   using GlobalPositioner::GlobalPositioner;
   size_t NumScales() const { return scales_.size(); }
+  size_t NumFrameCenters() const { return frame_centers_.size(); }
+  void SetupOnlyForTest(const PoseGraph& pose_graph,
+                        Reconstruction& reconstruction) {
+    SetupProblem(pose_graph, reconstruction);
+    InitializeRandomPositions(pose_graph, reconstruction);
+    AddPointToCameraConstraints(reconstruction);
+  }
 };
 
 // Build a small synthetic GP problem with rigs of a single ref camera so
@@ -426,6 +433,32 @@ size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
   return total_lc;
 }
 
+// Keep exactly one point whose min-view eligibility depends on the LC gate:
+// one regular observation plus two LC observations.
+void KeepSingleRegularPlusLcPoint(Reconstruction& reconstruction) {
+  std::vector<point3D_t> point3D_ids;
+  point3D_ids.reserve(reconstruction.NumPoints3D());
+  for (const point3D_t point3D_id : reconstruction.Point3DIds()) {
+    point3D_ids.push_back(point3D_id);
+  }
+  for (const point3D_t point3D_id : point3D_ids) {
+    reconstruction.DeletePoint3D(point3D_id);
+  }
+
+  const std::vector<image_t> image_ids = reconstruction.RegImageIds();
+  THROW_CHECK_GE(image_ids.size(), 3);
+  THROW_CHECK_GT(reconstruction.Image(image_ids[0]).NumPoints2D(), 0);
+  THROW_CHECK_GT(reconstruction.Image(image_ids[1]).NumPoints2D(), 0);
+  THROW_CHECK_GT(reconstruction.Image(image_ids[2]).NumPoints2D(), 0);
+
+  Point3D point3D;
+  point3D.xyz = Eigen::Vector3d(0.1, 0.2, 4.0);
+  point3D.track.AddElement(image_ids[0], 0);
+  point3D.track.lc_elements.emplace_back(image_ids[1], 0);
+  point3D.track.lc_elements.emplace_back(image_ids[2], 0);
+  reconstruction.AddPoint3D(0, std::move(point3D));
+}
+
 }  // namespace
 
 TEST(GlobalPositioning, MetricDepthConstraintConverges) {
@@ -526,6 +559,40 @@ TEST(GlobalPositioning, Gate_UseLcObservations_On_IteratesLcElements) {
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
 
   EXPECT_EQ(positioner.NumScales(), expected_regular + expected_lc);
+}
+
+TEST(GlobalPositioning, MinViewGate_UseLcObservationsOff_IgnoresLcElements) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  KeepSingleRegularPlusLcPoint(data.reconstruction);
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.min_num_view_per_track = 3;
+  ASSERT_FALSE(options.use_lc_observations);
+
+  PoseGraph empty_pose_graph;
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(empty_pose_graph, data.reconstruction);
+
+  EXPECT_EQ(positioner.NumFrameCenters(), 0u);
+  EXPECT_EQ(positioner.NumScales(), 0u);
+}
+
+TEST(GlobalPositioning, MinViewGate_UseLcObservationsOn_CountsLcElements) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  KeepSingleRegularPlusLcPoint(data.reconstruction);
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.min_num_view_per_track = 3;
+  options.use_lc_observations = true;
+
+  PoseGraph empty_pose_graph;
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(empty_pose_graph, data.reconstruction);
+
+  EXPECT_EQ(positioner.NumFrameCenters(), 3u);
+  EXPECT_EQ(positioner.NumScales(), 3u);
 }
 
 // ---- Depth-prior integration tests ----
