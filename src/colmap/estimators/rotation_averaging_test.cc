@@ -401,7 +401,6 @@ LcMstFixture BuildLcMstFixture() {
   auto& cg_pair = data.correspondence_graph.MutableImagePairs()[pair_12];
   cg_pair.image_id1 = 1;
   cg_pair.image_id2 = 2;
-  cg_pair.pair_id = pair_12;
   cg_pair.inliers.resize(100);
   std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
   // 80 of 100 inliers are LC -> dominated.
@@ -418,7 +417,6 @@ LcMstFixture BuildLcMstFixture() {
     auto& other = data.correspondence_graph.MutableImagePairs()[pair_id];
     other.image_id1 = a;
     other.image_id2 = b;
-    other.pair_id = pair_id;
     other.inliers.resize(10);
     std::iota(other.inliers.begin(), other.inliers.end(), 0);
     other.are_lc.assign(10, false);
@@ -445,12 +443,12 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_Off_KeepsLcDominantEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
-  const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      data.pose_graph,
-      data.image_ids,
-      parents,
-      /*prioritize_tracking=*/false,
-      &data.correspondence_graph);
+  const image_t root =
+      ComputeMaximumPoseGraphSpanningTree(data.pose_graph,
+                                          data.image_ids,
+                                          parents,
+                                          /*prioritize_tracking=*/false,
+                                          &data.correspondence_graph);
 
   // 3 nodes -> 3 entries in the parent map (one is the root self-loop).
   EXPECT_EQ(parents.size(), 3u);
@@ -469,12 +467,12 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_On_RoutesAroundLcEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
-  const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      data.pose_graph,
-      data.image_ids,
-      parents,
-      /*prioritize_tracking=*/true,
-      &data.correspondence_graph);
+  const image_t root =
+      ComputeMaximumPoseGraphSpanningTree(data.pose_graph,
+                                          data.image_ids,
+                                          parents,
+                                          /*prioritize_tracking=*/true,
+                                          &data.correspondence_graph);
 
   // With the LC penalty active, the 1-2 edge's effective weight is
   // 100 - kLCPenalty (=1e9), so the MST must pick the 1-3 + 2-3 path.
@@ -491,8 +489,7 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_On_RoutesAroundLcEdge) {
   EXPECT_TRUE(root == 1 || root == 2 || root == 3);
 }
 
-TEST(RotationAveraging,
-     Gate_LcPenaltyMst_OnWithoutCgFallsBackToVanilla) {
+TEST(RotationAveraging, Gate_LcPenaltyMst_OnWithoutCgFallsBackToVanilla) {
   // With the gate ON but no correspondence graph, the helper should ignore
   // the LC penalty entirely (the second guard in the ``cg_map_ptr`` ternary).
   // Verifies that the gate alone — without a CG — does not silently change
@@ -640,7 +637,8 @@ TEST(RelativeRotationError, SymmetryUnderSwapAndInvert) {
     const Eigen::Vector3d aa1 = QuaternionToAngleAxisVec(q1);
     const Eigen::Vector3d aa2 = QuaternionToAngleAxisVec(q2);
     const Eigen::Vector3d rel_aa = QuaternionToAngleAxisVec(q_rel);
-    const Eigen::Vector3d rel_aa_inv = QuaternionToAngleAxisVec(q_rel.conjugate());
+    const Eigen::Vector3d rel_aa_inv =
+        QuaternionToAngleAxisVec(q_rel.conjugate());
 
     RelativeRotationError functor_orig(rel_aa);
     RelativeRotationError functor_swap(rel_aa_inv);
@@ -683,8 +681,9 @@ TEST(RotationAveraging, WithNoiseAndOutliersHalfNorm) {
   EXPECT_TRUE(RunRotationAveraging(
       options, pose_graph_copy, reconstruction_copy, data.pose_priors));
 
-  ExpectEqualRotations(
-      data.gt_reconstruction, reconstruction_copy, /*max_rotation_error_deg=*/3);
+  ExpectEqualRotations(data.gt_reconstruction,
+                       reconstruction_copy,
+                       /*max_rotation_error_deg=*/3);
 }
 
 // End-to-end test for use_video_constraints path (Ceres solver with
@@ -713,7 +712,6 @@ TEST(RotationAveraging, VideoConstraints) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     cg_pair.image_id1 = image_id1;
     cg_pair.image_id2 = image_id2;
-    cg_pair.pair_id = pair_id;
     cg_pair.inliers.resize(edge.num_matches);
     std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
     cg_pair.are_lc.assign(edge.num_matches, false);  // all tracking
@@ -764,7 +762,6 @@ TEST(RotationAveraging, SkipRiskyLcPairs) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     cg_pair.image_id1 = image_id1;
     cg_pair.image_id2 = image_id2;
-    cg_pair.pair_id = pair_id;
     cg_pair.inliers.resize(edge.num_matches);
     std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
 
