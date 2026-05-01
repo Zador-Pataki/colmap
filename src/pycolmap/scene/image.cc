@@ -26,6 +26,22 @@ namespace py = pybind11;
 namespace {
 
 template <typename PyClass>
+void DefDoubleVectorProperty(PyClass& cls,
+                             const char* name,
+                             std::vector<double> Image::*member) {
+  cls.def_property(
+      name,
+      [member](const Image& self) -> Eigen::VectorXd {
+        const auto& vec = self.*member;
+        return Eigen::Map<const Eigen::VectorXd>(vec.data(), vec.size());
+      },
+      [member](Image& self, const Eigen::VectorXd& v) {
+        auto& vec = self.*member;
+        vec.assign(v.data(), v.data() + v.size());
+      });
+}
+
+template <typename PyClass>
 void DefBoolVectorProperty(PyClass& cls,
                            const char* name,
                            std::vector<bool> Image::*member) {
@@ -151,35 +167,7 @@ void BindSceneImage(py::module& m) {
       .def("has_pixel_covariances",
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
-      .def_property(
-          "depth_priors",
-          [](const Image& self) -> Eigen::VectorXd {
-            return Eigen::Map<const Eigen::VectorXd>(self.depth_priors.data(),
-                                                     self.depth_priors.size());
-          },
-          [](Image& self, const Eigen::VectorXd& v) {
-            self.depth_priors.assign(v.data(), v.data() + v.size());
-          })
-      .def_property(
-          "depth_prior_stddevs",
-          [](const Image& self) -> Eigen::VectorXd {
-            return Eigen::Map<const Eigen::VectorXd>(
-                self.depth_prior_stddevs.data(),
-                self.depth_prior_stddevs.size());
-          },
-          [](Image& self, const Eigen::VectorXd& v) {
-            self.depth_prior_stddevs.assign(v.data(), v.data() + v.size());
-          })
       .def_readwrite("angular_stddevs", &Image::angular_stddevs)
-      .def_property(
-          "angular_stddevs_z",
-          [](const Image& self) -> Eigen::VectorXd {
-            return Eigen::Map<const Eigen::VectorXd>(
-                self.angular_stddevs_z.data(), self.angular_stddevs_z.size());
-          },
-          [](Image& self, const Eigen::VectorXd& v) {
-            self.angular_stddevs_z.assign(v.data(), v.data() + v.size());
-          })
       .def_readwrite("log_scale", &Image::log_scale)
       .def_readwrite("log_scale_stddev", &Image::log_scale_stddev)
       .def_readwrite("is_registered", &Image::is_registered)
@@ -265,6 +253,11 @@ void BindSceneImage(py::module& m) {
             return points2D;
           },
           "Get the 2D points that observe a 3D point.");
+  DefDoubleVectorProperty(PyImage, "depth_priors", &Image::depth_priors);
+  DefDoubleVectorProperty(
+      PyImage, "depth_prior_stddevs", &Image::depth_prior_stddevs);
+  DefDoubleVectorProperty(
+      PyImage, "angular_stddevs_z", &Image::angular_stddevs_z);
   DefBoolVectorProperty(
       PyImage, "depth_prior_validity", &Image::depth_prior_validity);
   DefBoolVectorProperty(PyImage, "is_inlier", &Image::is_inlier);
