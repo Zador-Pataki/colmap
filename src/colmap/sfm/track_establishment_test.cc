@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -404,6 +405,68 @@ TEST(FindTracksForProblem, LcOnlyTrackCountsTowardMinViews) {
   ASSERT_EQ(selected.count(0), 1u);
   EXPECT_EQ(selected.at(0).track.Length(), 1u);
   EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
+}
+
+// A one-regular + one-LC two-view candidate must run the same depth gate as a
+// native two-view track. Invalid depth on the regular endpoint drops it.
+TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeImage(1, 3);
+  img1.depth_prior_validity[0] = false;
+  img1.depth_priors[0] = 0.0;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeImage(2, 3));
+
+  Point3D point3D;
+  point3D.track.AddElement(1, 0);
+  point3D.track.lc_elements.emplace_back(2, 0);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(point3D));
+
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_TRUE(selected.empty());
+}
+
+// Invalid depth on the LC endpoint must also drop a one-regular + one-LC
+// two-view candidate.
+TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
+  std::unordered_map<image_t, Image> images;
+  images.emplace(1, MakeImage(1, 3));
+  Image img2 = MakeImage(2, 3);
+  img2.depth_prior_validity[0] = false;
+  img2.depth_priors[0] = 0.0;
+  images.emplace(2, std::move(img2));
+
+  Point3D point3D;
+  point3D.track.AddElement(1, 0);
+  point3D.track.lc_elements.emplace_back(2, 0);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(point3D));
+
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  options.two_view_depth_gate = true;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+  EXPECT_TRUE(selected.empty());
 }
 
 // GreedyQuota: 5 length-3 tracks across 3 images,
@@ -854,6 +917,60 @@ TEST(ProcessLoopClosurePairs, BothSameTrack) {
   // No new tracks minted, no lc_elements added (same-track skip).
   EXPECT_EQ(tracks.size(), 1u);
   EXPECT_EQ(tracks.at(0).track.lc_elements.size(), 0u);
+}
+
+TEST(ProcessLoopClosurePairs, PredicateThrowsOnMalformedLcLength) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {0});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  corr_graph.MutableImagePairs().at(pair_id).are_lc.clear();
+
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(MakeLoopClosureMatchPredicate(pair_ids, corr_graph),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, AppendThrowsOnMalformedLcLength) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {0});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  corr_graph.MutableImagePairs().at(pair_id).are_lc.clear();
+
+  std::unordered_map<point3D_t, Point3D> tracks;
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(AppendLoopClosureObservations(pair_ids, corr_graph, tracks),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, PredicateThrowsOnOutOfRangeInlierIndex) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {1});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(MakeLoopClosureMatchPredicate(pair_ids, corr_graph),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, AppendThrowsOnOutOfRangeInlierIndex) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {1});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  std::unordered_map<point3D_t, Point3D> tracks;
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(AppendLoopClosureObservations(pair_ids, corr_graph, tracks),
+               std::invalid_argument);
 }
 
 // ============================================================================

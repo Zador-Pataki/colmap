@@ -19,6 +19,38 @@ inline uint64_t EncodeObservationKey(image_t image_id, point2D_t feature_id) {
          static_cast<uint64_t>(feature_id);
 }
 
+void ValidateLoopClosureImagePairMetadata(
+    image_pair_t pair_id,
+    const CorrespondenceGraph::ImagePair& image_pair) {
+  const int num_matches = image_pair.matches.rows();
+  THROW_CHECK_EQ(image_pair.are_lc.size(), static_cast<size_t>(num_matches))
+      << "Malformed LC metadata for image pair " << pair_id
+      << ": are_lc.size() must match matches.rows()";
+  for (const int idx : image_pair.inliers) {
+    THROW_CHECK_GE(idx, 0)
+        << "Malformed LC metadata for image pair " << pair_id
+        << ": negative inlier index";
+    THROW_CHECK_LT(idx, num_matches)
+        << "Malformed LC metadata for image pair " << pair_id
+        << ": inlier index outside matches.rows()";
+  }
+}
+
+bool HasValidDepthPrior(
+    const TrackElement& observation,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>&
+        depth_prior_validity) {
+  const auto valid_it = depth_prior_validity.find(observation.image_id);
+  const auto prior_it = depth_priors.find(observation.image_id);
+  return valid_it != depth_prior_validity.end() &&
+         prior_it != depth_priors.end() &&
+         observation.point2D_idx < valid_it->second.size() &&
+         valid_it->second[observation.point2D_idx] &&
+         observation.point2D_idx < prior_it->second.size() &&
+         prior_it->second[observation.point2D_idx] > 1e-6;
+}
+
 }  // namespace
 
 MatchPredicate MakeLoopClosureMatchPredicate(
@@ -33,11 +65,12 @@ MatchPredicate MakeLoopClosureMatchPredicate(
     const auto it = corr_graph.ImagePairsMap().find(pair_id);
     if (it == corr_graph.ImagePairsMap().end()) continue;
     const auto& image_pair = it->second;
+    ValidateLoopClosureImagePairMetadata(pair_id, image_pair);
     const Eigen::MatrixXi& matches = image_pair.matches;
     const std::vector<int>& inliers = image_pair.inliers;
     const std::vector<bool>& are_lc = image_pair.are_lc;
     for (const int idx : inliers) {
-      if (static_cast<size_t>(idx) < are_lc.size() && are_lc[idx]) {
+      if (are_lc[idx]) {
         lc_obs->insert(EncodeObservationKey(
             image_pair.image_id1, static_cast<point2D_t>(matches(idx, 0))));
         lc_obs->insert(EncodeObservationKey(
@@ -206,6 +239,7 @@ void AppendLoopClosureObservations(
 
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
+    ValidateLoopClosureImagePairMetadata(pair_id, image_pair);
     const Eigen::MatrixXi& matches = image_pair.matches;
     const std::vector<int>& inliers = image_pair.inliers;
     const std::vector<bool>& are_lc = image_pair.are_lc;
@@ -213,7 +247,7 @@ void AppendLoopClosureObservations(
     // Skip pairs without any LC inliers (cheap pre-check).
     bool has_lc = false;
     for (const int idx : inliers) {
-      if (static_cast<size_t>(idx) < are_lc.size() && are_lc[idx]) {
+      if (are_lc[idx]) {
         has_lc = true;
         break;
       }
@@ -224,7 +258,7 @@ void AppendLoopClosureObservations(
     const image_t image_id2 = image_pair.image_id2;
 
     for (const int idx : inliers) {
-      if (static_cast<size_t>(idx) >= are_lc.size() || !are_lc[idx]) {
+      if (!are_lc[idx]) {
         continue;
       }
       const point2D_t p1 = static_cast<point2D_t>(matches(idx, 0));
@@ -327,6 +361,7 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     for (const auto& lc_el : src.track.lc_elements) {
       if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
+      distinct_image_ids.insert(lc_el.image_id);
     }
     const size_t candidate_total =
         candidate.track.Length() + candidate.track.lc_elements.size();
@@ -337,14 +372,13 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     if (options.two_view_depth_gate && distinct_image_ids.size() == 2) {
       bool depth_ok = true;
       for (const auto& el : candidate.track.Elements()) {
-        const auto valid_it = depth_prior_validity.find(el.image_id);
-        const auto prior_it = depth_priors.find(el.image_id);
-        if (valid_it == depth_prior_validity.end() ||
-            prior_it == depth_priors.end() ||
-            el.point2D_idx >= valid_it->second.size() ||
-            !valid_it->second[el.point2D_idx] ||
-            el.point2D_idx >= prior_it->second.size() ||
-            prior_it->second[el.point2D_idx] <= 1e-6) {
+        if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
+          depth_ok = false;
+          break;
+        }
+      }
+      for (const auto& lc_el : candidate.track.lc_elements) {
+        if (!HasValidDepthPrior(lc_el, depth_priors, depth_prior_validity)) {
           depth_ok = false;
           break;
         }
