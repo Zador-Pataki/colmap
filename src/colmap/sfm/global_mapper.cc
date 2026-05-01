@@ -142,11 +142,17 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
     valid_pair_ids.push_back(pair_id);
   }
 
+  MatchPredicate ignore_match;
+  if (options.track_lc_second_pass) {
+    ignore_match = MakeLoopClosureMatchPredicate(
+        valid_pair_ids, *database_cache_->CorrespondenceGraph());
+  }
   auto selected = EstablishTracksFromCorrGraph(
       valid_pair_ids,
       *database_cache_->CorrespondenceGraph(),
       image_id_to_keypoints,
-      to);
+      to,
+      ignore_match);
   if (options.track_lc_second_pass) {
     AppendLoopClosureObservations(
         valid_pair_ids,

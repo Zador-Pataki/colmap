@@ -60,13 +60,28 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
   {
     py::gil_scoped_release release;
     TrackEstablishmentOptions to = options;
+    MatchPredicate ignore_match;
     if (lc_second_pass) {
       // When the LC pass is enabled, the caller owns subsampling, so the
       // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
+      CorrespondenceGraph& lc_cg =
+          lc_correspondence_graph ? *lc_correspondence_graph
+                                  : correspondence_graph;
+      std::vector<image_pair_t> lc_pair_ids;
+      lc_pair_ids.reserve(lc_cg.NumImagePairs());
+      for (const auto& [pair_id, image_pair] : lc_cg.MutableImagePairs()) {
+        if (image_pair.is_valid) {
+          lc_pair_ids.push_back(pair_id);
+        }
+      }
+      ignore_match = MakeLoopClosureMatchPredicate(lc_pair_ids, lc_cg);
     }
-    tracks = EstablishTracksFromCorrGraph(
-        valid_pair_ids, correspondence_graph, image_id_to_keypoints, to);
+    tracks = EstablishTracksFromCorrGraph(valid_pair_ids,
+                                          correspondence_graph,
+                                          image_id_to_keypoints,
+                                          to,
+                                          ignore_match);
     if (lc_second_pass) {
       // LC observations come from the separate LC correspondence graph which
       // retains the matches/inliers/are_lc ImagePair fields.
