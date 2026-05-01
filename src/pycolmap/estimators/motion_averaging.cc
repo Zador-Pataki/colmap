@@ -141,7 +141,11 @@ void BindGlobalPositioner(py::module& m) {
   PyGlobalPositionerOptions
       .def_readwrite("loss_lc_geometry",
                      &GlobalPositionerOptions::loss_lc_geometry)
-      .def_readwrite("loss_lc_depth", &GlobalPositionerOptions::loss_lc_depth);
+      .def_readwrite("loss_lc_depth", &GlobalPositionerOptions::loss_lc_depth)
+      .def_readwrite("filter_depth_outlier_sigma",
+                     &GlobalPositionerOptions::filter_depth_outlier_sigma)
+      .def_readwrite("loss_soft_outlier_fallback",
+                     &GlobalPositionerOptions::loss_soft_outlier_fallback);
 
   MakeDataclass(PyGlobalPositionerOptions);
 

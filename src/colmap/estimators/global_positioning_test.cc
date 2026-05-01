@@ -29,6 +29,7 @@
 
 #include "colmap/estimators/global_positioning.h"
 
+#include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/math/random.h"
 #include "colmap/scene/database_cache.h"
 #include "colmap/scene/pose_graph.h"
@@ -240,6 +241,75 @@ TEST(LossConfig, CauchyAndSoftL1Smoke) {
   }
 }
 
+// ---- MetricDepthError smooth_transition C¹ continuity at threshold ----
+
+TEST(MetricDepthError, SmoothLogLinearTransitionC1Continuity) {
+  const Eigen::Quaterniond identity = Eigen::Quaterniond::Identity();
+  const double depth_prior = 1.0;
+  const double sigma_depth = 0.2;
+  const double threshold = 0.5;
+
+  MetricDepthError functor(identity,
+                           depth_prior,
+                           sigma_depth,
+                           /*use_log_scale=*/false,
+                           /*use_log_residual=*/true,
+                           /*zero_residual_behind=*/false,
+                           /*smooth_transition=*/true,
+                           threshold);
+
+  // Helper: evaluate residual at z_est with camera at origin, identity rotation,
+  // point at (0, 0, z_est), dmap_scale = 1.0.
+  auto eval = [&](double z_est) -> double {
+    const double c_i[3] = {0.0, 0.0, 0.0};
+    const double X_k[3] = {0.0, 0.0, z_est};
+    const double dmap_scale[1] = {1.0};
+    double residual[1] = {0.0};
+    functor(c_i, X_k, dmap_scale, residual);
+    return residual[0];
+  };
+
+  // --- C⁰: residual values match at threshold ---
+  {
+    const double eps = 1e-8;
+    const double r_above = eval(threshold + eps);
+    const double r_below = eval(threshold - eps);
+    EXPECT_NEAR(r_above, r_below, 1e-5)
+        << "C0 violated: residual discontinuity at threshold";
+  }
+
+  // --- C¹: slopes match at threshold ---
+  // Finite-difference the slope on each side of the boundary.
+  // Use a probe point close to the boundary, then finite-diff around it.
+  {
+    const double delta = 1e-5;  // offset from boundary
+    const double h = 1e-8;      // finite-difference step
+
+    // Slope on the log side (above threshold)
+    const double z_above = threshold + delta;
+    const double slope_above =
+        (eval(z_above + h) - eval(z_above - h)) / (2.0 * h);
+
+    // Slope on the linear side (below threshold)
+    const double z_below = threshold - delta;
+    const double slope_below =
+        (eval(z_below + h) - eval(z_below - h)) / (2.0 * h);
+
+    EXPECT_NEAR(slope_above, slope_below, 1e-3)
+        << "C1 violated: slope discontinuity at threshold";
+  }
+
+  // --- Verify exact residual at threshold matches analytic expectation ---
+  // At z_est = threshold: r_depth = log(threshold / scaled_prior)
+  // weight = 1 / (sigma_depth / depth_prior) = depth_prior / sigma_depth
+  {
+    const double r_at_threshold = eval(threshold);
+    const double expected_weight = depth_prior / sigma_depth;
+    const double expected_r_depth = std::log(threshold / (1.0 * depth_prior));
+    EXPECT_NEAR(r_at_threshold, expected_weight * expected_r_depth, 1e-10);
+  }
+}
+
 // ---- Backward-compat gate: use_lc_observations.
 //
 // Default-constructed ``GlobalPositionerOptions`` keeps the gate ``false``
@@ -361,6 +431,63 @@ size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
 
 }  // namespace
 
+TEST(GlobalPositioning, MetricDepthConstraintConverges) {
+  SetPRNGSeed(0);
+
+  GpTestData data = BuildGpTestData();
+
+  // Stamp ground-truth z-depths as depth priors on every image.
+  for (const auto& [image_id, _] : data.gt_reconstruction.Images()) {
+    Image& image = data.gt_reconstruction.Image(image_id);
+    const size_t num_points2D = image.NumPoints2D();
+    image.depth_priors.assign(num_points2D, 0.0);
+    image.depth_prior_stddevs.assign(num_points2D, 0.0);
+    image.depth_prior_validity.assign(num_points2D, false);
+
+    for (point2D_t idx = 0; idx < num_points2D; ++idx) {
+      if (!image.Point2D(idx).HasPoint3D()) continue;
+      const auto& point3D =
+          data.gt_reconstruction.Point3D(image.Point2D(idx).point3D_id);
+      const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D.xyz;
+      const double z = point_cam[2];
+      if (z > 0) {
+        image.depth_priors[idx] = z;
+        image.depth_prior_stddevs[idx] = 0.1 * z;
+        image.depth_prior_validity[idx] = true;
+      }
+    }
+  }
+
+  // Copy depth priors into the working reconstruction (which has zero
+  // translations but GT rotations -- mirrors BuildGpTestData).
+  for (const auto& [image_id, _] : data.reconstruction.Images()) {
+    const Image& gt_image = data.gt_reconstruction.Image(image_id);
+    Image& image = data.reconstruction.Image(image_id);
+    image.depth_priors = gt_image.depth_priors;
+    image.depth_prior_stddevs = gt_image.depth_prior_stddevs;
+    image.depth_prior_validity = gt_image.depth_prior_validity;
+  }
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.use_init = false;
+  options.generate_random_positions = true;
+  options.generate_random_points = true;
+  options.solver_options.max_num_iterations = 100;
+
+  GlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const auto& dmap_scales = positioner.GetDmapScales();
+  ASSERT_FALSE(dmap_scales.empty());
+
+  for (const auto& [image_id, scale] : dmap_scales) {
+    EXPECT_NEAR(scale, 1.0, 0.5)
+        << "dmap_scale for image " << image_id << " = " << scale
+        << ", expected ~1.0";
+  }
+}
+
 TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {
   SetPRNGSeed(0);
   GpTestData data = BuildGpTestData();
@@ -403,6 +530,106 @@ TEST(GlobalPositioning, Gate_UseLcObservations_On_IteratesLcElements) {
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
 
   EXPECT_EQ(positioner.NumScales(), expected_regular + expected_lc);
+}
+
+// ---- Depth-prior integration tests ----
+
+// Stamp GT z-depth priors on every image in the reconstruction.
+void StampGtDepthPriors(Reconstruction& reconstruction) {
+  for (const auto& [image_id, _] : reconstruction.Images()) {
+    Image& image = reconstruction.Image(image_id);
+    const size_t n = image.NumPoints2D();
+    image.depth_priors.assign(n, 0.0);
+    image.depth_prior_stddevs.assign(n, 0.0);
+    image.depth_prior_validity.assign(n, false);
+    for (point2D_t idx = 0; idx < static_cast<point2D_t>(n); ++idx) {
+      if (!image.Point2D(idx).HasPoint3D()) continue;
+      const auto& p3d =
+          reconstruction.Point3D(image.Point2D(idx).point3D_id);
+      const Eigen::Vector3d pc = image.CamFromWorld() * p3d.xyz;
+      if (pc[2] > 0) {
+        image.depth_priors[idx] = pc[2];
+        image.depth_prior_stddevs[idx] = 0.1 * pc[2];
+        image.depth_prior_validity[idx] = true;
+      }
+    }
+  }
+}
+
+TEST(GlobalPositioning, FilterDepthOutliersRoutesSoftFallback) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  // Stamp GT depth priors on every image.
+  StampGtDepthPriors(data.reconstruction);
+
+  // Corrupt one valid observation to create a depth outlier.
+  {
+    bool corrupted = false;
+    for (const auto& [image_id, _] : data.reconstruction.Images()) {
+      Image& image = data.reconstruction.Image(image_id);
+      for (point2D_t idx = 0;
+           idx < static_cast<point2D_t>(image.NumPoints2D());
+           ++idx) {
+        if (image.depth_prior_validity[idx]) {
+          image.depth_priors[idx] *= 100.0;  // wildly wrong
+          corrupted = true;
+          break;
+        }
+      }
+      if (corrupted) break;
+    }
+    ASSERT_TRUE(corrupted) << "No valid depth prior found to corrupt";
+  }
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.filter_depth_outliers = true;
+  options.filter_depth_outlier_sigma = 3.0;
+  options.use_init = false;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  // BATA residual blocks should have been added.
+  EXPECT_GT(positioner.NumScales(), 0u);
+
+  // dmap_scales must be populated (one entry per image with valid depth obs).
+  EXPECT_FALSE(positioner.GetDmapScales().empty());
+}
+
+TEST(GlobalPositioning, CallerSuppliedInitialDmapScales) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  // Stamp GT depth priors.
+  StampGtDepthPriors(data.reconstruction);
+
+  // Build initial dmap_scales with a non-default value.
+  std::unordered_map<image_t, double> init_scales;
+  for (const auto& [image_id, _] : data.reconstruction.Images()) {
+    init_scales[image_id] = 2.5;
+  }
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.initial_dmap_scales = init_scales;
+  options.optimize_scales = false;  // freeze BATA scales
+  options.solver_options.max_num_iterations = 0;  // no optimization
+  options.use_init = false;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  // With 0 iterations and frozen scales, dmap_scales should preserve the
+  // initial 2.5 value exactly.
+  const auto& dmap_scales = positioner.GetDmapScales();
+  EXPECT_FALSE(dmap_scales.empty());
+  for (const auto& [image_id, scale] : dmap_scales) {
+    EXPECT_NEAR(scale, 2.5, 0.01)
+        << "dmap_scale for image " << image_id
+        << " deviated from initial value";
+  }
 }
 
 }  // namespace

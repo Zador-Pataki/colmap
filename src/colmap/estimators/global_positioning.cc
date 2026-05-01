@@ -19,6 +19,49 @@ Eigen::Vector3d RandVector3d(double low, double high) {
                          RandomUniformReal(low, high));
 }
 
+// Per-observation depth outlier check. Returns true when the log-space
+// residual |log(z_est / scaled_prior)| exceeds sigma * sigma_log.
+inline bool DepthOutlierFlag(
+    const Image& image,
+    point2D_t feature_id,
+    const Eigen::Vector3d& point3D_xyz,
+    bool use_log_scale,
+    const std::map<image_t, double>& dmap_scales,
+    image_t image_id,
+    double sigma) {
+  if (feature_id >= image.depth_prior_validity.size() ||
+      !image.depth_prior_validity[feature_id]) {
+    return false;
+  }
+  if (feature_id >= image.depth_priors.size() ||
+      feature_id >= image.depth_prior_stddevs.size()) {
+    return false;
+  }
+  const double depth_prior_raw = image.depth_priors[feature_id];
+  const double stddev_rel = image.depth_prior_stddevs[feature_id];
+  if (depth_prior_raw <= 1e-6 || stddev_rel <= 1e-9) return false;
+
+  // Apply per-image dmap_scale if available (else use raw prior).
+  double depth_prior = depth_prior_raw;
+  auto scale_it = dmap_scales.find(image_id);
+  if (scale_it != dmap_scales.end()) {
+    const double dmap_scale =
+        use_log_scale ? std::exp(scale_it->second) : scale_it->second;
+    depth_prior = dmap_scale * depth_prior_raw;
+  }
+
+  // z_est = (cam_from_world * X_world)[2]
+  const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D_xyz;
+  const double z_est = point_cam[2];
+  if (z_est <= 1e-6) return false;
+
+  const double log_z_est = std::log(std::max(z_est, 1e-6));
+  const double log_depth_prior = std::log(std::max(depth_prior, 1e-6));
+  const double log_diff = std::abs(log_z_est - log_depth_prior);
+  const double threshold = sigma * std::log(1.0 + std::max(stddev_rel, 1e-6));
+  return log_diff >= threshold;
+}
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -417,96 +460,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                &scale);
 
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
-    if (options_.use_metric_depth_constraint &&
-        observation.point2D_idx < image.depth_prior_validity.size() &&
-        image.depth_prior_validity[observation.point2D_idx]) {
-      const double depth_prior = image.depth_priors[observation.point2D_idx];
-      const double depth_sigma =
-          image.depth_prior_stddevs[observation.point2D_idx];
-
-      if (depth_prior > 0.0 && depth_sigma > 1e-9) {
-        // Lazy-insert dmap_scales_ on first valid observation per image.
-        if (dmap_scales_.find(observation.image_id) ==
-            dmap_scales_.end()) {
-          double init_value =
-              options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
-          if (options_.initial_dmap_scales.has_value()) {
-            const auto& init_map = *options_.initial_dmap_scales;
-            auto it = init_map.find(observation.image_id);
-            if (it != init_map.end()) {
-              // Convert caller-supplied linear value to log if needed.
-              init_value = options_.use_log_scale_for_depth_map_scales
-                               ? std::log(std::max(it->second, 1e-9))
-                               : it->second;
-            }
-          }
-          dmap_scales_[observation.image_id] = init_value;
-          dmap_scale_observation_counts_[observation.image_id] = 0;
-        }
-        dmap_scale_observation_counts_[observation.image_id]++;
-
-        ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
-            image.CamFromWorld().rotation(),
-            depth_prior,
-            depth_sigma,
-            options_.use_log_scale_for_depth_map_scales,
-            options_.use_log_residual_for_depth,
-            options_.zero_residual_behind,
-            options_.smooth_log_linear_transition,
-            options_.log_linear_threshold);
-
-        if (metric_depth_cost != nullptr) {
-          // 5-way depth-loss cascade:
-          //   pre-pass outlier  -> soft fallback (skip on LC)
-          //   is_lc             -> cached_loss_lc_depth_
-          //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
-          //   is_inlier         -> cached_loss_normal_depth_inlier_
-          //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
-          //   else              -> cached_loss_normal_depth_
-          ceres::LossFunction* depth_loss = nullptr;
-          const std::pair<image_t, point2D_t> obs_key{observation.image_id,
-                                                      observation.point2D_idx};
-          if (depth_outliers_.count(obs_key) > 0) {
-            if (is_lc_observation) {
-              // LC outlier: skip depth residual entirely.
-              delete metric_depth_cost;
-              metric_depth_cost = nullptr;
-            } else {
-              // Non-LC outlier: soft fallback (HuberLoss(1)).
-              if (!soft_outlier_fallback_loss_) {
-                soft_outlier_fallback_loss_ =
-                    std::make_shared<ceres::ScaledLoss>(
-                        new ceres::HuberLoss(1.0),
-                        1.0,
-                        ceres::TAKE_OWNERSHIP);
-              }
-              depth_loss = soft_outlier_fallback_loss_.get();
-            }
-          } else if (is_lc_observation) {
-            depth_loss = cached_loss_lc_depth_.get();
-          } else if (observation.point2D_idx < image.is_track_anchor.size() &&
-                     image.is_track_anchor[observation.point2D_idx]) {
-            depth_loss = cached_loss_normal_depth_trackstart_.get();
-          } else if (observation.point2D_idx < image.is_inlier.size() &&
-                     image.is_inlier[observation.point2D_idx]) {
-            depth_loss = cached_loss_normal_depth_inlier_.get();
-          } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
-                     image.is_depth_outlier[observation.point2D_idx]) {
-            depth_loss = cached_loss_normal_depth_outlier_.get();
-          } else {
-            depth_loss = cached_loss_normal_depth_.get();
-          }
-
-          if (metric_depth_cost != nullptr) {
-            problem_->AddResidualBlock(
-                metric_depth_cost,
-                depth_loss,
-                frame_centers_[image.FrameId()].data(),
-                point3D.xyz.data(),
-                &dmap_scales_[observation.image_id]);
-          }
-        }
-      }
+    if (options_.use_metric_depth_constraint) {
+      AddMetricDepthResidual(
+          point3D_id, observation, is_lc_observation, reconstruction);
     }
   } else {
     // If the image is part of a camera rig, use the RigBATA error.
@@ -553,6 +509,113 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   }
 
   problem_->SetParameterLowerBound(&scale, 0, 1e-5);
+}
+
+void GlobalPositioner::AddMetricDepthResidual(
+    point3D_t point3D_id,
+    const TrackElement& observation,
+    bool is_lc_observation,
+    Reconstruction& reconstruction) {
+  if (!reconstruction.ExistsImage(observation.image_id)) return;
+  const Image& image = reconstruction.Image(observation.image_id);
+
+  if (observation.point2D_idx >= image.depth_prior_validity.size() ||
+      !image.depth_prior_validity[observation.point2D_idx]) {
+    return;
+  }
+
+  const double depth_prior = image.depth_priors[observation.point2D_idx];
+  const double depth_sigma =
+      image.depth_prior_stddevs[observation.point2D_idx];
+
+  if (depth_prior <= 0.0 || depth_sigma <= 1e-9) return;
+
+  // Lazy-insert dmap_scales_ on first valid observation per image.
+  if (dmap_scales_.find(observation.image_id) == dmap_scales_.end()) {
+    double init_value =
+        options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+    if (options_.initial_dmap_scales.has_value()) {
+      const auto& init_map = *options_.initial_dmap_scales;
+      auto it = init_map.find(observation.image_id);
+      if (it != init_map.end()) {
+        // Convert caller-supplied linear value to log if needed.
+        init_value = options_.use_log_scale_for_depth_map_scales
+                         ? std::log(std::max(it->second, 1e-9))
+                         : it->second;
+      }
+    }
+    dmap_scales_[observation.image_id] = init_value;
+    dmap_scale_observation_counts_[observation.image_id] = 0;
+  }
+  dmap_scale_observation_counts_[observation.image_id]++;
+
+  ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
+      image.CamFromWorld().rotation(),
+      depth_prior,
+      depth_sigma,
+      options_.use_log_scale_for_depth_map_scales,
+      options_.use_log_residual_for_depth,
+      options_.zero_residual_behind,
+      options_.smooth_log_linear_transition,
+      options_.log_linear_threshold);
+
+  if (metric_depth_cost == nullptr) return;
+
+  // Outlier dual routing:
+  //   depth_outliers_ = runtime geometry-driven filter
+  //     (Nσ log-residual, N = filter_depth_outlier_sigma),
+  //     populated by FilterDepthOutliers between BA iterations.
+  //   image.is_depth_outlier = external annotation
+  //     (MDRP/boundary heuristic), populated by Python pipeline
+  //     pre-solve.
+  //   depth_outliers_ is checked first and is strictly more
+  //   aggressive: LC observations skip the depth residual
+  //   entirely, non-LC get a soft fallback loss.
+  //
+  // 5-way depth-loss cascade:
+  //   pre-pass outlier  -> soft fallback (skip on LC)
+  //   is_lc             -> cached_loss_lc_depth_
+  //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
+  //   is_inlier         -> cached_loss_normal_depth_inlier_
+  //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
+  //   else              -> cached_loss_normal_depth_
+  ceres::LossFunction* depth_loss = nullptr;
+  const std::pair<image_t, point2D_t> obs_key{observation.image_id,
+                                              observation.point2D_idx};
+  if (depth_outliers_.count(obs_key) > 0) {
+    if (is_lc_observation) {
+      // LC outlier: skip depth residual entirely.
+      delete metric_depth_cost;
+      return;
+    }
+    // Non-LC outlier: soft fallback (HuberLoss(1)).
+    if (!soft_outlier_fallback_loss_) {
+      soft_outlier_fallback_loss_ =
+          options_.loss_soft_outlier_fallback.CreateLossFunction();
+    }
+    depth_loss = soft_outlier_fallback_loss_.get();
+  } else if (is_lc_observation) {
+    depth_loss = cached_loss_lc_depth_.get();
+  } else if (observation.point2D_idx < image.is_track_anchor.size() &&
+             image.is_track_anchor[observation.point2D_idx]) {
+    depth_loss = cached_loss_normal_depth_trackstart_.get();
+  } else if (observation.point2D_idx < image.is_inlier.size() &&
+             image.is_inlier[observation.point2D_idx]) {
+    depth_loss = cached_loss_normal_depth_inlier_.get();
+  } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
+             image.is_depth_outlier[observation.point2D_idx]) {
+    depth_loss = cached_loss_normal_depth_outlier_.get();
+  } else {
+    depth_loss = cached_loss_normal_depth_.get();
+  }
+
+  Point3D& point3D = reconstruction.Point3D(point3D_id);
+  problem_->AddResidualBlock(
+      metric_depth_cost,
+      depth_loss,
+      frame_centers_[image.FrameId()].data(),
+      point3D.xyz.data(),
+      &dmap_scales_[observation.image_id]);
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -748,55 +811,6 @@ void GlobalPositioner::ConvertBackResults(Reconstruction& reconstruction) {
   }
 }
 
-// Flag observations where |log(z_est/scaled_prior)| >= 3*sigma_log.
-// Uses world poses (not frame_centers_). Flagged observations route to
-// soft fallback (non-LC) or skip (LC) in the depth-loss cascade.
-namespace {
-
-// Helper: per-observation outlier check. Returns true to insert into
-// depth_outliers_.
-inline bool DepthOutlierFlag(
-    const Image& image,
-    point2D_t feature_id,
-    const Eigen::Vector3d& point3D_xyz,
-    bool use_log_scale,
-    const std::map<image_t, double>& dmap_scales,
-    image_t image_id) {
-  if (feature_id >= image.depth_prior_validity.size() ||
-      !image.depth_prior_validity[feature_id]) {
-    return false;
-  }
-  if (feature_id >= image.depth_priors.size() ||
-      feature_id >= image.depth_prior_stddevs.size()) {
-    return false;
-  }
-  const double depth_prior_raw = image.depth_priors[feature_id];
-  const double stddev_rel = image.depth_prior_stddevs[feature_id];
-  if (depth_prior_raw <= 1e-6 || stddev_rel <= 1e-9) return false;
-
-  // Apply per-image dmap_scale if available (else use raw prior).
-  double depth_prior = depth_prior_raw;
-  auto scale_it = dmap_scales.find(image_id);
-  if (scale_it != dmap_scales.end()) {
-    const double dmap_scale =
-        use_log_scale ? std::exp(scale_it->second) : scale_it->second;
-    depth_prior = dmap_scale * depth_prior_raw;
-  }
-
-  // z_est = (cam_from_world * X_world)[2]
-  const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D_xyz;
-  const double z_est = point_cam[2];
-  if (z_est <= 1e-6) return false;
-
-  const double log_z_est = std::log(std::max(z_est, 1e-6));
-  const double log_depth_prior = std::log(std::max(depth_prior, 1e-6));
-  const double log_diff = std::abs(log_z_est - log_depth_prior);
-  const double threshold = 3.0 * std::log(1.0 + std::max(stddev_rel, 1e-6));
-  return log_diff >= threshold;
-}
-
-}  // namespace
-
 void GlobalPositioner::FilterDepthOutliers(
     const Reconstruction& reconstruction) {
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
@@ -810,7 +824,8 @@ void GlobalPositioner::FilterDepthOutliers(
                            point3D.xyz,
                            options_.use_log_scale_for_depth_map_scales,
                            dmap_scales_,
-                           observation.image_id)) {
+                           observation.image_id,
+                           options_.filter_depth_outlier_sigma)) {
         depth_outliers_.insert(
             {observation.image_id, observation.point2D_idx});
       }
@@ -825,7 +840,8 @@ void GlobalPositioner::FilterDepthOutliers(
                              point3D.xyz,
                              options_.use_log_scale_for_depth_map_scales,
                              dmap_scales_,
-                             observation.image_id)) {
+                             observation.image_id,
+                             options_.filter_depth_outlier_sigma)) {
           depth_outliers_.insert(
               {observation.image_id, observation.point2D_idx});
         }

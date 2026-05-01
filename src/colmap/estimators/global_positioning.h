@@ -79,13 +79,17 @@ struct GlobalPositionerOptions {
   double log_linear_threshold = 1.0;
   double scale_prior_stddev = 1.0;
 
-  // Pre-Solve 3-sigma log-space depth-residual filter. Flagged
-  // observations route through a hardcoded soft fallback in the
-  // depth-loss cascade.
+  // Pre-Solve log-space depth-residual filter. Flagged observations
+  // route through a soft fallback in the depth-loss cascade.
   bool filter_depth_outliers = false;
+  // Number of sigma for the log-space depth-residual outlier threshold.
+  double filter_depth_outlier_sigma = 3.0;
 
   // Caller-supplied initial dmap_scales (linear space). nullopt = auto.
   std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
+
+  // Soft fallback loss for depth outliers flagged by FilterDepthOutliers.
+  LossConfig loss_soft_outlier_fallback = {LossFunctionType::HUBER, 1.0, 1.0};
 
   // Per-observation loss routing (only active when use_metric_depth_constraint).
   LossConfig loss_normal_geometry;
@@ -148,11 +152,17 @@ class GlobalPositioner {
                                Reconstruction& reconstruction,
                                bool is_lc_observation = false);
 
+  // Add a MetricDepthError residual for a single observation.
+  void AddMetricDepthResidual(point3D_t point3D_id,
+                              const TrackElement& observation,
+                              bool is_lc_observation,
+                              Reconstruction& reconstruction);
+
   // Seed dmap_scales_ from per-image median z_est / depth_prior.
   void InitializeDepthMapScalesFromObservations(
       const Reconstruction& reconstruction);
 
-  // Flag observations with depth residual exceeding 3 sigma.
+  // Flag observations with depth residual exceeding filter_depth_outlier_sigma.
   void FilterDepthOutliers(const Reconstruction& reconstruction);
 
   // Set the parameter groups
@@ -205,8 +215,8 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_trackstart_;
   std::shared_ptr<ceres::LossFunction> cached_loss_scale_prior_;
 
-  // ScaledLoss(HuberLoss(1), 1) used for non-LC depth outliers.
-  // Lazily allocated.
+  // Soft fallback loss for non-LC depth outliers. Lazily allocated from
+  // options_.loss_soft_outlier_fallback.
   std::shared_ptr<ceres::LossFunction> soft_outlier_fallback_loss_;
 
   // Per-image ScaledLoss wrappers created in the scale-prior loop.

@@ -31,6 +31,7 @@
 
 #include "colmap/estimators/cost_functions/utils.h"
 #include "colmap/geometry/rigid3.h"
+#include "colmap/util/logging.h"
 
 #include <ceres/ceres.h>
 
@@ -90,7 +91,10 @@ struct ScaledDepthErrorConstantPoseCostFunctor
 // Params: cam_from_world[7], point3D[3], shift_scale[2]
 struct LogScaledDepthErrorCostFunctor
     : public AutoDiffCostFunctor<LogScaledDepthErrorCostFunctor, 1, 7, 3, 2> {
-  explicit LogScaledDepthErrorCostFunctor(double depth) : depth_(depth) {}
+  explicit LogScaledDepthErrorCostFunctor(double depth) : depth_(depth) {
+    THROW_CHECK_GT(depth, 0.0)
+        << "LogScaledDepthErrorCostFunctor: depth must be > 0 (log undefined).";
+  }
 
   template <typename T>
   bool operator()(const T* const cam_from_world,

@@ -40,6 +40,8 @@ struct MetricDepthError {
       throw std::invalid_argument(
           "MetricDepthError: threshold must be > 0 when smooth_transition=true.");
     }
+    THROW_CHECK(!smooth_transition || use_log_residual)
+        << "smooth_transition requires use_log_residual=true.";
   }
 
   template <typename T>
@@ -114,6 +116,16 @@ struct MetricDepthError {
     if (sigma_depth <= 1e-9) {
       LOG(ERROR) << "Cannot create MetricDepthError: Standard deviation must "
                     "be positive.";
+      return nullptr;
+    }
+    if (smooth_transition && threshold <= 0.0) {
+      LOG(ERROR) << "Cannot create MetricDepthError: threshold must be > 0 "
+                    "when smooth_transition=true.";
+      return nullptr;
+    }
+    if (smooth_transition && !use_log_residual) {
+      LOG(ERROR) << "Cannot create MetricDepthError: smooth_transition "
+                    "requires use_log_residual=true.";
       return nullptr;
     }
     return new ceres::AutoDiffCostFunction<MetricDepthError, 1, 3, 3, 1>(
