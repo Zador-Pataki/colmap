@@ -33,9 +33,11 @@ TwoViewSetup MakeTwoView(const std::vector<Eigen::Vector3d>& cam1_points,
   TwoViewSetup setup;
   setup.cam2_from_cam1 = cam2_from_cam1;
 
-  Camera cam = Camera::CreateFromModelId(
-      setup.camera_id, CameraModelId::kSimplePinhole,
-      /*focal_length=*/1.0, /*width=*/100, /*height=*/100);
+  Camera cam = Camera::CreateFromModelId(setup.camera_id,
+                                         CameraModelId::kSimplePinhole,
+                                         /*focal_length=*/1.0,
+                                         /*width=*/100,
+                                         /*height=*/100);
   setup.reconstruction.AddCamera(std::move(cam));
 
   const rig_t rig_id = 1;
@@ -138,8 +140,12 @@ TEST(ImagePairInlierCount, AllInliersPassFourGates) {
 
 TEST(ImagePairInlierCount, EpipolarGateDrops) {
   std::vector<Eigen::Vector3d> pts = {
-      {0.0, 0.0, 5.0},  {0.0, 0.5, 5.0},  {0.0, -0.5, 5.0},
-      {-0.3, 0.4, 5.0},  {-0.4, -0.3, 5.0},  {0.2, 0.2, 5.0},
+      {0.0, 0.0, 5.0},
+      {0.0, 0.5, 5.0},
+      {0.0, -0.5, 5.0},
+      {-0.3, 0.4, 5.0},
+      {-0.4, -0.3, 5.0},
+      {0.2, 0.2, 5.0},
   };
   auto setup = MakeTwoView(pts, DefaultPose());
 
@@ -186,8 +192,7 @@ TEST(ImagePairInlierCount, EpipoleGateDrops) {
   InlierThresholdOptions options = DefaultOptions();
   options.min_angle_from_epipole = 30.0;
 
-  ImagePairsInlierCount(
-      setup.corr_graph, setup.reconstruction, options, true);
+  ImagePairsInlierCount(setup.corr_graph, setup.reconstruction, options, true);
   const auto& pair = GetPair(setup);
   EXPECT_EQ(pair.inliers.size(), 1u);
   EXPECT_EQ(pair.inliers.front(), 1);
