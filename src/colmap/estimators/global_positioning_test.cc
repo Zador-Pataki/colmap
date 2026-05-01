@@ -433,8 +433,9 @@ size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
   return total_lc;
 }
 
-// Keep exactly one point whose min-view eligibility depends on the LC gate:
-// one regular observation plus two LC observations.
+// Keep exactly one point with one regular observation plus two LC observations.
+// LC residuals may augment admitted points, but they must not satisfy the
+// min-view admission gate.
 void KeepSingleRegularPlusLcPoint(Reconstruction& reconstruction) {
   std::vector<point3D_t> point3D_ids;
   point3D_ids.reserve(reconstruction.NumPoints3D());
@@ -578,7 +579,8 @@ TEST(GlobalPositioning, MinViewGate_UseLcObservationsOff_IgnoresLcElements) {
   EXPECT_EQ(positioner.NumScales(), 0u);
 }
 
-TEST(GlobalPositioning, MinViewGate_UseLcObservationsOn_CountsLcElements) {
+TEST(GlobalPositioning,
+     MinViewGate_UseLcObservationsOn_RequiresRegularElements) {
   SetPRNGSeed(0);
   GpTestData data = BuildGpTestData();
   KeepSingleRegularPlusLcPoint(data.reconstruction);
@@ -591,8 +593,8 @@ TEST(GlobalPositioning, MinViewGate_UseLcObservationsOn_CountsLcElements) {
   TestableGlobalPositioner positioner(options);
   positioner.SetupOnlyForTest(empty_pose_graph, data.reconstruction);
 
-  EXPECT_EQ(positioner.NumFrameCenters(), 3u);
-  EXPECT_EQ(positioner.NumScales(), 3u);
+  EXPECT_EQ(positioner.NumFrameCenters(), 0u);
+  EXPECT_EQ(positioner.NumScales(), 0u);
 }
 
 // ---- Depth-prior integration tests ----

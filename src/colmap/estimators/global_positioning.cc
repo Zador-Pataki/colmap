@@ -79,9 +79,8 @@ inline bool DepthOutlierFlag(const Image& image,
   return log_diff >= threshold;
 }
 
-size_t NumObservationsForMinViewGate(const Track& track,
-                                     bool use_lc_observations) {
-  return track.Length() + (use_lc_observations ? track.lc_elements.size() : 0);
+size_t NumRegularObservationsForMinViewGate(const Track& track) {
+  return track.Length();
 }
 
 }  // namespace
@@ -197,8 +196,7 @@ void GlobalPositioner::InitializeRandomPositions(
   }
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (NumObservationsForMinViewGate(point3D.track,
-                                      options_.use_lc_observations) <
+    if (NumRegularObservationsForMinViewGate(point3D.track) <
         static_cast<size_t>(options_.min_num_view_per_track)) {
       continue;
     }
@@ -293,8 +291,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   }
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (NumObservationsForMinViewGate(point3D.track,
-                                      options_.use_lc_observations) <
+    if (NumRegularObservationsForMinViewGate(point3D.track) <
         static_cast<size_t>(options_.min_num_view_per_track)) {
       continue;
     }

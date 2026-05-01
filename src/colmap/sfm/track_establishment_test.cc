@@ -285,7 +285,7 @@ TEST(FindTracksForProblem, LengthFilter) {
   }
 }
 
-TEST(FindTracksForProblem, LengthFilterCountsRegisteredLCElements) {
+TEST(FindTracksForProblem, LengthFilterRequiresRegularElements) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 5));
   images.emplace(2, MakeImage(2, 5));
@@ -303,9 +303,7 @@ TEST(FindTracksForProblem, LengthFilterCountsRegisteredLCElements) {
                                         inputs.depth_prior_validity,
                                         tracks_full);
 
-  ASSERT_EQ(selected.size(), 1u);
-  EXPECT_EQ(selected.at(0).track.Length(), 1u);
-  EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
+  EXPECT_TRUE(selected.empty());
 }
 
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
@@ -402,11 +400,11 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 }
 
 // LC-only two-observation tracks have one regular element and one LC element.
-// The post-domain lower-bound check counts both, matching the pre-domain
-// length filter semantics.
+// LC observations may augment admitted tracks but must not satisfy the
+// post-domain regular-observation lower-bound check.
 //
 // Drives SubsampleTracks.
-TEST(FindTracksForProblem, LcElementsSatisfyPostDomainMinViews) {
+TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
   images.emplace(2, MakeImage(2, 3));
@@ -428,9 +426,7 @@ TEST(FindTracksForProblem, LcElementsSatisfyPostDomainMinViews) {
                                         inputs.depth_priors,
                                         inputs.depth_prior_validity,
                                         tracks_full);
-  ASSERT_EQ(selected.size(), 1u);
-  EXPECT_EQ(selected.at(0).track.Length(), 1u);
-  EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
+  EXPECT_TRUE(selected.empty());
 }
 
 // A one-regular + one-LC two-view candidate does not satisfy the post-domain
@@ -463,19 +459,22 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   EXPECT_TRUE(selected.empty());
 }
 
-// Invalid depth on the LC endpoint now matters because LC observations count
-// toward the two-view depth gate.
+// Invalid depth on an LC endpoint still matters once the regular track is
+// already admitted. The LC endpoint shares one of the two distinct images so
+// the 2-view depth gate checks it.
 TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
   std::unordered_map<image_t, Image> images;
-  images.emplace(1, MakeImage(1, 3));
+  Image img1 = MakeImage(1, 3);
+  img1.depth_prior_validity[1] = false;
+  img1.depth_priors[1] = 0.0;
+  images.emplace(1, std::move(img1));
   Image img2 = MakeImage(2, 3);
-  img2.depth_prior_validity[0] = false;
-  img2.depth_priors[0] = 0.0;
   images.emplace(2, std::move(img2));
 
   Point3D point3D;
   point3D.track.AddElement(1, 0);
-  point3D.track.lc_elements.emplace_back(2, 0);
+  point3D.track.AddElement(2, 0);
+  point3D.track.lc_elements.emplace_back(1, 1);
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, std::move(point3D));

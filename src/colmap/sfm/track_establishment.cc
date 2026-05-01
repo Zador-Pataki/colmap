@@ -338,14 +338,14 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const std::unordered_map<image_t, std::vector<double>>& depth_priors,
     const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full) {
-  // Length filter: lower bound counts regular + LC observations; upper
-  // bound counts regular only. The asymmetry is intentional.
+  // Track admission is based on regular observations only. LC observations may
+  // augment an admitted track, but they must not make a one-view regular track
+  // eligible for global positioning.
   std::vector<std::pair<size_t, point3D_t>> track_lengths;
   size_t dropped_by_length = 0;
   for (const auto& [track_id, point3D] : tracks_full) {
-    const size_t total =
-        point3D.track.Length() + point3D.track.lc_elements.size();
-    if (total < static_cast<size_t>(options.min_num_views_per_track) ||
+    if (point3D.track.Length() <
+            static_cast<size_t>(options.min_num_views_per_track) ||
         point3D.track.Length() >
             static_cast<size_t>(options.max_num_views_per_track)) {
       ++dropped_by_length;
@@ -379,9 +379,7 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
       candidate.track.lc_elements.emplace_back(lc_el);
       distinct_image_ids.insert(lc_el.image_id);
     }
-    const size_t candidate_total_observations =
-        candidate.track.Length() + candidate.track.lc_elements.size();
-    if (candidate_total_observations <
+    if (candidate.track.Length() <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
     }
