@@ -417,20 +417,17 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                       : loss_function_ptcam_uncalibrated_.get();
 
   // Geometry-loss cascade. Per-observation route:
-  //   is_lc           -> cached_loss_lc_geometry_  (always, regardless of
-  //   depth) is_track_anchor -> cached_loss_normal_geometry_trackstart_  (depth
-  //   only) is_inlier       -> cached_loss_normal_geometry_inlier_      (depth
-  //   only) else            -> cached_loss_normal_geometry_              (depth
-  //   only)
+  //   is_lc                         -> cached_loss_lc_geometry_
+  //   TrackElement::is_track_anchor -> cached_loss_normal_geometry_trackstart_
+  //   TrackElement::is_inlier       -> cached_loss_normal_geometry_inlier_
+  //   else                          -> cached_loss_normal_geometry_
   if (is_lc_observation && cached_loss_lc_geometry_) {
     loss_function = cached_loss_lc_geometry_.get();
   } else if (options_.use_metric_depth_constraint) {
     ceres::LossFunction* cascade = nullptr;
-    if (observation.point2D_idx < image.is_track_anchor.size() &&
-        image.is_track_anchor[observation.point2D_idx]) {
+    if (observation.is_track_anchor) {
       cascade = cached_loss_normal_geometry_trackstart_.get();
-    } else if (observation.point2D_idx < image.is_inlier.size() &&
-               image.is_inlier[observation.point2D_idx]) {
+    } else if (observation.is_inlier) {
       cascade = cached_loss_normal_geometry_inlier_.get();
     } else {
       cascade = cached_loss_normal_geometry_.get();
@@ -576,7 +573,7 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   //   depth_outliers_ = runtime geometry-driven filter
   //     (Nσ log-residual, N = filter_depth_outlier_sigma),
   //     populated by FilterDepthOutliers between BA iterations.
-  //   image.is_depth_outlier = external annotation
+  //   TrackElement::is_depth_outlier = external annotation
   //     (MDRP/boundary heuristic), populated by Python pipeline
   //     pre-solve.
   //   depth_outliers_ is checked first and is strictly more
@@ -586,9 +583,9 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   // 5-way depth-loss cascade:
   //   pre-pass outlier  -> soft fallback (skip on LC)
   //   is_lc             -> cached_loss_lc_depth_
-  //   is_track_anchor   -> cached_loss_normal_depth_trackstart_
-  //   is_inlier         -> cached_loss_normal_depth_inlier_
-  //   is_depth_outlier  -> cached_loss_normal_depth_outlier_
+  //   TrackElement::is_track_anchor  -> cached_loss_normal_depth_trackstart_
+  //   TrackElement::is_inlier        -> cached_loss_normal_depth_inlier_
+  //   TrackElement::is_depth_outlier -> cached_loss_normal_depth_outlier_
   //   else              -> cached_loss_normal_depth_
   ceres::LossFunction* depth_loss = nullptr;
   const std::pair<image_t, point2D_t> obs_key{observation.image_id,
@@ -607,14 +604,11 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
     depth_loss = soft_outlier_fallback_loss_.get();
   } else if (is_lc_observation) {
     depth_loss = cached_loss_lc_depth_.get();
-  } else if (observation.point2D_idx < image.is_track_anchor.size() &&
-             image.is_track_anchor[observation.point2D_idx]) {
+  } else if (observation.is_track_anchor) {
     depth_loss = cached_loss_normal_depth_trackstart_.get();
-  } else if (observation.point2D_idx < image.is_inlier.size() &&
-             image.is_inlier[observation.point2D_idx]) {
+  } else if (observation.is_inlier) {
     depth_loss = cached_loss_normal_depth_inlier_.get();
-  } else if (observation.point2D_idx < image.is_depth_outlier.size() &&
-             image.is_depth_outlier[observation.point2D_idx]) {
+  } else if (observation.is_depth_outlier) {
     depth_loss = cached_loss_normal_depth_outlier_.get();
   } else {
     depth_loss = cached_loss_normal_depth_.get();
