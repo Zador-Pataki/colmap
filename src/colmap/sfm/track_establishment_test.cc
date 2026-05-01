@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -179,14 +180,24 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 }
 
 // ============================================================================
-// FindTracksForProblem (greedy subsample + 2-view depth gate)
+// FindTracksForProblem (problem-track filter + 2-view depth gate)
 // ============================================================================
 
-// Build an Image with N features.
-Image MakeImage(image_t image_id, int num_features) {
+// Build an Image with N features and (optionally) all-valid depth
+// priors. Each prior is set to (idx + 1) so they are strictly > 1e-6.
+Image MakeImage(image_t image_id,
+                int num_features,
+                bool with_valid_depths = true) {
   Image image;
   image.SetImageId(image_id);
   image.features.assign(num_features, Eigen::Vector2d::Zero());
+  if (with_valid_depths) {
+    image.depth_priors.assign(num_features, 1.0);
+    image.depth_prior_validity.assign(num_features, true);
+  } else {
+    image.depth_priors.assign(num_features, 0.0);
+    image.depth_prior_validity.assign(num_features, false);
+  }
   return image;
 }
 
@@ -201,19 +212,39 @@ Point3D MakePoint3DFromElements(
   return p;
 }
 
-// Collect image ids from a filtered-image test fixture.
-std::unordered_set<image_t> MakeImageIds(
-    const std::unordered_map<image_t, Image>& images) {
-  std::unordered_set<image_t> ids;
-  for (const auto& [image_id, image] : images) {
-    ids.insert(image_id);
+Point3D MakePoint3DFromElementsAndLC(
+    const std::vector<std::pair<image_t, point2D_t>>& elements,
+    const std::vector<std::pair<image_t, point2D_t>>& lc_elements) {
+  Point3D p = MakePoint3DFromElements(elements);
+  for (const auto& [image_id, point2D_idx] : lc_elements) {
+    p.track.lc_elements.emplace_back(image_id, point2D_idx);
   }
-  return ids;
+  return p;
+}
+
+// Project an ``images`` test fixture into the three dict inputs consumed by
+// FilterTracksForProblem: registered_image_ids, depth_priors, and
+// depth_prior_validity.
+struct ProblemFilterInputs {
+  std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
+};
+
+ProblemFilterInputs MakeProblemFilterInputs(
+    const std::unordered_map<image_t, Image>& images) {
+  ProblemFilterInputs inputs;
+  for (const auto& [image_id, image] : images) {
+    inputs.registered_image_ids.insert(image_id);
+    inputs.depth_priors.emplace(image_id, image.depth_priors);
+    inputs.depth_prior_validity.emplace(image_id, image.depth_prior_validity);
+  }
+  return inputs;
 }
 
 // LengthFilter: with ``min_num_views_per_track=10`` every track here is too
-// short, so FilterTracksForProblem returns empty. Loosening to 2 surfaces every
-// input track.
+// short, so FilterTracksForProblem returns empty. Loosening to 2 surfaces
+// every input track.
 //
 // Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, LengthFilter) {
@@ -227,13 +258,17 @@ TEST(FindTracksForProblem, LengthFilter) {
     tracks_full.emplace(f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto reg_ids = MakeImageIds(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
   // High-min variant: tracks have length 3, demand 10.
   {
     TrackProblemFilterOptions options;
     options.min_num_views_per_track = 10;
-    const auto selected = FilterTracksForProblem(options, reg_ids, tracks_full);
+    const auto selected = FilterTracksForProblem(options,
+                                                 inputs.registered_image_ids,
+                                                 inputs.depth_priors,
+                                                 inputs.depth_prior_validity,
+                                                 tracks_full);
     EXPECT_EQ(selected.size(), 0u);
     EXPECT_TRUE(selected.empty());
   }
@@ -242,28 +277,32 @@ TEST(FindTracksForProblem, LengthFilter) {
   {
     TrackProblemFilterOptions options;
     options.min_num_views_per_track = 2;
-    const auto selected = FilterTracksForProblem(options, reg_ids, tracks_full);
+    const auto selected = FilterTracksForProblem(options,
+                                                 inputs.registered_image_ids,
+                                                 inputs.depth_priors,
+                                                 inputs.depth_prior_validity,
+                                                 tracks_full);
     EXPECT_EQ(selected.size(), 5u);
   }
 }
 
-TEST(FindTracksForProblem, LcOnlyTrackDoesNotSatisfyMinViews) {
+TEST(FindTracksForProblem, LengthFilterRequiresRegularElements) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 5));
   images.emplace(2, MakeImage(2, 5));
 
-  Point3D point3D;
-  point3D.track.AddElement(1, 0);
-  point3D.track.lc_elements.emplace_back(2, 0);
-
   std::unordered_map<point3D_t, Point3D> tracks_full;
-  tracks_full.emplace(0, std::move(point3D));
+  tracks_full.emplace(0, MakePoint3DFromElementsAndLC({{1, 0}}, {{2, 0}}));
 
-  const auto reg_ids = MakeImageIds(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
   TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
-  const auto selected = FilterTracksForProblem(options, reg_ids, tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
 
   EXPECT_TRUE(selected.empty());
 }
@@ -283,13 +322,174 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
         f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}, {4, f}, {5, f}}));
   }
 
-  const auto reg_ids = MakeImageIds(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
   TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.max_num_views_per_track = 4;
-  const auto selected = FilterTracksForProblem(options, reg_ids, tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_EQ(selected.size(), 0u);
+  EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
+// valid depth prior is dropped by the 2-view depth gate.
+//
+// Drives FilterTracksForProblem.
+TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
+  std::unordered_map<image_t, Image> images;
+  // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
+  Image img1 = MakeImage(1, 3);
+  img1.depth_prior_validity[0] = false;
+  img1.depth_priors[0] = 0.0;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeImage(2, 3));  // all valid
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+
+  const auto inputs = MakeProblemFilterInputs(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  options.two_view_depth_gate = true;
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
+  EXPECT_EQ(selected.size(), 0u);
+  EXPECT_TRUE(selected.empty());
+}
+
+// TwoViewDepthGate_Keep: both endpoints have valid depth -> track kept.
+// Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
+// uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
+//
+// Drives FilterTracksForProblem.
+TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeImage(1, 3);
+  // Feature 0: valid, prior=1.0  -> survives
+  // Feature 1: valid flag true, prior=1e-6 -> caught by ``<= 1e-6`` -> drops
+  img1.depth_priors[1] = 1e-6;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeImage(2, 3));
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
+  tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
+
+  const auto inputs = MakeProblemFilterInputs(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  options.two_view_depth_gate = true;
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
+  EXPECT_EQ(selected.size(), 1u);
+  ASSERT_EQ(selected.count(0), 1u);
+  EXPECT_EQ(selected.count(1), 0u);
+}
+
+// LC-only two-observation tracks have one regular element and one LC element.
+// LC observations may augment admitted tracks but must not satisfy the
+// post-domain regular-observation lower-bound check.
+//
+// Drives FilterTracksForProblem.
+TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
+  std::unordered_map<image_t, Image> images;
+  images.emplace(1, MakeImage(1, 3));
+  images.emplace(2, MakeImage(2, 3));
+
+  Point3D lc_only;
+  lc_only.track.AddElement(1, 0);
+  lc_only.track.lc_elements.emplace_back(2, 0);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(lc_only));
+
+  const auto inputs = MakeProblemFilterInputs(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  options.two_view_depth_gate = true;
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
+  EXPECT_TRUE(selected.empty());
+}
+
+// A one-regular + one-LC two-view candidate does not satisfy the post-domain
+// regular-observation lower-bound check.
+TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeImage(1, 3);
+  img1.depth_prior_validity[0] = false;
+  img1.depth_priors[0] = 0.0;
+  images.emplace(1, std::move(img1));
+  images.emplace(2, MakeImage(2, 3));
+
+  Point3D point3D;
+  point3D.track.AddElement(1, 0);
+  point3D.track.lc_elements.emplace_back(2, 0);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(point3D));
+
+  const auto inputs = MakeProblemFilterInputs(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  options.two_view_depth_gate = true;
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
+  EXPECT_TRUE(selected.empty());
+}
+
+// Invalid depth on an LC endpoint still matters once the regular track is
+// already admitted. The LC endpoint shares one of the two distinct images so
+// the 2-view depth gate checks it.
+TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
+  std::unordered_map<image_t, Image> images;
+  Image img1 = MakeImage(1, 3);
+  img1.depth_prior_validity[1] = false;
+  img1.depth_priors[1] = 0.0;
+  images.emplace(1, std::move(img1));
+  Image img2 = MakeImage(2, 3);
+  images.emplace(2, std::move(img2));
+
+  Point3D point3D;
+  point3D.track.AddElement(1, 0);
+  point3D.track.AddElement(2, 0);
+  point3D.track.lc_elements.emplace_back(1, 1);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(point3D));
+
+  const auto inputs = MakeProblemFilterInputs(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  options.two_view_depth_gate = true;
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_TRUE(selected.empty());
 }
 
@@ -302,10 +502,11 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
 // ``ImagePair.are_lc`` to attach LC observations as ``Track::lc_elements``.
 // The post-condition tracks dict is what we assert on.
 
-// Variant of ``AddImagePair`` that also populates ``are_lc``. Each
-// ``lc_match_indices`` entry is a row index into ``matches`` (NOT an index
-// into ``inliers``); matching the indexing convention used inside
-// ``AppendLoopClosureObservations``.
+// Variant of ``AddImagePair`` for LC tests. Adds non-LC inlier matches via
+// AddTwoViewGeometry (so ExtractMatchesBetweenImages finds them), then sets
+// the ImagePair's matches/inliers/are_lc fields for
+// AppendLoopClosureObservations. ``lc_match_indices`` are row indices into
+// ``matches`` flagged as LC.
 void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
                         image_t image_id1,
                         image_t image_id2,
@@ -319,6 +520,8 @@ void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
   // created.
   const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
   auto& image_pair = corr_graph.MutableImagePairs().at(pair_id);
+  image_pair.image_id1 = image_id1;
+  image_pair.image_id2 = image_id2;
   Eigen::MatrixXi matches_mat(static_cast<int>(matches.size()), 2);
   for (size_t i = 0; i < matches.size(); ++i) {
     matches_mat(static_cast<int>(i), 0) = matches[i].first;
@@ -667,6 +870,60 @@ TEST(ProcessLoopClosurePairs, BothSameTrack) {
   // No new tracks minted, no lc_elements added (same-track skip).
   EXPECT_EQ(tracks.size(), 1u);
   EXPECT_EQ(tracks.at(0).track.lc_elements.size(), 0u);
+}
+
+TEST(ProcessLoopClosurePairs, PredicateThrowsOnMalformedLcLength) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {0});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  corr_graph.MutableImagePairs().at(pair_id).are_lc.clear();
+
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(MakeLoopClosureMatchPredicate(pair_ids, corr_graph),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, AppendThrowsOnMalformedLcLength) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {0});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  corr_graph.MutableImagePairs().at(pair_id).are_lc.clear();
+
+  std::unordered_map<point3D_t, Point3D> tracks;
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(AppendLoopClosureObservations(pair_ids, corr_graph, tracks),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, PredicateThrowsOnOutOfRangeInlierIndex) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {1});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(MakeLoopClosureMatchPredicate(pair_ids, corr_graph),
+               std::invalid_argument);
+}
+
+TEST(ProcessLoopClosurePairs, AppendThrowsOnOutOfRangeInlierIndex) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 0}}, {1});
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  std::unordered_map<point3D_t, Point3D> tracks;
+  const std::vector<image_pair_t> pair_ids = {pair_id};
+  EXPECT_THROW(AppendLoopClosureObservations(pair_ids, corr_graph, tracks),
+               std::invalid_argument);
 }
 
 }  // namespace

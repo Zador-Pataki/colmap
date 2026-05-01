@@ -44,6 +44,11 @@ struct TrackElement {
   image_t image_id;
   // The point in the image that the track element is observed.
   point2D_t point2D_idx;
+  // Per-observation global-positioning routing metadata. These flags describe
+  // this track observation, not the underlying image keypoint globally.
+  bool is_inlier = false;
+  bool is_depth_outlier = false;
+  bool is_track_anchor = false;
 
   inline bool operator==(const TrackElement& other) const;
   inline bool operator!=(const TrackElement& other) const;
@@ -101,6 +106,8 @@ std::ostream& operator<<(std::ostream& stream, const Track& track);
 ////////////////////////////////////////////////////////////////////////////////
 
 bool TrackElement::operator==(const TrackElement& other) const {
+  // Observation identity only. GP-routing flags are mutable annotations and
+  // intentionally excluded from track equality.
   return image_id == other.image_id && point2D_idx == other.point2D_idx;
 }
 

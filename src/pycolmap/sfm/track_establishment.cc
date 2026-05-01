@@ -49,6 +49,10 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     images.emplace(py::cast<image_t>(item.first), py::cast<Image>(item.second));
   }
 
+  // Build keypoints map from ``Image::features``. The Reconstruction-based
+  // helper reads ``image.Points2D()`` instead; this dict-based entry point
+  // operates without a Reconstruction so it consumes the per-image
+  // ``features`` vector directly.
   std::unordered_map<image_t, std::vector<Eigen::Vector2d>>
       image_id_to_keypoints;
   image_id_to_keypoints.reserve(images.size());
@@ -65,6 +69,8 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     TrackEstablishmentOptions to = options;
     MatchPredicate ignore_match;
     if (lc_second_pass) {
+      // When the LC pass is enabled, the caller owns subsampling, so the
+      // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
       CorrespondenceGraph& lc_cg = lc_correspondence_graph
                                        ? *lc_correspondence_graph
@@ -78,6 +84,8 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                                           to,
                                           ignore_match);
     if (lc_second_pass) {
+      // LC observations come from the separate LC correspondence graph which
+      // retains the matches/inliers/are_lc ImagePair fields.
       CorrespondenceGraph& lc_cg = lc_correspondence_graph
                                        ? *lc_correspondence_graph
                                        : correspondence_graph;
@@ -97,8 +105,16 @@ py::dict RunFindTracksForProblem(py::dict images_py,
                                  py::dict tracks_full_py,
                                  const TrackProblemFilterOptions& options) {
   std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
   for (auto item : images_py) {
-    registered_image_ids.insert(py::cast<image_t>(item.first));
+    const auto image_id = py::cast<image_t>(item.first);
+    const auto image = py::cast<Image>(item.second);
+    registered_image_ids.insert(image_id);
+    if (options.two_view_depth_gate) {
+      depth_priors.emplace(image_id, image.depth_priors);
+      depth_prior_validity.emplace(image_id, image.depth_prior_validity);
+    }
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
@@ -111,8 +127,11 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   std::unordered_map<point3D_t, Point3D> selected;
   {
     py::gil_scoped_release release;
-    selected =
-        FilterTracksForProblem(options, registered_image_ids, tracks_full);
+    selected = FilterTracksForProblem(options,
+                                      registered_image_ids,
+                                      depth_priors,
+                                      depth_prior_validity,
+                                      tracks_full);
   }
 
   py::dict tracks_out;
@@ -143,7 +162,9 @@ void BindTrackEstablishment(py::module& m) {
           .def_readwrite("min_num_views_per_track",
                          &TrackProblemFilterOptions::min_num_views_per_track)
           .def_readwrite("max_num_views_per_track",
-                         &TrackProblemFilterOptions::max_num_views_per_track);
+                         &TrackProblemFilterOptions::max_num_views_per_track)
+          .def_readwrite("two_view_depth_gate",
+                         &TrackProblemFilterOptions::two_view_depth_gate);
   MakeDataclass(PySubOpts);
 
   m.def("establish_full_tracks",
@@ -154,17 +175,21 @@ void BindTrackEstablishment(py::module& m) {
         "lc_second_pass"_a = false,
         "lc_correspondence_graph"_a = nullptr,
         "Build tracks from a CorrespondenceGraph + dict-of-images via "
-        "the union-find helper. When ``lc_second_pass=True``, "
+        "the union-find helper. The ``correspondence_graph`` should "
+        "contain only inlier correspondences (populated via "
+        "``add_two_view_geometry``). When ``lc_second_pass=True``, "
         "AppendLoopClosureObservations runs after to populate "
         "``Track::lc_elements`` from inliers flagged "
         "``ImagePair::are_lc==true`` in ``lc_correspondence_graph`` "
-        "(falls back to ``correspondence_graph`` if not provided).");
+        "(falls back to ``correspondence_graph`` if not provided). "
+        "The helper-side greedy selection is bypassed in LC mode.");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,
         "images"_a,
         "tracks_full"_a,
         "options"_a,
-        "Filter ``tracks_full`` for the optimization problem. Reads "
+        "Filter ``tracks_full`` to tracks eligible for the GP problem. Reads "
+        "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
         "registered image ids from the keys of the filtered ``images`` dict.");
 }

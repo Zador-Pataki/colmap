@@ -35,6 +35,21 @@ void ValidateLoopClosureImagePairMetadata(
   }
 }
 
+bool HasValidDepthPrior(
+    const TrackElement& observation,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>&
+        depth_prior_validity) {
+  const auto valid_it = depth_prior_validity.find(observation.image_id);
+  const auto prior_it = depth_priors.find(observation.image_id);
+  return valid_it != depth_prior_validity.end() &&
+         prior_it != depth_priors.end() &&
+         observation.point2D_idx < valid_it->second.size() &&
+         valid_it->second[observation.point2D_idx] &&
+         observation.point2D_idx < prior_it->second.size() &&
+         prior_it->second[observation.point2D_idx] > 1e-6;
+}
+
 }  // namespace
 
 MatchPredicate MakeLoopClosureMatchPredicate(
@@ -320,6 +335,8 @@ void AppendLoopClosureObservations(
 std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
     const TrackProblemFilterOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full) {
   // Track admission is based on regular observations only. LC observations may
   // augment an admitted track, but they must not make a one-view regular track
@@ -350,18 +367,37 @@ std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
 
     // Restrict to selection domain + lc-elements that fall in the
     // selection domain.
+    std::unordered_set<image_t> distinct_image_ids;
     Point3D candidate;
     for (const auto& el : src.track.Elements()) {
       if (registered_image_id_set.count(el.image_id) == 0) continue;
       candidate.track.AddElement(el);
+      distinct_image_ids.insert(el.image_id);
     }
     for (const auto& lc_el : src.track.lc_elements) {
       if (registered_image_id_set.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
+      distinct_image_ids.insert(lc_el.image_id);
     }
     if (candidate.track.Length() <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
+    }
+    if (options.two_view_depth_gate && distinct_image_ids.size() == 2) {
+      bool depth_ok = true;
+      for (const auto& el : candidate.track.Elements()) {
+        if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
+          depth_ok = false;
+          break;
+        }
+      }
+      for (const auto& el : candidate.track.lc_elements) {
+        if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
+          depth_ok = false;
+          break;
+        }
+      }
+      if (!depth_ok) continue;
     }
 
     selected.emplace(track_id, candidate);

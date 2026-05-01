@@ -401,7 +401,6 @@ LcMstFixture BuildLcMstFixture() {
   auto& cg_pair = data.correspondence_graph.MutableImagePairs()[pair_12];
   cg_pair.image_id1 = 1;
   cg_pair.image_id2 = 2;
-  cg_pair.pair_id = pair_12;
   cg_pair.inliers.resize(100);
   std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
   // 80 of 100 inliers are LC -> dominated.
@@ -418,7 +417,6 @@ LcMstFixture BuildLcMstFixture() {
     auto& other = data.correspondence_graph.MutableImagePairs()[pair_id];
     other.image_id1 = a;
     other.image_id2 = b;
-    other.pair_id = pair_id;
     other.inliers.resize(10);
     std::iota(other.inliers.begin(), other.inliers.end(), 0);
     other.are_lc.assign(10, false);
@@ -445,12 +443,12 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_Off_KeepsLcDominantEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
-  const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      data.pose_graph,
-      data.image_ids,
-      parents,
-      /*prioritize_tracking=*/false,
-      &data.correspondence_graph);
+  const image_t root =
+      ComputeMaximumPoseGraphSpanningTree(data.pose_graph,
+                                          data.image_ids,
+                                          parents,
+                                          /*prioritize_tracking=*/false,
+                                          &data.correspondence_graph);
 
   // 3 nodes -> 3 entries in the parent map (one is the root self-loop).
   EXPECT_EQ(parents.size(), 3u);
@@ -469,12 +467,12 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_On_RoutesAroundLcEdge) {
   LcMstFixture data = BuildLcMstFixture();
 
   std::unordered_map<image_t, image_t> parents;
-  const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      data.pose_graph,
-      data.image_ids,
-      parents,
-      /*prioritize_tracking=*/true,
-      &data.correspondence_graph);
+  const image_t root =
+      ComputeMaximumPoseGraphSpanningTree(data.pose_graph,
+                                          data.image_ids,
+                                          parents,
+                                          /*prioritize_tracking=*/true,
+                                          &data.correspondence_graph);
 
   // With the LC penalty active, the 1-2 edge's effective weight is
   // 100 - kLCPenalty (=1e9), so the MST must pick the 1-3 + 2-3 path.
@@ -491,8 +489,7 @@ TEST(RotationAveraging, Gate_LcPenaltyMst_On_RoutesAroundLcEdge) {
   EXPECT_TRUE(root == 1 || root == 2 || root == 3);
 }
 
-TEST(RotationAveraging,
-     Gate_LcPenaltyMst_OnWithoutCgFallsBackToVanilla) {
+TEST(RotationAveraging, Gate_LcPenaltyMst_OnWithoutCgFallsBackToVanilla) {
   // With the gate ON but no correspondence graph, the helper should ignore
   // the LC penalty entirely (the second guard in the ``cg_map_ptr`` ternary).
   // Verifies that the gate alone — without a CG — does not silently change
@@ -640,7 +637,8 @@ TEST(RelativeRotationError, SymmetryUnderSwapAndInvert) {
     const Eigen::Vector3d aa1 = QuaternionToAngleAxisVec(q1);
     const Eigen::Vector3d aa2 = QuaternionToAngleAxisVec(q2);
     const Eigen::Vector3d rel_aa = QuaternionToAngleAxisVec(q_rel);
-    const Eigen::Vector3d rel_aa_inv = QuaternionToAngleAxisVec(q_rel.conjugate());
+    const Eigen::Vector3d rel_aa_inv =
+        QuaternionToAngleAxisVec(q_rel.conjugate());
 
     RelativeRotationError functor_orig(rel_aa);
     RelativeRotationError functor_swap(rel_aa_inv);
@@ -656,6 +654,141 @@ TEST(RelativeRotationError, SymmetryUnderSwapAndInvert) {
     EXPECT_LT((residual_orig + residual_swap).norm(), 1e-9)
         << "trial=" << trial;
   }
+}
+
+TEST(RotationAveraging, WithNoiseAndOutliersHalfNorm) {
+  SetPRNGSeed(1);
+
+  SyntheticDatasetOptions synthetic_dataset_options;
+  synthetic_dataset_options.num_rigs = 2;
+  synthetic_dataset_options.num_cameras_per_rig = 1;
+  synthetic_dataset_options.num_frames_per_rig = 7;
+  synthetic_dataset_options.num_points3D = 100;
+  synthetic_dataset_options.inlier_match_ratio = 0.6;
+  synthetic_dataset_options.prior_gravity = true;
+  synthetic_dataset_options.two_view_geometry_has_relative_pose = true;
+  SyntheticNoiseOptions synthetic_noise_options;
+  synthetic_noise_options.point2D_stddev = 1;
+  synthetic_noise_options.prior_gravity_stddev = 3e-1;
+  auto data =
+      CreateTestData(synthetic_dataset_options, &synthetic_noise_options);
+
+  RotationEstimatorOptions options = CreateRATestOptions(/*use_gravity=*/false);
+  options.weight_type = RotationEstimatorOptions::HALF_NORM;
+
+  Reconstruction reconstruction_copy = data.reconstruction;
+  PoseGraph pose_graph_copy = data.pose_graph;
+  EXPECT_TRUE(RunRotationAveraging(
+      options, pose_graph_copy, reconstruction_copy, data.pose_priors));
+
+  ExpectEqualRotations(data.gt_reconstruction,
+                       reconstruction_copy,
+                       /*max_rotation_error_deg=*/3);
+}
+
+// End-to-end test for use_video_constraints path (Ceres solver with
+// per-pair Huber/Cauchy loss). Uses the LcMstFixture infrastructure to
+// provide a CorrespondenceGraph with tracking + LC annotations.
+TEST(RotationAveraging, VideoConstraints) {
+  SetPRNGSeed(1);
+
+  SyntheticDatasetOptions synthetic_dataset_options;
+  synthetic_dataset_options.num_rigs = 1;
+  synthetic_dataset_options.num_cameras_per_rig = 1;
+  synthetic_dataset_options.num_frames_per_rig = 5;
+  synthetic_dataset_options.num_points3D = 50;
+  synthetic_dataset_options.sensor_from_rig_rotation_stddev = 20.;
+  synthetic_dataset_options.two_view_geometry_has_relative_pose = true;
+  auto data = CreateTestData(synthetic_dataset_options);
+
+  // Build a minimal CorrespondenceGraph with tracking annotations for all
+  // pairs so the Ceres solver can classify them.
+  CorrespondenceGraph correspondence_graph;
+  for (const auto& [image_id, image] : data.reconstruction.Images()) {
+    correspondence_graph.AddImage(image_id, /*num_points=*/0);
+  }
+  for (const auto& [pair_id, edge] : data.pose_graph.Edges()) {
+    auto& cg_pair = correspondence_graph.MutableImagePairs()[pair_id];
+    const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+    cg_pair.image_id1 = image_id1;
+    cg_pair.image_id2 = image_id2;
+    cg_pair.inliers.resize(edge.num_matches);
+    std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
+    cg_pair.are_lc.assign(edge.num_matches, false);  // all tracking
+  }
+
+  RotationEstimatorOptions options = CreateRATestOptions(/*use_gravity=*/false);
+  options.use_video_constraints = true;
+
+  Reconstruction reconstruction_copy = data.reconstruction;
+  PoseGraph pose_graph_copy = data.pose_graph;
+  EXPECT_TRUE(RunRotationAveraging(options,
+                                   pose_graph_copy,
+                                   reconstruction_copy,
+                                   data.pose_priors,
+                                   /*final_weights=*/nullptr,
+                                   &correspondence_graph));
+
+  ExpectEqualRotations(data.gt_reconstruction,
+                       reconstruction_copy,
+                       /*max_rotation_error_deg=*/1e-2);
+}
+
+// Verify skip_risky_lc_pairs excludes LC-dominated pairs without breaking
+// convergence on a clean synthetic dataset.
+TEST(RotationAveraging, SkipRiskyLcPairs) {
+  SetPRNGSeed(1);
+
+  SyntheticDatasetOptions synthetic_dataset_options;
+  synthetic_dataset_options.num_rigs = 1;
+  synthetic_dataset_options.num_cameras_per_rig = 1;
+  synthetic_dataset_options.num_frames_per_rig = 5;
+  synthetic_dataset_options.num_points3D = 50;
+  synthetic_dataset_options.sensor_from_rig_rotation_stddev = 20.;
+  synthetic_dataset_options.two_view_geometry_has_relative_pose = true;
+  auto data = CreateTestData(synthetic_dataset_options);
+
+  // Build a CorrespondenceGraph. Mark one pair as LC-dominated so
+  // skip_risky_lc_pairs will exclude it. The remaining tracking pairs must
+  // still form a connected graph for the solver to converge.
+  CorrespondenceGraph correspondence_graph;
+  for (const auto& [image_id, image] : data.reconstruction.Images()) {
+    correspondence_graph.AddImage(image_id, /*num_points=*/0);
+  }
+
+  bool first_pair = true;
+  for (const auto& [pair_id, edge] : data.pose_graph.Edges()) {
+    auto& cg_pair = correspondence_graph.MutableImagePairs()[pair_id];
+    const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+    cg_pair.image_id1 = image_id1;
+    cg_pair.image_id2 = image_id2;
+    cg_pair.inliers.resize(edge.num_matches);
+    std::iota(cg_pair.inliers.begin(), cg_pair.inliers.end(), 0);
+
+    if (first_pair) {
+      // LC-dominated: more than half the inliers are LC.
+      cg_pair.are_lc.assign(edge.num_matches, true);
+      first_pair = false;
+    } else {
+      cg_pair.are_lc.assign(edge.num_matches, false);  // tracking
+    }
+  }
+
+  RotationEstimatorOptions options = CreateRATestOptions(/*use_gravity=*/false);
+  options.skip_risky_lc_pairs = true;
+
+  Reconstruction reconstruction_copy = data.reconstruction;
+  PoseGraph pose_graph_copy = data.pose_graph;
+  EXPECT_TRUE(RunRotationAveraging(options,
+                                   pose_graph_copy,
+                                   reconstruction_copy,
+                                   data.pose_priors,
+                                   /*final_weights=*/nullptr,
+                                   &correspondence_graph));
+
+  ExpectEqualRotations(data.gt_reconstruction,
+                       reconstruction_copy,
+                       /*max_rotation_error_deg=*/1e-2);
 }
 
 }  // namespace

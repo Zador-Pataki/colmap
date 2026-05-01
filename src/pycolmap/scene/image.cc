@@ -26,6 +26,22 @@ namespace py = pybind11;
 namespace {
 
 template <typename PyClass>
+void DefDoubleVectorProperty(PyClass& cls,
+                             const char* name,
+                             std::vector<double> Image::*member) {
+  cls.def_property(
+      name,
+      [member](const Image& self) -> Eigen::VectorXd {
+        const auto& vec = self.*member;
+        return Eigen::Map<const Eigen::VectorXd>(vec.data(), vec.size());
+      },
+      [member](Image& self, const Eigen::VectorXd& v) {
+        auto& vec = self.*member;
+        vec.assign(v.data(), v.data() + v.size());
+      });
+}
+
+template <typename PyClass>
 void DefBoolVectorProperty(PyClass& cls,
                            const char* name,
                            std::vector<bool> Image::*member) {
@@ -99,7 +115,9 @@ void BindSceneImage(py::module& m) {
               return py::none();
             }
           },
-          &Image::SetCameraPtr,
+          py::cpp_function(
+              [](Image& self, Camera* camera) { self.SetCameraPtr(camera); },
+              py::keep_alive<1, 2>()),
           "The associated camera object.")
       .def_property(
           "frame",
@@ -110,16 +128,26 @@ void BindSceneImage(py::module& m) {
               return py::none();
             }
           },
-          &Image::SetFramePtr,
+          py::cpp_function(
+              [](Image& self, Frame* frame) { self.SetFramePtr(frame); },
+              py::keep_alive<1, 2>()),
           "The associated frame object.")
       .def_property("name",
                     py::overload_cast<>(&Image::Name),
                     &Image::SetName,
                     "Name of the image.")
-      .def("cam_from_world",
-           &Image::CamFromWorld,
-           "The pose of the image, defined as the transformation from world to "
-           "camera space. Read-only; supports non-trivial frame (rig).")
+      .def_property_readonly(
+          "cam_from_world",
+          [](const Image& self) -> py::object {
+            if (self.HasPose()) {
+              return py::cast(self.CamFromWorld());
+            } else {
+              return py::none();
+            }
+          },
+          "The pose of the image, defined as the transformation from world to "
+          "camera space. Read-only; supports non-trivial frame (rig). "
+          "Returns None if the image has no valid pose.")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
       .def_property(
@@ -234,9 +262,35 @@ void BindSceneImage(py::module& m) {
             return points2D;
           },
           "Get the 2D points that observe a 3D point.");
+  DefDoubleVectorProperty(PyImage, "depth_priors", &Image::depth_priors);
+  DefDoubleVectorProperty(
+      PyImage, "depth_prior_stddevs", &Image::depth_prior_stddevs);
+  DefBoolVectorProperty(
+      PyImage, "depth_prior_validity", &Image::depth_prior_validity);
   DefBoolVectorProperty(PyImage, "is_inlier", &Image::is_inlier);
+  DefBoolVectorProperty(PyImage, "is_depth_outlier", &Image::is_depth_outlier);
   DefBoolVectorProperty(PyImage, "is_track_anchor", &Image::is_track_anchor);
-  MakeDataclass(PyImage);
+  MakeDataclass(PyImage,
+                {"angular_stddevs",
+                 "camera",
+                 "camera_id",
+                 "data_id",
+                 "depth_prior_stddevs",
+                 "depth_prior_validity",
+                 "depth_priors",
+                 "features",
+                 "features_undist",
+                 "frame",
+                 "frame_id",
+                 "has_pose",
+                 "image_id",
+                 "is_depth_outlier",
+                 "is_inlier",
+                 "is_track_anchor",
+                 "name",
+                 "num_points3D",
+                 "pixel_cholesky_xy",
+                 "points2D"});
 
   py::bind_map<ImageMap>(m, "ImageMap");
 }

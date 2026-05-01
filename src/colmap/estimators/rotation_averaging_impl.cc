@@ -935,9 +935,7 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
         estimated_rotations.data() + idx_it2->second);
   }
 
-  ceres::Solver::Options solver_options;
-  solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-  solver_options.max_num_iterations = 100;
+  ceres::Solver::Options solver_options = options_.solver_options;
   solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
   ceres::Solver::Summary summary;
   ceres::Solve(solver_options, &ceres_problem, &summary);

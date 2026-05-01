@@ -65,13 +65,15 @@ void AppendLoopClosureObservations(
 struct TrackProblemFilterOptions {
   int min_num_views_per_track = 3;
   int max_num_views_per_track = std::numeric_limits<int>::max();
+  bool two_view_depth_gate = false;
 };
 
-// Filter tracks for the optimization problem. LC observations may augment an
-// admitted regular track, but do not satisfy the regular-view admission gate.
+// Filter tracks for the optimization problem with optional 2-view depth gate.
 std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
     const TrackProblemFilterOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
+    const std::unordered_map<image_t, std::vector<double>>& depth_priors,
+    const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,
     const std::unordered_map<point3D_t, Point3D>& tracks_full);
 
 }  // namespace colmap

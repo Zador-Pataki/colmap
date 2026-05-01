@@ -66,24 +66,19 @@ class CorrespondenceGraph {
   };
 
   // Two-view image pair with geometry, matches, and metadata.
-  // Extends colmap core with image IDs, validity flags,
-  // loop closure markers, covariance, and full match data.
+  // Extends colmap core with image IDs, validity flags, loop closure markers,
+  // and full match data.
   struct ImagePair {
     // Default constructor.
     ImagePair() = default;
 
-    // Constructor from image IDs. Sets pair_id via ImagePairToPairId.
+    // Constructor from image IDs.
     ImagePair(image_t img_id1, image_t img_id2)
-        : image_id1(img_id1),
-          image_id2(img_id2),
-          pair_id(ImagePairToPairId(img_id1, img_id2)) {}
+        : image_id1(img_id1), image_id2(img_id2) {}
 
     // Image identifiers.
     image_t image_id1 = kInvalidImageId;
     image_t image_id2 = kInvalidImageId;
-
-    // Unique pair identifier derived from image_id1 and image_id2.
-    image_pair_t pair_id = 0;
 
     // Indicator whether the image pair is valid.
     bool is_valid = true;
@@ -93,13 +88,6 @@ class CorrespondenceGraph {
 
     // The two-view geometry of the image pair without matches.
     struct TwoViewGeometry two_view_geometry;
-
-    // Weight is the initial inlier rate.
-    double weight = 0.0;
-
-    // Covariance matrix (3x3) for the relative translation.
-    // Initialized to zero matrix to indicate it hasn't been computed yet.
-    Eigen::Matrix3d cov_t = Eigen::Matrix3d::Zero();
 
     // All matches between the two images (not just inliers).
     // First column is feature index in image1, second column in image2.
