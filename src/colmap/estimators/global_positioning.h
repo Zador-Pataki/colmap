@@ -145,7 +145,8 @@ class GlobalPositioner {
   void AddObservationToProblem(point3D_t point3D_id,
                                const TrackElement& observation,
                                bool random_initialization,
-                               Reconstruction& reconstruction);
+                               Reconstruction& reconstruction,
+                               bool is_lc_observation = false);
 
   // Seed dmap_scales_ from per-image median z_est / depth_prior.
   void InitializeDepthMapScalesFromObservations(

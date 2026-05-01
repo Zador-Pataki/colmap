@@ -809,13 +809,17 @@ TEST(FindTracksForProblem, MaxNumTracksLimit) {
                         MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto reg_ids = MakeRegisteredImageIds(images);
+  const auto inputs = MakeSubsampleInputs(images);
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
   options.required_tracks_per_view = 1000;
   options.max_num_tracks = 3;
-  const auto selected = SubsampleTracks(options, reg_ids, tracks_full);
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
   // The break fires AFTER inserting when size > max_num_tracks, so we
   // may get max_num_tracks + 1. The key assertion: not all 10 are kept.
   EXPECT_LE(static_cast<int>(selected.size()), options.max_num_tracks + 1);

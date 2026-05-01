@@ -304,7 +304,8 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
       AddObservationToProblem(point3D_id,
                               observation,
                               random_initialization,
-                              reconstruction);
+                              reconstruction,
+                              /*is_lc_observation=*/true);
     }
   }
 }
@@ -312,7 +313,8 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
 void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                                const TrackElement& observation,
                                                bool random_initialization,
-                                               Reconstruction& reconstruction) {
+                                               Reconstruction& reconstruction,
+                                               bool is_lc_observation) {
   Point3D& point3D = reconstruction.Point3D(point3D_id);
   if (!reconstruction.ExistsImage(observation.image_id)) return;
 
