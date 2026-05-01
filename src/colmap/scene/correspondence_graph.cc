@@ -124,7 +124,10 @@ void CorrespondenceGraph::AddTwoViewGeometry(
   THROW_CHECK(inserted)
       << "Two view geometry for image pair was already added: image_id1="
       << image_id1 << ", image_id2=" << image_id2;
-  image_pair_it->second.num_matches =
+  auto& image_pair = image_pair_it->second;
+  image_pair.image_id1 = image_id1;
+  image_pair.image_id2 = image_id2;
+  image_pair.num_matches =
       static_cast<point2D_t>(two_view_geometry.inlier_matches.size());
 
   // Store all matches in correspondence graph data structure. This data-
@@ -132,6 +135,8 @@ void CorrespondenceGraph::AddTwoViewGeometry(
   // significantly more efficient when updating the correspondences in case an
   // observation is triangulated.
 
+  FeatureMatches stored_inlier_matches;
+  stored_inlier_matches.reserve(two_view_geometry.inlier_matches.size());
   for (const auto& match : two_view_geometry.inlier_matches) {
     const bool valid_idx1 = match.point2D_idx1 < image1.corrs.size();
     const bool valid_idx2 = match.point2D_idx2 < image2.corrs.size();
@@ -153,7 +158,7 @@ void CorrespondenceGraph::AddTwoViewGeometry(
       if (duplicate) {
         image1.num_correspondences -= 1;
         image2.num_correspondences -= 1;
-        image_pair_it->second.num_matches -= 1;
+        image_pair.num_matches -= 1;
         LOG(WARNING) << StringPrintf(
             "Duplicate correspondence between "
             "point2D_idx=%d in image_id=%d and point2D_idx=%d in "
@@ -172,11 +177,12 @@ void CorrespondenceGraph::AddTwoViewGeometry(
         if (corrs2.size() == 1) {
           image2.num_observations += 1;
         }
+        stored_inlier_matches.push_back(match);
       }
     } else {
       image1.num_correspondences -= 1;
       image2.num_correspondences -= 1;
-      image_pair_it->second.num_matches -= 1;
+      image_pair.num_matches -= 1;
       if (!valid_idx1) {
         LOG(WARNING) << StringPrintf(
             "point2D_idx=%d in image_id=%d does not exist",
@@ -190,6 +196,16 @@ void CorrespondenceGraph::AddTwoViewGeometry(
             image_id2);
       }
     }
+  }
+  image_pair.matches.resize(static_cast<int>(stored_inlier_matches.size()), 2);
+  image_pair.inliers.resize(stored_inlier_matches.size());
+  image_pair.are_lc.assign(stored_inlier_matches.size(), false);
+  for (size_t i = 0; i < stored_inlier_matches.size(); ++i) {
+    image_pair.matches(static_cast<int>(i), 0) =
+        stored_inlier_matches[i].point2D_idx1;
+    image_pair.matches(static_cast<int>(i), 1) =
+        stored_inlier_matches[i].point2D_idx2;
+    image_pair.inliers[i] = static_cast<int>(i);
   }
 
   // Clear and deallocate matches.
