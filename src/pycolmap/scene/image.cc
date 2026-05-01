@@ -168,8 +168,6 @@ void BindSceneImage(py::module& m) {
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
       .def_readwrite("angular_stddevs", &Image::angular_stddevs)
-      .def_readwrite("log_scale", &Image::log_scale)
-      .def_readwrite("log_scale_stddev", &Image::log_scale_stddev)
       .def_readwrite("is_registered", &Image::is_registered)
       .def_readwrite("features", &Image::features)
       .def_readwrite("features_undist", &Image::features_undist)
@@ -256,8 +254,6 @@ void BindSceneImage(py::module& m) {
   DefDoubleVectorProperty(PyImage, "depth_priors", &Image::depth_priors);
   DefDoubleVectorProperty(
       PyImage, "depth_prior_stddevs", &Image::depth_prior_stddevs);
-  DefDoubleVectorProperty(
-      PyImage, "angular_stddevs_z", &Image::angular_stddevs_z);
   DefBoolVectorProperty(
       PyImage, "depth_prior_validity", &Image::depth_prior_validity);
   DefBoolVectorProperty(PyImage, "is_inlier", &Image::is_inlier);

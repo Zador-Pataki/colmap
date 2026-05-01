@@ -97,17 +97,9 @@ class CorrespondenceGraph {
     // Weight is the initial inlier rate.
     double weight = 0.0;
 
-    // Relative depth scale between depth maps of image1 and image2.
-    // Represents the scale factor: depth_2 = rel_depth_scale * depth_1.
-    // Initialized to -1 to indicate it hasn't been computed yet.
-    double rel_depth_scale = -1.0;
-
     // Covariance matrix (3x3) for the relative translation.
     // Initialized to zero matrix to indicate it hasn't been computed yet.
     Eigen::Matrix3d cov_t = Eigen::Matrix3d::Zero();
-
-    // Indicator whether this is a loop closure.
-    bool is_LC = false;
 
     // All matches between the two images (not just inliers).
     // First column is feature index in image1, second column in image2.

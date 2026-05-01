@@ -167,13 +167,6 @@ class Image {
   std::vector<bool> is_track_anchor;
   // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.
   std::vector<Eigen::Vector2d> angular_stddevs;
-  // Per-feature z-component angular stddev.
-  std::vector<double> angular_stddevs_z;
-
-  // Per-image depth-map log-scale and its uncertainty.
-  double log_scale = 0.0;
-  double log_scale_stddev = 0.0;
-
   // Direct cam_from_world override for standalone pipeline.
   Rigid3d cam_from_world;
 
