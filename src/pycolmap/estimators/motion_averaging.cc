@@ -3,6 +3,7 @@
 #include "colmap/estimators/rotation_averaging.h"
 
 #include "pycolmap/helpers.h"
+#include "pycolmap/pybind11_extension.h"
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
@@ -15,6 +16,32 @@ namespace py = pybind11;
 void BindGlobalPositioner(py::module& m) {
   // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
   // bundle_adjustment.cc), which runs earlier in ``BindEstimators``.
+  using TraceLevel = GlobalPositioningTraceLevel;
+  auto PyGlobalPositioningTraceLevel =
+      py::enum_<TraceLevel>(m, "GlobalPositioningTraceLevel")
+          .value("OFF", TraceLevel::kOff)
+          .value("SUMMARY", TraceLevel::kSummary)
+          .value("RESIDUAL_LEDGER", TraceLevel::kResidualLedger)
+          .value("PARAMETER_SNAPSHOTS", TraceLevel::kParameterSnapshots)
+          .value("RESIDUAL_VALUES", TraceLevel::kResidualValues);
+  AddStringToEnumConstructor(PyGlobalPositioningTraceLevel);
+
+  auto PyGlobalPositioningTraceOptions =
+      py::classh<GlobalPositioningTraceOptions>(m,
+                                                "GlobalPositioningTraceOptions")
+          .def(py::init<>())
+          .def_readwrite("level", &GlobalPositioningTraceOptions::level)
+          .def_readwrite("output_path",
+                         &GlobalPositioningTraceOptions::output_path)
+          .def_readwrite("run_label", &GlobalPositioningTraceOptions::run_label)
+          .def_readwrite(
+              "snapshot_every_n_iterations",
+              &GlobalPositioningTraceOptions::snapshot_every_n_iterations)
+          .def_readwrite(
+              "max_snapshotted_points",
+              &GlobalPositioningTraceOptions::max_snapshotted_points);
+  MakeDataclass(PyGlobalPositioningTraceOptions);
+
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -75,6 +102,10 @@ void BindGlobalPositioner(py::module& m) {
               &GlobalPositionerOptions::uncalibrated_loss_downweight,
               "Scale factor applied to the loss of uncalibrated cameras when "
               "apply_uncalibrated_loss_downweight is true. Default 0.5.")
+          .def_readwrite("trace",
+                         &GlobalPositionerOptions::trace,
+                         "File-backed trace recorder options for global "
+                         "positioning diagnostics.")
           .def_property(
               "num_threads",
               [](const GlobalPositionerOptions& self) {

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "colmap/estimators/ceres_loss.h"
+#include "colmap/estimators/global_positioning_trace.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -11,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <ceres/ceres.h>
 
@@ -57,6 +60,9 @@ struct GlobalPositionerOptions {
 
   // The options for the solver
   ceres::Solver::Options solver_options;
+
+  // Optional file-backed diagnostics for global positioning.
+  GlobalPositioningTraceOptions trace;
 
   // Add per-observation MetricDepthError residual alongside BATA.
   bool use_metric_depth_constraint = false;
@@ -178,6 +184,7 @@ class GlobalPositioner {
   void ConvertBackResults(Reconstruction& reconstruction);
 
   GlobalPositionerOptions options_;
+  bool use_gpu_effective_ = false;
 
   std::unique_ptr<ceres::Problem> problem_;
 
@@ -224,6 +231,49 @@ class GlobalPositioner {
   // Per-image ScaledLoss wrappers created in the scale-prior loop.
   // Owned here because problem_ uses DO_NOT_TAKE_OWNERSHIP.
   std::vector<std::unique_ptr<ceres::LossFunction>> per_image_scale_losses_;
+
+  struct ResidualLedgerEntry {
+    std::string residual_type;
+    std::optional<point3D_t> point3D_id;
+    std::optional<image_t> image_id;
+    std::optional<point2D_t> point2D_idx;
+    std::optional<frame_t> frame_id;
+    std::optional<camera_t> camera_id;
+    std::optional<sensor_t> sensor_id;
+    bool is_lc_observation = false;
+    bool is_ref_in_frame = false;
+    bool camera_has_prior_focal_length = false;
+    std::string loss_bucket = "none";
+    bool uses_keypoint_covariance = false;
+    bool has_depth_prior = false;
+    std::optional<double> depth_prior;
+    std::optional<double> depth_sigma;
+    std::optional<image_t> dmap_scale_image_id;
+    std::string depth_outlier_source = "none";
+  };
+
+  struct ScaleObservationMetadata {
+    point3D_t point3D_id = kInvalidPoint3DId;
+    image_t image_id = kInvalidImageId;
+    point2D_t point2D_idx = kInvalidPoint2DIdx;
+    bool is_lc_observation = false;
+  };
+
+  bool ShouldTraceResidualLedger() const;
+  bool ShouldTraceParameterSnapshots() const;
+  void ResetResidualLedger();
+  void RecordScaleObservation(size_t scale_index,
+                              point3D_t point3D_id,
+                              const TrackElement& observation,
+                              bool is_lc_observation);
+  void RecordResidualBlock(const ResidualLedgerEntry& entry);
+  void RecordResidualSkip(const ResidualLedgerEntry& entry,
+                          const std::string& skip_reason);
+  void RecordResidualBucketSummaries();
+
+  GlobalPositioningTraceRecorder* trace_recorder_ = nullptr;
+  std::map<std::string, uint64_t> residual_bucket_counts_;
+  std::vector<ScaleObservationMetadata> scale_observations_;
 };
 
 // Solve global positioning using point-to-camera constraints.

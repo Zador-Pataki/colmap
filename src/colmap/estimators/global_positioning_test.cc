@@ -35,9 +35,15 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction_matchers.h"
 #include "colmap/scene/synthetic.h"
+#include "colmap/util/file.h"
 #include "colmap/util/testing.h"
 
+#include <cctype>
 #include <cmath>
+#include <fstream>
+#include <iterator>
+#include <optional>
+#include <sstream>
 
 #include <ceres/loss_function.h>
 #include <gtest/gtest.h>
@@ -384,6 +390,113 @@ GlobalPositionerOptions BaselineGpOptions() {
   return options;
 }
 
+std::string ReadFileForTest(const std::filesystem::path& path) {
+  std::ifstream file(path);
+  THROW_CHECK_FILE_OPEN(file, path);
+  return std::string((std::istreambuf_iterator<char>(file)),
+                     std::istreambuf_iterator<char>());
+}
+
+size_t CountJsonlRecordsForTest(const std::string& text) {
+  size_t count = 0;
+  std::istringstream stream(text);
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (!line.empty()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool ContainsJsonStringValueForTest(const std::string& text,
+                                    const std::string& key,
+                                    const std::string& value) {
+  const std::string key_token = "\"" + key + "\"";
+  const std::string value_token = "\"" + value + "\"";
+  size_t pos = 0;
+  while ((pos = text.find(key_token, pos)) != std::string::npos) {
+    const size_t colon = text.find(':', pos + key_token.size());
+    const size_t line_end = text.find('\n', pos);
+    const size_t search_end =
+        line_end == std::string::npos ? text.size() : line_end;
+    if (colon != std::string::npos && colon < search_end &&
+        text.find(value_token, colon) < search_end) {
+      return true;
+    }
+    pos += key_token.size();
+  }
+  return false;
+}
+
+std::optional<int64_t> FindEventAttrIntForTest(const std::string& events,
+                                               const std::string& event_type,
+                                               const std::string& attr_key) {
+  std::istringstream stream(events);
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (!ContainsJsonStringValueForTest(line, "event_type", event_type)) {
+      continue;
+    }
+    const std::string key_token = "\"" + attr_key + "\"";
+    const size_t key_pos = line.find(key_token);
+    if (key_pos == std::string::npos) {
+      continue;
+    }
+    size_t value_begin = line.find(':', key_pos + key_token.size());
+    if (value_begin == std::string::npos) {
+      continue;
+    }
+    ++value_begin;
+    while (value_begin < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[value_begin]))) {
+      ++value_begin;
+    }
+    size_t value_end = value_begin;
+    if (value_end < line.size() && line[value_end] == '-') {
+      ++value_end;
+    }
+    while (value_end < line.size() &&
+           std::isdigit(static_cast<unsigned char>(line[value_end]))) {
+      ++value_end;
+    }
+    if (value_end > value_begin) {
+      return std::stoll(line.substr(value_begin, value_end - value_begin));
+    }
+  }
+  return std::nullopt;
+}
+
+void ExpectContainsAllSnapshotMetadataKeysForTest(const std::string& metadata) {
+  for (const char* key : {"\"iteration\"",
+                          "\"frame_ids\"",
+                          "\"frame_centers_world_shape\"",
+                          "\"point3D_ids\"",
+                          "\"points3D_world_shape\"",
+                          "\"bata_residual_ids\"",
+                          "\"bata_scales_shape\"",
+                          "\"dmap_image_ids\"",
+                          "\"dmap_scales_stored_shape\"",
+                          "\"coordinate_convention\""}) {
+    EXPECT_NE(metadata.find(key), std::string::npos)
+        << "Missing snapshot metadata key: " << key;
+  }
+}
+
+std::optional<TrackElement> FindFirstValidDepthObservationForTest(
+    const Reconstruction& reconstruction) {
+  for (const auto& [_, point3D] : reconstruction.Points3D()) {
+    for (const TrackElement& observation : point3D.track.Elements()) {
+      const Image& image = reconstruction.Image(observation.image_id);
+      if (observation.point2D_idx < image.depth_prior_validity.size() &&
+          image.depth_prior_validity[observation.point2D_idx]) {
+        return observation;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 // Sum of valid track elements across tracks long enough to be added by
 // ``AddPointToCameraConstraints`` (i.e. ``track.Length() >=
 // min_num_view_per_track``).
@@ -461,6 +574,154 @@ void KeepSingleRegularPlusLcPoint(Reconstruction& reconstruction) {
 }
 
 }  // namespace
+
+TEST(GlobalPositioning, DefaultTraceDisabledWritesNoFiles) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  const std::filesystem::path trace_dir = CreateTestDir() / "gp_trace";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  ASSERT_EQ(options.trace.level, GlobalPositioningTraceLevel::kOff);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+  EXPECT_FALSE(ExistsPath(trace_dir));
+}
+
+TEST(GlobalPositioning, SummaryTraceWritesLifecycleAndIterationFiles) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  const std::filesystem::path trace_dir = CreateTestDir() / "gp_trace";
+  ASSERT_TRUE(std::filesystem::create_directories(trace_dir / "snapshots"));
+  {
+    std::ofstream residual_blocks(trace_dir / "residual_blocks.jsonl");
+    ASSERT_TRUE(residual_blocks.is_open());
+    residual_blocks << "stale";
+    std::ofstream residual_skips(trace_dir / "residual_skips.jsonl");
+    ASSERT_TRUE(residual_skips.is_open());
+    residual_skips << "stale";
+    std::ofstream snapshot(trace_dir / "snapshots" / "iter_000000.json");
+    ASSERT_TRUE(snapshot.is_open());
+    snapshot << "stale";
+  }
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.trace.level = GlobalPositioningTraceLevel::kSummary;
+  options.trace.output_path = trace_dir;
+  options.trace.run_label = "gp_test";
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const std::filesystem::path manifest_path = trace_dir / "manifest.json";
+  const std::filesystem::path events_path = trace_dir / "events.jsonl";
+  const std::filesystem::path iteration_path =
+      trace_dir / "iteration_metrics.jsonl";
+  ASSERT_TRUE(ExistsFile(manifest_path));
+  ASSERT_TRUE(ExistsFile(events_path));
+  ASSERT_TRUE(ExistsFile(iteration_path));
+  EXPECT_FALSE(ExistsFile(trace_dir / "residual_blocks.jsonl"));
+  EXPECT_FALSE(ExistsFile(trace_dir / "residual_skips.jsonl"));
+  EXPECT_FALSE(ExistsDir(trace_dir / "snapshots"));
+
+  const std::string manifest = ReadFileForTest(manifest_path);
+  EXPECT_NE(manifest.find("\"status\": \"finished\""), std::string::npos);
+  EXPECT_NE(manifest.find("\"trace_level\": \"summary\""), std::string::npos);
+
+  const std::string events = ReadFileForTest(events_path);
+  EXPECT_NE(events.find("\"event_type\":\"run_started\""), std::string::npos);
+  EXPECT_NE(events.find("\"event_type\":\"problem_built\""), std::string::npos);
+  EXPECT_NE(events.find("\"event_type\":\"solve_started\""), std::string::npos);
+  EXPECT_NE(events.find("\"event_type\":\"solve_finished\""),
+            std::string::npos);
+  EXPECT_NE(events.find("\"event_type\":\"results_converted\""),
+            std::string::npos);
+  EXPECT_NE(events.find("\"num_residual_blocks\""), std::string::npos);
+
+  const std::string iterations = ReadFileForTest(iteration_path);
+  EXPECT_NE(iterations.find("\"event_type\":\"ceres_iteration\""),
+            std::string::npos);
+  EXPECT_NE(iterations.find("\"cost\""), std::string::npos);
+  EXPECT_NE(iterations.find("\"gradient_max_norm\""), std::string::npos);
+}
+
+TEST(GlobalPositioning, TraceOutputPathFileFailsLoudly) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  const std::filesystem::path trace_path = CreateTestDir() / "gp_trace_file";
+  {
+    std::ofstream file(trace_path);
+    ASSERT_TRUE(file.is_open());
+    file << "not a directory";
+  }
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.trace.level = GlobalPositioningTraceLevel::kSummary;
+  options.trace.output_path = trace_path;
+
+  TestableGlobalPositioner positioner(options);
+  EXPECT_ANY_THROW(positioner.Solve(data.pose_graph, data.reconstruction));
+}
+
+TEST(GlobalPositioning, ParameterSnapshotsTraceWritesMetadataAndSidecars) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  const std::filesystem::path trace_dir = CreateTestDir() / "gp_snapshots";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.trace.level = GlobalPositioningTraceLevel::kParameterSnapshots;
+  options.trace.output_path = trace_dir;
+  options.trace.snapshot_every_n_iterations = 1;
+  options.trace.max_snapshotted_points = 2;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const std::filesystem::path snapshot_dir = trace_dir / "snapshots";
+  ASSERT_TRUE(ExistsDir(snapshot_dir));
+  size_t snapshot_metadata_count = 0;
+  for (const std::filesystem::directory_entry& entry :
+       std::filesystem::directory_iterator(snapshot_dir)) {
+    if (entry.path().extension() == ".json") {
+      ++snapshot_metadata_count;
+    }
+  }
+  EXPECT_EQ(snapshot_metadata_count,
+            CountJsonlRecordsForTest(
+                ReadFileForTest(trace_dir / "iteration_metrics.jsonl")));
+
+  const std::filesystem::path metadata_path = snapshot_dir / "iter_000000.json";
+  const std::filesystem::path frame_centers_path =
+      snapshot_dir / "iter_000000_frame_centers_f64.bin";
+  const std::filesystem::path points3D_path =
+      snapshot_dir / "iter_000000_points3D_f64.bin";
+  const std::filesystem::path scales_path =
+      snapshot_dir / "iter_000000_scales_f64.bin";
+  ASSERT_TRUE(ExistsFile(metadata_path));
+  ASSERT_TRUE(ExistsFile(frame_centers_path));
+  ASSERT_TRUE(ExistsFile(points3D_path));
+  ASSERT_TRUE(ExistsFile(scales_path));
+
+  const std::string metadata = ReadFileForTest(metadata_path);
+  ExpectContainsAllSnapshotMetadataKeysForTest(metadata);
+  EXPECT_NE(metadata.find("iter_000000_frame_centers_f64.bin"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("iter_000000_points3D_f64.bin"), std::string::npos);
+  EXPECT_NE(metadata.find("iter_000000_scales_f64.bin"), std::string::npos);
+  EXPECT_NE(metadata.find("world"), std::string::npos);
+  EXPECT_NE(metadata.find("cam_from_world.translation"), std::string::npos);
+
+  EXPECT_EQ(std::filesystem::file_size(frame_centers_path),
+            positioner.NumFrameCenters() * 3 * sizeof(double));
+
+  const uintmax_t points3D_size = std::filesystem::file_size(points3D_path);
+  EXPECT_LE(points3D_size, 2u * 3u * sizeof(double));
+  EXPECT_EQ(points3D_size % (3u * sizeof(double)), 0u);
+
+  const uintmax_t scales_size = std::filesystem::file_size(scales_path);
+  EXPECT_GT(scales_size, 0u);
+  EXPECT_EQ(scales_size % sizeof(double), 0u);
+}
 
 TEST(GlobalPositioning, MetricDepthConstraintConverges) {
   SetPRNGSeed(0);
@@ -618,6 +879,76 @@ void StampGtDepthPriors(Reconstruction& reconstruction) {
       }
     }
   }
+}
+
+TEST(GlobalPositioning, ResidualLedgerTraceWritesBlocksAndMatchesProblemBuilt) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+
+  const std::filesystem::path trace_dir =
+      CreateTestDir() / "gp_residual_ledger";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.trace.level = GlobalPositioningTraceLevel::kResidualLedger;
+  options.trace.output_path = trace_dir;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const std::filesystem::path residual_blocks_path =
+      trace_dir / "residual_blocks.jsonl";
+  ASSERT_TRUE(ExistsFile(residual_blocks_path));
+
+  const std::string residual_blocks = ReadFileForTest(residual_blocks_path);
+  EXPECT_TRUE(ContainsJsonStringValueForTest(
+      residual_blocks, "residual_type", "bata_ref_frame"));
+  EXPECT_TRUE(ContainsJsonStringValueForTest(
+      residual_blocks, "residual_type", "metric_depth"));
+  EXPECT_TRUE(ContainsJsonStringValueForTest(
+      residual_blocks, "residual_type", "scale_prior"));
+
+  const std::string events = ReadFileForTest(trace_dir / "events.jsonl");
+  const std::optional<int64_t> expected_num_residual_blocks =
+      FindEventAttrIntForTest(events, "problem_built", "num_residual_blocks");
+  ASSERT_TRUE(expected_num_residual_blocks.has_value());
+  EXPECT_EQ(CountJsonlRecordsForTest(residual_blocks),
+            static_cast<size_t>(*expected_num_residual_blocks));
+}
+
+TEST(GlobalPositioning, ResidualLedgerTraceWritesMissingDepthPriorSkip) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+
+  const std::optional<TrackElement> observation =
+      FindFirstValidDepthObservationForTest(data.reconstruction);
+  ASSERT_TRUE(observation.has_value());
+
+  Image& image = data.reconstruction.Image(observation->image_id);
+  ASSERT_LT(observation->point2D_idx, image.depth_prior_validity.size());
+  image.depth_prior_validity[observation->point2D_idx] = false;
+
+  const std::filesystem::path trace_dir = CreateTestDir() / "gp_residual_skip";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.trace.level = GlobalPositioningTraceLevel::kResidualLedger;
+  options.trace.output_path = trace_dir;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const std::filesystem::path residual_skips_path =
+      trace_dir / "residual_skips.jsonl";
+  ASSERT_TRUE(ExistsFile(residual_skips_path));
+
+  const std::string residual_skips = ReadFileForTest(residual_skips_path);
+  EXPECT_TRUE(ContainsJsonStringValueForTest(
+      residual_skips, "event_type", "residual_skipped"));
+  EXPECT_TRUE(ContainsJsonStringValueForTest(
+      residual_skips, "skip_reason", "missing_depth_validity"));
 }
 
 TEST(GlobalPositioning, FilterDepthOutliersRoutesSoftFallback) {

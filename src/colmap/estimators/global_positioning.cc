@@ -8,7 +8,9 @@
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <utility>
 
 namespace colmap {
 namespace {
@@ -88,6 +90,264 @@ bool IsLossConfigOverride(const LossConfig& loss_config) {
          loss_config.scale != 1.0 || loss_config.weight != 1.0;
 }
 
+bool IsTraceEnabled(const GlobalPositioningTraceOptions& options) {
+  return options.level != GlobalPositioningTraceLevel::kOff;
+}
+
+bool IsResidualLedgerTraceEnabled(
+    const GlobalPositioningTraceOptions& options) {
+  return static_cast<int>(options.level) >=
+         static_cast<int>(GlobalPositioningTraceLevel::kResidualLedger);
+}
+
+bool IsParameterSnapshotTraceEnabled(
+    const GlobalPositioningTraceOptions& options) {
+  return static_cast<int>(options.level) >=
+         static_cast<int>(GlobalPositioningTraceLevel::kParameterSnapshots);
+}
+
+using TraceAttrs = std::map<std::string, GlobalPositioningTraceValue>;
+using TraceValue = GlobalPositioningTraceValue;
+
+template <typename T>
+TraceValue TraceOptionalId(const std::optional<T>& value) {
+  if (!value.has_value()) {
+    return TraceValue::Null();
+  }
+  return TraceValue::UInt(static_cast<uint64_t>(*value));
+}
+
+TraceValue TraceOptionalDouble(const std::optional<double>& value) {
+  if (!value.has_value()) {
+    return TraceValue::Null();
+  }
+  return TraceValue::Double(*value);
+}
+
+std::optional<uint64_t> TraceSensorId(
+    const std::optional<sensor_t>& sensor_id) {
+  if (!sensor_id.has_value() || *sensor_id == kInvalidSensorId) {
+    return std::nullopt;
+  }
+  return static_cast<uint64_t>(sensor_id->id);
+}
+
+std::string DepthOutlierSource(
+    const std::set<std::pair<image_t, point2D_t>>& runtime_depth_outliers,
+    const Image& image,
+    const TrackElement& observation) {
+  if (runtime_depth_outliers.count(
+          {observation.image_id, observation.point2D_idx}) > 0) {
+    return "runtime_filter";
+  }
+  if (observation.point2D_idx < image.is_depth_outlier.size() &&
+      image.is_depth_outlier[observation.point2D_idx]) {
+    return "external_annotation";
+  }
+  return "none";
+}
+
+bool HasValidDepthPriorMetadata(const Image& image,
+                                const TrackElement& observation) {
+  return observation.point2D_idx < image.depth_prior_validity.size() &&
+         image.depth_prior_validity[observation.point2D_idx] &&
+         observation.point2D_idx < image.depth_priors.size() &&
+         observation.point2D_idx < image.depth_prior_stddevs.size();
+}
+
+void WriteTraceEvent(GlobalPositioningTraceRecorder* recorder,
+                     std::string event_type,
+                     std::string stage,
+                     TraceAttrs attrs = {}) {
+  if (recorder == nullptr) {
+    return;
+  }
+
+  GlobalPositioningTraceRecord record;
+  record.event_type = std::move(event_type);
+  record.stage = std::move(stage);
+  record.attrs = std::move(attrs);
+  recorder->WriteEvent(std::move(record));
+}
+
+void WriteParameterSnapshot(
+    GlobalPositioningTraceRecorder* recorder,
+    const int iteration,
+    const Reconstruction& reconstruction,
+    const std::unordered_map<frame_t, Eigen::Vector3d>& frame_centers,
+    const std::vector<double>& scales,
+    const std::map<image_t, double>& dmap_scales,
+    const std::unordered_map<sensor_t, Eigen::Vector3d>& cams_in_rig,
+    const int max_snapshotted_points) {
+  if (recorder == nullptr) {
+    return;
+  }
+
+  GlobalPositioningTraceParameterSnapshot snapshot;
+  snapshot.iteration = iteration;
+
+  std::vector<frame_t> frame_ids;
+  frame_ids.reserve(frame_centers.size());
+  for (const auto& [frame_id, center] : frame_centers) {
+    frame_ids.push_back(frame_id);
+  }
+  std::sort(frame_ids.begin(), frame_ids.end());
+  snapshot.frame_centers.shape = {frame_ids.size(), 3};
+  snapshot.frame_centers.ids.reserve(frame_ids.size());
+  snapshot.frame_centers.values.reserve(3 * frame_ids.size());
+  for (const frame_t frame_id : frame_ids) {
+    const Eigen::Vector3d& center = frame_centers.at(frame_id);
+    snapshot.frame_centers.ids.push_back(static_cast<uint64_t>(frame_id));
+    snapshot.frame_centers.values.push_back(center.x());
+    snapshot.frame_centers.values.push_back(center.y());
+    snapshot.frame_centers.values.push_back(center.z());
+  }
+
+  std::vector<point3D_t> point3D_ids;
+  point3D_ids.reserve(reconstruction.NumPoints3D());
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    point3D_ids.push_back(point3D_id);
+  }
+  std::sort(point3D_ids.begin(), point3D_ids.end());
+  if (max_snapshotted_points >= 0 &&
+      point3D_ids.size() > static_cast<size_t>(max_snapshotted_points)) {
+    point3D_ids.resize(static_cast<size_t>(max_snapshotted_points));
+  }
+  snapshot.points3D.shape = {point3D_ids.size(), 3};
+  snapshot.points3D.ids.reserve(point3D_ids.size());
+  snapshot.points3D.values.reserve(3 * point3D_ids.size());
+  for (const point3D_t point3D_id : point3D_ids) {
+    const Eigen::Vector3d& xyz = reconstruction.Point3D(point3D_id).xyz;
+    snapshot.points3D.ids.push_back(static_cast<uint64_t>(point3D_id));
+    snapshot.points3D.values.push_back(xyz.x());
+    snapshot.points3D.values.push_back(xyz.y());
+    snapshot.points3D.values.push_back(xyz.z());
+  }
+
+  snapshot.scales.shape = {scales.size()};
+  snapshot.scales.ids.reserve(scales.size());
+  snapshot.scales.values.reserve(scales.size());
+  for (size_t scale_idx = 0; scale_idx < scales.size(); ++scale_idx) {
+    snapshot.scales.ids.push_back(static_cast<uint64_t>(scale_idx));
+    snapshot.scales.values.push_back(scales[scale_idx]);
+  }
+
+  if (!dmap_scales.empty()) {
+    snapshot.dmap_scales.emplace();
+    snapshot.dmap_scales->shape = {dmap_scales.size()};
+    snapshot.dmap_scales->ids.reserve(dmap_scales.size());
+    snapshot.dmap_scales->values.reserve(dmap_scales.size());
+    for (const auto& [image_id, scale] : dmap_scales) {
+      snapshot.dmap_scales->ids.push_back(static_cast<uint64_t>(image_id));
+      snapshot.dmap_scales->values.push_back(scale);
+    }
+  }
+
+  std::vector<sensor_t> sensor_ids;
+  sensor_ids.reserve(cams_in_rig.size());
+  for (const auto& [sensor_id, center] : cams_in_rig) {
+    sensor_ids.push_back(sensor_id);
+  }
+  std::sort(sensor_ids.begin(), sensor_ids.end());
+  if (!sensor_ids.empty()) {
+    snapshot.cams_in_rig.emplace();
+    snapshot.cams_in_rig->shape = {sensor_ids.size(), 3};
+    snapshot.cams_in_rig->ids.reserve(sensor_ids.size());
+    snapshot.cams_in_rig->values.reserve(3 * sensor_ids.size());
+    for (const sensor_t sensor_id : sensor_ids) {
+      const Eigen::Vector3d& cam_in_rig = cams_in_rig.at(sensor_id);
+      snapshot.cams_in_rig->ids.push_back(static_cast<uint64_t>(sensor_id.id));
+      snapshot.cams_in_rig->values.push_back(cam_in_rig.x());
+      snapshot.cams_in_rig->values.push_back(cam_in_rig.y());
+      snapshot.cams_in_rig->values.push_back(cam_in_rig.z());
+    }
+  }
+
+  recorder->WriteParameterSnapshot(snapshot);
+}
+
+class GlobalPositioningTraceIterationCallback
+    : public ceres::IterationCallback {
+ public:
+  GlobalPositioningTraceIterationCallback(
+      GlobalPositioningTraceRecorder* recorder,
+      const Reconstruction* reconstruction,
+      const std::unordered_map<frame_t, Eigen::Vector3d>* frame_centers,
+      const std::vector<double>* scales,
+      const std::map<image_t, double>* dmap_scales,
+      const std::unordered_map<sensor_t, Eigen::Vector3d>* cams_in_rig,
+      const int snapshot_every_n_iterations,
+      const int max_snapshotted_points,
+      const bool write_parameter_snapshots)
+      : recorder_(recorder),
+        reconstruction_(reconstruction),
+        frame_centers_(frame_centers),
+        scales_(scales),
+        dmap_scales_(dmap_scales),
+        cams_in_rig_(cams_in_rig),
+        snapshot_every_n_iterations_(snapshot_every_n_iterations),
+        max_snapshotted_points_(max_snapshotted_points),
+        write_parameter_snapshots_(write_parameter_snapshots) {}
+
+  ceres::CallbackReturnType operator()(
+      const ceres::IterationSummary& summary) override {
+    if (recorder_ != nullptr) {
+      recorder_->WriteIteration(summary);
+    }
+    if (write_parameter_snapshots_ &&
+        summary.iteration % snapshot_every_n_iterations_ == 0) {
+      WriteParameterSnapshot(recorder_,
+                             summary.iteration,
+                             *reconstruction_,
+                             *frame_centers_,
+                             *scales_,
+                             *dmap_scales_,
+                             *cams_in_rig_,
+                             max_snapshotted_points_);
+    }
+    return ceres::SOLVER_CONTINUE;
+  }
+
+ private:
+  GlobalPositioningTraceRecorder* recorder_ = nullptr;
+  const Reconstruction* reconstruction_ = nullptr;
+  const std::unordered_map<frame_t, Eigen::Vector3d>* frame_centers_ = nullptr;
+  const std::vector<double>* scales_ = nullptr;
+  const std::map<image_t, double>* dmap_scales_ = nullptr;
+  const std::unordered_map<sensor_t, Eigen::Vector3d>* cams_in_rig_ = nullptr;
+  int snapshot_every_n_iterations_ = 1;
+  int max_snapshotted_points_ = -1;
+  bool write_parameter_snapshots_ = false;
+};
+
+class GlobalPositioningTraceStatusGuard {
+ public:
+  explicit GlobalPositioningTraceStatusGuard(
+      GlobalPositioningTraceRecorder* recorder,
+      GlobalPositioningTraceRecorder** active_recorder)
+      : recorder_(recorder), active_recorder_(active_recorder) {}
+
+  ~GlobalPositioningTraceStatusGuard() {
+    if (active_recorder_ != nullptr) {
+      *active_recorder_ = nullptr;
+    }
+  }
+
+  void MarkFinished() {
+    if (recorder_ != nullptr) {
+      recorder_->MarkFinished("finished");
+      recorder_ = nullptr;
+    }
+    if (active_recorder_ != nullptr) {
+      *active_recorder_ = nullptr;
+    }
+  }
+
+ private:
+  GlobalPositioningTraceRecorder* recorder_ = nullptr;
+  GlobalPositioningTraceRecorder** active_recorder_ = nullptr;
+};
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -108,64 +368,212 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     return false;
   }
 
-  // TODO: extend rig branch in AddObservationToProblem to add MetricDepthError
-  // for non-ref images. Until then, fail loud on multi-camera rigs +
-  // use_metric_depth_constraint.
-  if (options_.use_metric_depth_constraint) {
-    for (const auto& [image_id, image] : reconstruction.Images()) {
-      THROW_CHECK(image.IsRefInFrame())
-          << "use_metric_depth_constraint=true is not yet supported with "
-             "multi-camera rigs. Image "
-          << image_id
-          << " is a non-ref sensor in its frame; its depth "
-             "residual would be silently dropped. Either disable "
-             "use_metric_depth_constraint or run on single-camera rigs.";
+  std::unique_ptr<GlobalPositioningTraceRecorder> trace_recorder;
+  if (IsTraceEnabled(options_.trace)) {
+    trace_recorder =
+        std::make_unique<GlobalPositioningTraceRecorder>(options_.trace);
+  }
+  trace_recorder_ = trace_recorder.get();
+
+  {
+    GlobalPositioningTraceStatusGuard trace_status(trace_recorder.get(),
+                                                   &trace_recorder_);
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "run_started",
+        "solve",
+        {{"num_images", TraceValue::UInt(reconstruction.NumImages())},
+         {"num_points3D", TraceValue::UInt(reconstruction.NumPoints3D())},
+         {"num_frames", TraceValue::UInt(reconstruction.NumFrames())},
+         {"num_cameras", TraceValue::UInt(reconstruction.NumCameras())},
+         {"trace_level",
+          TraceValue::String(
+              GlobalPositioningTraceLevelToString(options_.trace.level))}});
+
+    // TODO: extend rig branch in AddObservationToProblem to add
+    // MetricDepthError for non-ref images. Until then, fail loud on
+    // multi-camera rigs + use_metric_depth_constraint.
+    if (options_.use_metric_depth_constraint) {
+      for (const auto& [image_id, image] : reconstruction.Images()) {
+        THROW_CHECK(image.IsRefInFrame())
+            << "use_metric_depth_constraint=true is not yet supported with "
+               "multi-camera rigs. Image "
+            << image_id
+            << " is a non-ref sensor in its frame; its depth "
+               "residual would be silently dropped. Either disable "
+               "use_metric_depth_constraint or run on single-camera rigs.";
+      }
     }
+
+    LOG(INFO) << "Setting up the global positioner problem";
+
+    WriteTraceEvent(
+        trace_recorder.get(), "problem_setup_started", "setup_problem");
+
+    // Setup the problem.
+    SetupProblem(pose_graph, reconstruction);
+
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "problem_setup_finished",
+        "setup_problem",
+        {{"reserved_scale_capacity", TraceValue::UInt(scales_.capacity())}});
+
+    // Initialize camera translations to be random.
+    // Also, convert the camera pose translation to be the camera center.
+    InitializeRandomPositions(pose_graph, reconstruction);
+
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "initialization_finished",
+        "initialization",
+        {{"num_frame_centers", TraceValue::UInt(frame_centers_.size())},
+         {"use_init", TraceValue::Bool(options_.use_init)},
+         {"generate_random_positions",
+          TraceValue::Bool(options_.generate_random_positions)},
+         {"generate_random_points",
+          TraceValue::Bool(options_.generate_random_points)}});
+
+    // No caller-supplied seed for dmap_scales_; derive one from per-image
+    // median observed z_est/depth_prior.
+    const bool initialize_dmap_scales =
+        options_.use_metric_depth_constraint && options_.use_init &&
+        !options_.initial_dmap_scales.has_value();
+    std::string dmap_scale_skip_reason;
+    if (initialize_dmap_scales) {
+      InitializeDepthMapScalesFromObservations(reconstruction);
+    } else if (!options_.use_metric_depth_constraint) {
+      dmap_scale_skip_reason = "metric_depth_disabled";
+    } else if (!options_.use_init) {
+      dmap_scale_skip_reason = "use_init_disabled";
+    } else {
+      dmap_scale_skip_reason = "initial_dmap_scales_provided";
+    }
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "dmap_scale_initialization_finished",
+        "initialization",
+        {{"skipped", TraceValue::Bool(!initialize_dmap_scales)},
+         {"reason", TraceValue::String(dmap_scale_skip_reason)},
+         {"num_dmap_scales", TraceValue::UInt(dmap_scales_.size())}});
+
+    WriteTraceEvent(
+        trace_recorder.get(), "residual_build_started", "problem_build");
+
+    // Add the point to camera constraints to the problem.
+    AddPointToCameraConstraints(reconstruction);
+
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "problem_built",
+        "problem_build",
+        {{"num_residual_blocks",
+          TraceValue::Int(problem_->NumResidualBlocks())},
+         {"num_parameter_blocks",
+          TraceValue::Int(problem_->NumParameterBlocks())},
+         {"num_scales", TraceValue::UInt(scales_.size())},
+         {"num_frame_centers", TraceValue::UInt(frame_centers_.size())},
+         {"num_dmap_scales", TraceValue::UInt(dmap_scales_.size())}});
+
+    if (options_.use_parameter_block_ordering) {
+      AddCamerasAndPointsToParameterGroups(reconstruction);
+    }
+
+    // Parameterize the variables, set image poses / tracks / scales to be
+    // constant if desired.
+    ParameterizeVariables(reconstruction);
+
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "parameterization_finished",
+        "parameterization",
+        {{"optimize_positions", TraceValue::Bool(options_.optimize_positions)},
+         {"optimize_points", TraceValue::Bool(options_.optimize_points)},
+         {"optimize_scales", TraceValue::Bool(options_.optimize_scales)},
+         {"use_gpu_effective", TraceValue::Bool(use_gpu_effective_)}});
+
+    LOG(INFO) << "Solving the global positioner problem";
+
+    ceres::Solver::Summary summary;
+    options_.solver_options.num_threads =
+        GetEffectiveNumThreads(options_.solver_options.num_threads);
+    options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+
+    ceres::Solver::Options solver_options = options_.solver_options;
+    const bool trace_parameter_snapshots = ShouldTraceParameterSnapshots();
+    if (trace_parameter_snapshots) {
+      THROW_CHECK_GT(options_.trace.snapshot_every_n_iterations, 0)
+          << "Global positioning trace snapshot_every_n_iterations must be "
+             "positive when parameter snapshots are enabled.";
+      solver_options.update_state_every_iteration = true;
+    }
+    std::unique_ptr<GlobalPositioningTraceIterationCallback> trace_callback;
+    if (trace_recorder != nullptr) {
+      trace_callback =
+          std::make_unique<GlobalPositioningTraceIterationCallback>(
+              trace_recorder.get(),
+              &reconstruction,
+              &frame_centers_,
+              &scales_,
+              &dmap_scales_,
+              &cams_in_rig_,
+              options_.trace.snapshot_every_n_iterations,
+              options_.trace.max_snapshotted_points,
+              trace_parameter_snapshots);
+      solver_options.callbacks.push_back(trace_callback.get());
+    }
+
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "solve_started",
+        "ceres_solve",
+        {{"max_num_iterations",
+          TraceValue::Int(solver_options.max_num_iterations)},
+         {"num_threads", TraceValue::Int(solver_options.num_threads)},
+         {"linear_solver_type",
+          TraceValue::String(ceres::LinearSolverTypeToString(
+              solver_options.linear_solver_type))},
+         {"preconditioner_type",
+          TraceValue::String(ceres::PreconditionerTypeToString(
+              solver_options.preconditioner_type))}});
+
+    ceres::Solve(solver_options, problem_.get(), &summary);
+
+    const bool is_solution_usable = summary.IsSolutionUsable();
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "solve_finished",
+        "ceres_solve",
+        {{"is_solution_usable", TraceValue::Bool(is_solution_usable)},
+         {"termination_type",
+          TraceValue::String(
+              ceres::TerminationTypeToString(summary.termination_type))},
+         {"message", TraceValue::String(summary.message)},
+         {"initial_cost", TraceValue::Double(summary.initial_cost)},
+         {"final_cost", TraceValue::Double(summary.final_cost)},
+         {"num_successful_steps",
+          TraceValue::Int(summary.num_successful_steps)},
+         {"num_unsuccessful_steps",
+          TraceValue::Int(summary.num_unsuccessful_steps)},
+         {"total_time_sec",
+          TraceValue::Double(summary.total_time_in_seconds)}});
+
+    if (VLOG_IS_ON(2)) {
+      LOG(INFO) << summary.FullReport();
+    } else {
+      LOG(INFO) << summary.BriefReport();
+    }
+
+    ConvertBackResults(reconstruction);
+    WriteTraceEvent(
+        trace_recorder.get(),
+        "results_converted",
+        "convert_results",
+        {{"num_frame_centers", TraceValue::UInt(frame_centers_.size())},
+         {"num_cams_in_rig", TraceValue::UInt(cams_in_rig_.size())}});
+    trace_status.MarkFinished();
+    return is_solution_usable;
   }
-
-  LOG(INFO) << "Setting up the global positioner problem";
-
-  // Setup the problem.
-  SetupProblem(pose_graph, reconstruction);
-
-  // Initialize camera translations to be random.
-  // Also, convert the camera pose translation to be the camera center.
-  InitializeRandomPositions(pose_graph, reconstruction);
-
-  // No caller-supplied seed for dmap_scales_; derive one from per-image
-  // median observed z_est/depth_prior.
-  if (options_.use_metric_depth_constraint && options_.use_init &&
-      !options_.initial_dmap_scales.has_value()) {
-    InitializeDepthMapScalesFromObservations(reconstruction);
-  }
-
-  // Add the point to camera constraints to the problem.
-  AddPointToCameraConstraints(reconstruction);
-
-  if (options_.use_parameter_block_ordering) {
-    AddCamerasAndPointsToParameterGroups(reconstruction);
-  }
-
-  // Parameterize the variables, set image poses / tracks / scales to be
-  // constant if desired
-  ParameterizeVariables(reconstruction);
-
-  LOG(INFO) << "Solving the global positioner problem";
-
-  ceres::Solver::Summary summary;
-  options_.solver_options.num_threads =
-      GetEffectiveNumThreads(options_.solver_options.num_threads);
-  options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
-  ceres::Solve(options_.solver_options, problem_.get(), &summary);
-
-  if (VLOG_IS_ON(2)) {
-    LOG(INFO) << summary.FullReport();
-  } else {
-    LOG(INFO) << summary.BriefReport();
-  }
-
-  ConvertBackResults(reconstruction);
-  return summary.IsSolutionUsable();
 }
 
 void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
@@ -179,6 +587,7 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   frame_centers_.clear();
   cams_in_rig_.clear();
   per_image_scale_losses_.clear();
+  ResetResidualLedger();
 
   // Reserve to avoid pointer-invalidating reallocs.
   scales_.clear();
@@ -188,6 +597,131 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
     total_observations += point3D.track.lc_elements.size();
   }
   scales_.reserve(total_observations);
+  scale_observations_.reserve(total_observations);
+}
+
+bool GlobalPositioner::ShouldTraceResidualLedger() const {
+  return trace_recorder_ != nullptr &&
+         IsResidualLedgerTraceEnabled(options_.trace);
+}
+
+bool GlobalPositioner::ShouldTraceParameterSnapshots() const {
+  return trace_recorder_ != nullptr &&
+         IsParameterSnapshotTraceEnabled(options_.trace);
+}
+
+void GlobalPositioner::ResetResidualLedger() {
+  residual_bucket_counts_.clear();
+  scale_observations_.clear();
+}
+
+void GlobalPositioner::RecordScaleObservation(const size_t scale_index,
+                                              const point3D_t point3D_id,
+                                              const TrackElement& observation,
+                                              const bool is_lc_observation) {
+  if (!ShouldTraceResidualLedger()) {
+    return;
+  }
+  if (scale_observations_.size() <= scale_index) {
+    scale_observations_.resize(scale_index + 1);
+  }
+  scale_observations_[scale_index] = {
+      point3D_id,
+      observation.image_id,
+      observation.point2D_idx,
+      is_lc_observation,
+  };
+}
+
+void GlobalPositioner::RecordResidualBlock(const ResidualLedgerEntry& entry) {
+  if (!ShouldTraceResidualLedger()) {
+    return;
+  }
+
+  GlobalPositioningTraceRecord record;
+  record.event_type = "residual_added";
+  record.stage = "problem_build";
+  record.attrs = {
+      {"residual_id",
+       TraceValue::String(trace_recorder_->AllocateResidualId())},
+      {"residual_type", TraceValue::String(entry.residual_type)},
+      {"point3D_id", TraceOptionalId(entry.point3D_id)},
+      {"image_id", TraceOptionalId(entry.image_id)},
+      {"point2D_idx", TraceOptionalId(entry.point2D_idx)},
+      {"frame_id", TraceOptionalId(entry.frame_id)},
+      {"camera_id", TraceOptionalId(entry.camera_id)},
+      {"sensor_id", TraceOptionalId(TraceSensorId(entry.sensor_id))},
+      {"is_lc_observation", TraceValue::Bool(entry.is_lc_observation)},
+      {"is_ref_in_frame", TraceValue::Bool(entry.is_ref_in_frame)},
+      {"camera_has_prior_focal_length",
+       TraceValue::Bool(entry.camera_has_prior_focal_length)},
+      {"loss_bucket", TraceValue::String(entry.loss_bucket)},
+      {"uses_keypoint_covariance",
+       TraceValue::Bool(entry.uses_keypoint_covariance)},
+      {"has_depth_prior", TraceValue::Bool(entry.has_depth_prior)},
+      {"depth_prior", TraceOptionalDouble(entry.depth_prior)},
+      {"depth_sigma", TraceOptionalDouble(entry.depth_sigma)},
+      {"dmap_scale_image_id", TraceOptionalId(entry.dmap_scale_image_id)},
+      {"depth_outlier_source", TraceValue::String(entry.depth_outlier_source)},
+  };
+  trace_recorder_->WriteResidualBlock(std::move(record));
+  ++residual_bucket_counts_[entry.residual_type + "|" + entry.loss_bucket];
+}
+
+void GlobalPositioner::RecordResidualSkip(const ResidualLedgerEntry& entry,
+                                          const std::string& skip_reason) {
+  if (!ShouldTraceResidualLedger()) {
+    return;
+  }
+
+  GlobalPositioningTraceRecord record;
+  record.event_type = "residual_skipped";
+  record.stage = "problem_build";
+  record.attrs = {
+      {"residual_type", TraceValue::String(entry.residual_type)},
+      {"skip_reason", TraceValue::String(skip_reason)},
+      {"point3D_id", TraceOptionalId(entry.point3D_id)},
+      {"image_id", TraceOptionalId(entry.image_id)},
+      {"point2D_idx", TraceOptionalId(entry.point2D_idx)},
+      {"frame_id", TraceOptionalId(entry.frame_id)},
+      {"camera_id", TraceOptionalId(entry.camera_id)},
+      {"sensor_id", TraceOptionalId(TraceSensorId(entry.sensor_id))},
+      {"is_lc_observation", TraceValue::Bool(entry.is_lc_observation)},
+      {"is_ref_in_frame", TraceValue::Bool(entry.is_ref_in_frame)},
+      {"camera_has_prior_focal_length",
+       TraceValue::Bool(entry.camera_has_prior_focal_length)},
+      {"loss_bucket", TraceValue::String(entry.loss_bucket)},
+      {"uses_keypoint_covariance",
+       TraceValue::Bool(entry.uses_keypoint_covariance)},
+      {"has_depth_prior", TraceValue::Bool(entry.has_depth_prior)},
+      {"depth_prior", TraceOptionalDouble(entry.depth_prior)},
+      {"depth_sigma", TraceOptionalDouble(entry.depth_sigma)},
+      {"dmap_scale_image_id", TraceOptionalId(entry.dmap_scale_image_id)},
+      {"depth_outlier_source", TraceValue::String(entry.depth_outlier_source)},
+  };
+  trace_recorder_->WriteResidualSkip(std::move(record));
+}
+
+void GlobalPositioner::RecordResidualBucketSummaries() {
+  if (!ShouldTraceResidualLedger()) {
+    return;
+  }
+
+  for (const auto& [key, count] : residual_bucket_counts_) {
+    const size_t separator = key.find('|');
+    GlobalPositioningTraceRecord record;
+    record.event_type = "residual_bucket_summary";
+    record.stage = "problem_build";
+    record.attrs = {
+        {"residual_type", TraceValue::String(key.substr(0, separator))},
+        {"loss_bucket",
+         TraceValue::String(separator == std::string::npos
+                                ? "none"
+                                : key.substr(separator + 1))},
+        {"count", TraceValue::UInt(count)},
+    };
+    trace_recorder_->WriteResidualBucketSummary(std::move(record));
+  }
 }
 
 void GlobalPositioner::InitializeRandomPositions(
@@ -301,6 +835,36 @@ void GlobalPositioner::AddPointToCameraConstraints(
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     if (NumRegularObservationsForMinViewGate(point3D.track) <
         static_cast<size_t>(options_.min_num_view_per_track)) {
+      if (ShouldTraceResidualLedger()) {
+        for (const auto& observation : point3D.track.Elements()) {
+          ResidualLedgerEntry skip;
+          skip.residual_type = "bata_ref_frame";
+          skip.point3D_id = point3D_id;
+          skip.image_id = observation.image_id;
+          skip.point2D_idx = observation.point2D_idx;
+          RecordResidualSkip(skip, "track_min_view_gate");
+          if (options_.use_metric_depth_constraint) {
+            skip.residual_type = "metric_depth";
+            RecordResidualSkip(skip, "track_min_view_gate");
+          }
+        }
+        for (const auto& observation : point3D.track.lc_elements) {
+          ResidualLedgerEntry skip;
+          skip.residual_type = "bata_ref_frame";
+          skip.point3D_id = point3D_id;
+          skip.image_id = observation.image_id;
+          skip.point2D_idx = observation.point2D_idx;
+          skip.is_lc_observation = true;
+          const std::string skip_reason = options_.use_lc_observations
+                                              ? "track_min_view_gate"
+                                              : "lc_observation_disabled";
+          RecordResidualSkip(skip, skip_reason);
+          if (options_.use_metric_depth_constraint) {
+            skip.residual_type = "metric_depth";
+            RecordResidualSkip(skip, skip_reason);
+          }
+        }
+      }
       continue;
     }
 
@@ -325,7 +889,15 @@ void GlobalPositioner::AddPointToCameraConstraints(
       ceres::CostFunction* scale_prior_cost =
           CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(
               cov_1x1, prior_vec);
-      if (scale_prior_cost == nullptr) continue;
+      if (scale_prior_cost == nullptr) {
+        ResidualLedgerEntry skip;
+        skip.residual_type = "scale_prior";
+        skip.image_id = image_id;
+        skip.dmap_scale_image_id = image_id;
+        skip.loss_bucket = "scale_prior";
+        RecordResidualSkip(skip, "scale_prior_cost_create_failed");
+        continue;
+      }
 
       ceres::LossFunction* obs_count_scaled_loss = nullptr;
       if (cached_loss_scale_prior_) {
@@ -341,8 +913,16 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
       problem_->AddResidualBlock(
           scale_prior_cost, obs_count_scaled_loss, &scale);
+
+      ResidualLedgerEntry residual;
+      residual.residual_type = "scale_prior";
+      residual.image_id = image_id;
+      residual.dmap_scale_image_id = image_id;
+      residual.loss_bucket = "scale_prior";
+      RecordResidualBlock(residual);
     }
   }
+  RecordResidualBucketSummaries();
   VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
           << ", parameter blocks=" << problem_->NumParameterBlocks()
           << ", scales=" << scales_.size()
@@ -377,6 +957,20 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                               reconstruction,
                               /*is_lc_observation=*/true);
     }
+  } else if (ShouldTraceResidualLedger()) {
+    for (const auto& observation : point3D.track.lc_elements) {
+      ResidualLedgerEntry skip;
+      skip.residual_type = "bata_ref_frame";
+      skip.point3D_id = point3D_id;
+      skip.image_id = observation.image_id;
+      skip.point2D_idx = observation.point2D_idx;
+      skip.is_lc_observation = true;
+      RecordResidualSkip(skip, "lc_observation_disabled");
+      if (options_.use_metric_depth_constraint) {
+        skip.residual_type = "metric_depth";
+        RecordResidualSkip(skip, "lc_observation_disabled");
+      }
+    }
   }
 }
 
@@ -386,14 +980,69 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                                Reconstruction& reconstruction,
                                                bool is_lc_observation) {
   Point3D& point3D = reconstruction.Point3D(point3D_id);
-  if (!reconstruction.ExistsImage(observation.image_id)) return;
+  if (!reconstruction.ExistsImage(observation.image_id)) {
+    ResidualLedgerEntry skip;
+    skip.residual_type = "bata_ref_frame";
+    skip.point3D_id = point3D_id;
+    skip.image_id = observation.image_id;
+    skip.point2D_idx = observation.point2D_idx;
+    skip.is_lc_observation = is_lc_observation;
+    RecordResidualSkip(skip, "missing_image");
+    if (options_.use_metric_depth_constraint) {
+      skip.residual_type = "metric_depth";
+      RecordResidualSkip(skip, "missing_image");
+    }
+    return;
+  }
 
   Image& image = reconstruction.Image(observation.image_id);
-  if (!image.HasPose()) return;
+  Camera& camera = reconstruction.Camera(image.CameraId());
+  ResidualLedgerEntry observation_record;
+  observation_record.point3D_id = point3D_id;
+  observation_record.image_id = observation.image_id;
+  observation_record.point2D_idx = observation.point2D_idx;
+  observation_record.frame_id = image.FrameId();
+  observation_record.camera_id = image.CameraId();
+  observation_record.sensor_id = camera.SensorId();
+  observation_record.is_lc_observation = is_lc_observation;
+  observation_record.is_ref_in_frame = image.IsRefInFrame();
+  observation_record.camera_has_prior_focal_length =
+      camera.has_prior_focal_length;
+  observation_record.has_depth_prior =
+      HasValidDepthPriorMetadata(image, observation);
+  if (observation_record.has_depth_prior) {
+    observation_record.depth_prior =
+        image.depth_priors[observation.point2D_idx];
+    observation_record.depth_sigma =
+        image.depth_prior_stddevs[observation.point2D_idx];
+  }
+  observation_record.depth_outlier_source =
+      DepthOutlierSource(depth_outliers_, image, observation);
+  if (options_.use_metric_depth_constraint) {
+    observation_record.dmap_scale_image_id = observation.image_id;
+  }
+
+  if (!image.HasPose()) {
+    observation_record.residual_type =
+        image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
+    RecordResidualSkip(observation_record, "image_without_pose");
+    if (options_.use_metric_depth_constraint) {
+      observation_record.residual_type = "metric_depth";
+      RecordResidualSkip(observation_record, "image_without_pose");
+    }
+    return;
+  }
 
   const std::optional<Eigen::Vector2d> cam_point =
       image.CameraPtr()->CamFromImg(image.Point2D(observation.point2D_idx).xy);
   if (!cam_point.has_value()) {
+    observation_record.residual_type =
+        image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
+    RecordResidualSkip(observation_record, "invalid_keypoint_projection");
+    if (options_.use_metric_depth_constraint) {
+      observation_record.residual_type = "metric_depth";
+      RecordResidualSkip(observation_record, "invalid_keypoint_projection");
+    }
     LOG(WARNING) << "Ignoring feature because it failed to project: point3D_id="
                  << point3D_id << ", image_id=" << observation.image_id
                  << ", feature_id=" << observation.point2D_idx;
@@ -407,6 +1056,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   CHECK_GE(scales_.capacity(), scales_.size())
       << "Not enough capacity was reserved for the scales.";
   double& scale = scales_.emplace_back(1);
+  const size_t scale_index = scales_.size() - 1;
+  RecordScaleObservation(
+      scale_index, point3D_id, observation, is_lc_observation);
 
   if (!options_.generate_scales && random_initialization) {
     const Eigen::Vector3d cam_from_point3D_translation =
@@ -419,10 +1071,15 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   // For calibrated and uncalibrated cameras, use different loss
   // functions
   // Down weight the uncalibrated cameras
-  Camera& camera = reconstruction.Camera(image.CameraId());
   ceres::LossFunction* loss_function =
       (camera.has_prior_focal_length) ? loss_function_ptcam_calibrated_.get()
                                       : loss_function_ptcam_uncalibrated_.get();
+  std::string geometry_loss_bucket =
+      camera.has_prior_focal_length
+          ? "geometry_calibrated"
+          : (options_.apply_uncalibrated_loss_downweight
+                 ? "geometry_uncalibrated_downweighted"
+                 : "geometry_normal_default");
 
   // Geometry-loss cascade. Per-observation route:
   //   is_lc                         -> cached_loss_lc_geometry_
@@ -431,14 +1088,18 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   //   else                          -> cached_loss_normal_geometry_
   if (is_lc_observation && cached_loss_lc_geometry_) {
     loss_function = cached_loss_lc_geometry_.get();
+    geometry_loss_bucket = "geometry_lc";
   } else if (options_.use_metric_depth_constraint) {
     ceres::LossFunction* cascade = nullptr;
     if (observation.is_track_anchor) {
       cascade = cached_loss_normal_geometry_trackstart_.get();
+      geometry_loss_bucket = "geometry_normal_trackstart";
     } else if (observation.is_inlier) {
       cascade = cached_loss_normal_geometry_inlier_.get();
+      geometry_loss_bucket = "geometry_normal_inlier";
     } else {
       cascade = cached_loss_normal_geometry_.get();
+      geometry_loss_bucket = "geometry_normal_default";
     }
     if (cascade != nullptr) {
       loss_function = cascade;
@@ -451,6 +1112,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     // when angular_stddevs is populated; otherwise bare BATA functor.
     // cov_world = R^T diag(sigma^2) R.
     ceres::CostFunction* cost_function = nullptr;
+    bool uses_keypoint_covariance = false;
     if (observation.point2D_idx < image.angular_stddevs.size()) {
       const Eigen::Vector2d& angular_std =
           image.angular_stddevs[observation.point2D_idx];
@@ -468,6 +1130,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       cost_function = CovarianceWeightedCostFunctor<
           BATAPairwiseDirectionCostFunctor>::Create(cov_world,
                                                     cam_from_point3D_dir);
+      uses_keypoint_covariance = cost_function != nullptr;
     }
     if (cost_function == nullptr) {
       cost_function =
@@ -480,10 +1143,20 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                point3D.xyz.data(),
                                &scale);
 
+    ResidualLedgerEntry residual = observation_record;
+    residual.residual_type = "bata_ref_frame";
+    residual.loss_bucket = geometry_loss_bucket;
+    residual.uses_keypoint_covariance = uses_keypoint_covariance;
+    RecordResidualBlock(residual);
+
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint) {
       AddMetricDepthResidual(
           point3D_id, observation, is_lc_observation, reconstruction);
+    } else {
+      ResidualLedgerEntry skip = observation_record;
+      skip.residual_type = "metric_depth";
+      RecordResidualSkip(skip, "metric_depth_disabled");
     }
   } else {
     // If the image is part of a camera rig, use the RigBATA error.
@@ -506,6 +1179,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                  point3D.xyz.data(),
                                  frame_centers_[image.FrameId()].data(),
                                  &scale);
+
+      ResidualLedgerEntry residual = observation_record;
+      residual.residual_type = "bata_constant_rig";
+      residual.loss_bucket = geometry_loss_bucket;
+      RecordResidualBlock(residual);
     } else {
       // If the cam_from_rig contains nan values, it needs to be re-estimated.
       // Initialize cams_in_rig_ if not already done.
@@ -526,6 +1204,16 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                  frame_centers_[image.FrameId()].data(),
                                  cams_in_rig_[sensor_id].data(),
                                  &scale);
+
+      ResidualLedgerEntry residual = observation_record;
+      residual.residual_type = "bata_variable_rig";
+      residual.loss_bucket = geometry_loss_bucket;
+      RecordResidualBlock(residual);
+    }
+    if (!options_.use_metric_depth_constraint) {
+      ResidualLedgerEntry skip = observation_record;
+      skip.residual_type = "metric_depth";
+      RecordResidualSkip(skip, "metric_depth_disabled");
     }
   }
 
@@ -536,11 +1224,37 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                                               const TrackElement& observation,
                                               bool is_lc_observation,
                                               Reconstruction& reconstruction) {
-  if (!reconstruction.ExistsImage(observation.image_id)) return;
+  if (!reconstruction.ExistsImage(observation.image_id)) {
+    ResidualLedgerEntry skip;
+    skip.residual_type = "metric_depth";
+    skip.point3D_id = point3D_id;
+    skip.image_id = observation.image_id;
+    skip.point2D_idx = observation.point2D_idx;
+    skip.is_lc_observation = is_lc_observation;
+    RecordResidualSkip(skip, "missing_image");
+    return;
+  }
   const Image& image = reconstruction.Image(observation.image_id);
+  const Camera& camera = reconstruction.Camera(image.CameraId());
+
+  ResidualLedgerEntry residual;
+  residual.residual_type = "metric_depth";
+  residual.point3D_id = point3D_id;
+  residual.image_id = observation.image_id;
+  residual.point2D_idx = observation.point2D_idx;
+  residual.frame_id = image.FrameId();
+  residual.camera_id = image.CameraId();
+  residual.sensor_id = camera.SensorId();
+  residual.is_lc_observation = is_lc_observation;
+  residual.is_ref_in_frame = image.IsRefInFrame();
+  residual.camera_has_prior_focal_length = camera.has_prior_focal_length;
+  residual.dmap_scale_image_id = observation.image_id;
+  residual.depth_outlier_source =
+      DepthOutlierSource(depth_outliers_, image, observation);
 
   if (observation.point2D_idx >= image.depth_prior_validity.size() ||
       !image.depth_prior_validity[observation.point2D_idx]) {
+    RecordResidualSkip(residual, "missing_depth_validity");
     return;
   }
   THROW_CHECK_LT(observation.point2D_idx, image.depth_priors.size());
@@ -548,8 +1262,18 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
 
   const double depth_prior = image.depth_priors[observation.point2D_idx];
   const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];
+  residual.has_depth_prior = true;
+  residual.depth_prior = depth_prior;
+  residual.depth_sigma = depth_sigma;
 
-  if (depth_prior <= 0.0 || depth_sigma <= 1e-9) return;
+  if (depth_prior <= 0.0) {
+    RecordResidualSkip(residual, "invalid_depth_prior");
+    return;
+  }
+  if (depth_sigma <= 1e-9) {
+    RecordResidualSkip(residual, "invalid_depth_sigma");
+    return;
+  }
 
   // Lazy-insert dmap_scales_ on first valid observation per image.
   if (dmap_scales_.find(observation.image_id) == dmap_scales_.end()) {
@@ -575,7 +1299,10 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                                depth_sigma,
                                CreateMetricDepthOptions(options_));
 
-  if (metric_depth_cost == nullptr) return;
+  if (metric_depth_cost == nullptr) {
+    RecordResidualSkip(residual, "metric_depth_cost_create_failed");
+    return;
+  }
 
   // Outlier dual routing:
   //   depth_outliers_ = runtime geometry-driven filter
@@ -596,12 +1323,15 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   //   TrackElement::is_depth_outlier -> cached_loss_normal_depth_outlier_
   //   else              -> cached_loss_normal_depth_
   ceres::LossFunction* depth_loss = nullptr;
+  std::string depth_loss_bucket = "none";
   const std::pair<image_t, point2D_t> obs_key{observation.image_id,
                                               observation.point2D_idx};
   if (depth_outliers_.count(obs_key) > 0) {
     if (is_lc_observation) {
       // LC outlier: skip depth residual entirely.
       delete metric_depth_cost;
+      residual.loss_bucket = "depth_lc";
+      RecordResidualSkip(residual, "runtime_lc_depth_outlier_skipped");
       return;
     }
     // Non-LC outlier: soft fallback (HuberLoss(1)).
@@ -610,16 +1340,22 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
           options_.loss_soft_outlier_fallback.CreateLossFunction();
     }
     depth_loss = soft_outlier_fallback_loss_.get();
+    depth_loss_bucket = "depth_runtime_outlier_soft_fallback";
   } else if (is_lc_observation) {
     depth_loss = cached_loss_lc_depth_.get();
+    depth_loss_bucket = "depth_lc";
   } else if (observation.is_track_anchor) {
     depth_loss = cached_loss_normal_depth_trackstart_.get();
+    depth_loss_bucket = "depth_normal_trackstart";
   } else if (observation.is_inlier) {
     depth_loss = cached_loss_normal_depth_inlier_.get();
+    depth_loss_bucket = "depth_normal_inlier";
   } else if (observation.is_depth_outlier) {
     depth_loss = cached_loss_normal_depth_outlier_.get();
+    depth_loss_bucket = "depth_normal_external_outlier";
   } else {
     depth_loss = cached_loss_normal_depth_.get();
+    depth_loss_bucket = "depth_normal_default";
   }
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
@@ -628,6 +1364,8 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              frame_centers_[image.FrameId()].data(),
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
+  residual.loss_bucket = depth_loss_bucket;
+  RecordResidualBlock(residual);
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -679,6 +1417,7 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
 void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
   // For the global positioning, do not set any camera to be constant for easier
   // convergence
+  use_gpu_effective_ = false;
 
   // Initialize cams_in_rig_ with random values if optimizing positions.
   if (options_.optimize_positions) {
@@ -777,6 +1516,7 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
 #endif
 
   if (cuda_solver_enabled) {
+    use_gpu_effective_ = true;
     const std::vector<int> gpu_indices = CSVToVector<int>(options_.gpu_index);
     THROW_CHECK_GT(gpu_indices.size(), 0);
     SetBestCudaDevice(gpu_indices[0]);
