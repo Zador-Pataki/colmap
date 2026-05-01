@@ -311,6 +311,8 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
   std::unordered_map<point3D_t, Point3D> selected;
   int cameras_left = static_cast<int>(tracks_per_camera.size());
   for (const auto& [track_length, track_id] : track_lengths) {
+    if (static_cast<int>(selected.size()) >= options.max_num_tracks) break;
+
     const Point3D& src = tracks_full.at(track_id);
 
     // Restrict to selection domain + lc-elements that fall in the
@@ -365,7 +367,6 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
       }
     }
     if (cameras_left == 0) break;
-    if (static_cast<int>(selected.size()) > options.max_num_tracks) break;
   }
   LOG(INFO) << "Subsampled to " << selected.size() << " tracks (dropped "
             << (tracks_full.size() - selected.size()) << ", "

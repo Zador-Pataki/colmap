@@ -883,9 +883,8 @@ TEST(FindTracksForProblem, MaxNumTracksLimit) {
                                         inputs.depth_priors,
                                         inputs.depth_prior_validity,
                                         tracks_full);
-  // The break fires AFTER inserting when size > max_num_tracks, so we
-  // may get max_num_tracks + 1. The key assertion: not all 10 are kept.
-  EXPECT_LE(static_cast<int>(selected.size()), options.max_num_tracks + 1);
+  EXPECT_LE(static_cast<int>(selected.size()), options.max_num_tracks);
+  EXPECT_EQ(selected.size(), 3u);
   EXPECT_LT(selected.size(), tracks_full.size());
 }
 

@@ -129,12 +129,10 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   to.intra_image_consistency_threshold =
       options.track_intra_image_consistency_threshold;
   to.min_num_views_per_track = options.track_min_num_views_per_track;
-  // When the LC second pass is enabled, the helper-side greedy
-  // subsample is bypassed so SubsampleTracksForProblem can run with the
-  // full candidate set including LC observations.
-  to.required_tracks_per_view =
-      options.track_lc_second_pass ? std::numeric_limits<int>::max()
-                                   : options.track_required_tracks_per_view;
+  // Problem selection is owned by SubsampleTracksForProblem. Keep every
+  // helper-side candidate so the quota is applied once, after optional LC
+  // observations have been attached.
+  to.required_tracks_per_view = std::numeric_limits<int>::max();
 
   std::vector<image_pair_t> valid_pair_ids;
   valid_pair_ids.reserve(pose_graph_->NumEdges());
@@ -147,17 +145,15 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
     ignore_match = MakeLoopClosureMatchPredicate(
         valid_pair_ids, *database_cache_->CorrespondenceGraph());
   }
-  auto selected = EstablishTracksFromCorrGraph(
-      valid_pair_ids,
-      *database_cache_->CorrespondenceGraph(),
-      image_id_to_keypoints,
-      to,
-      ignore_match);
+  auto selected =
+      EstablishTracksFromCorrGraph(valid_pair_ids,
+                                   *database_cache_->CorrespondenceGraph(),
+                                   image_id_to_keypoints,
+                                   to,
+                                   ignore_match);
   if (options.track_lc_second_pass) {
     AppendLoopClosureObservations(
-        valid_pair_ids,
-        *database_cache_->CorrespondenceGraph(),
-        selected);
+        valid_pair_ids, *database_cache_->CorrespondenceGraph(), selected);
   }
   for (auto& [point3D_id, point3D] : selected) {
     reconstruction_->AddPoint3D(point3D_id, std::move(point3D));
@@ -189,10 +185,10 @@ void GlobalMapper::SubsampleTracksForProblem(
   }
 
   auto selected = SubsampleTracks(opts,
-                                   registered_image_ids,
-                                   depth_priors,
-                                   depth_prior_validity,
-                                   reconstruction_->Points3D());
+                                  registered_image_ids,
+                                  depth_priors,
+                                  depth_prior_validity,
+                                  reconstruction_->Points3D());
 
   // Sync back: drop everything not in the selected dict, replace tracks
   // present in selected so post-restriction Track elements are written.
