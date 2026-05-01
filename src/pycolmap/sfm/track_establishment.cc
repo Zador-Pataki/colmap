@@ -1,5 +1,5 @@
 // Binding for EstablishTracksFromCorrGraph, AppendLoopClosureObservations,
-// and SubsampleTracks.
+// and FilterTracksForProblem.
 
 #include "colmap/sfm/track_establishment.h"
 
@@ -103,7 +103,7 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
 
 py::dict RunFindTracksForProblem(py::dict images_py,
                                  py::dict tracks_full_py,
-                                 const TrackSubsampleOptions& options) {
+                                 const TrackProblemFilterOptions& options) {
   std::unordered_set<image_t> registered_image_ids;
   std::unordered_map<image_t, std::vector<double>> depth_priors;
   std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
@@ -127,11 +127,11 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   std::unordered_map<point3D_t, Point3D> selected;
   {
     py::gil_scoped_release release;
-    selected = SubsampleTracks(options,
-                               registered_image_ids,
-                               depth_priors,
-                               depth_prior_validity,
-                               tracks_full);
+    selected = FilterTracksForProblem(options,
+                                      registered_image_ids,
+                                      depth_priors,
+                                      depth_prior_validity,
+                                      tracks_full);
   }
 
   py::dict tracks_out;
@@ -157,14 +157,14 @@ void BindTrackEstablishment(py::module& m) {
   MakeDataclass(PyEstOpts);
 
   auto PySubOpts =
-      py::classh<TrackSubsampleOptions>(m, "TrackSubsampleOptions")
+      py::classh<TrackProblemFilterOptions>(m, "TrackProblemFilterOptions")
           .def(py::init<>())
           .def_readwrite("min_num_views_per_track",
-                         &TrackSubsampleOptions::min_num_views_per_track)
+                         &TrackProblemFilterOptions::min_num_views_per_track)
           .def_readwrite("max_num_views_per_track",
-                         &TrackSubsampleOptions::max_num_views_per_track)
+                         &TrackProblemFilterOptions::max_num_views_per_track)
           .def_readwrite("two_view_depth_gate",
-                         &TrackSubsampleOptions::two_view_depth_gate);
+                         &TrackProblemFilterOptions::two_view_depth_gate);
   MakeDataclass(PySubOpts);
 
   m.def("establish_full_tracks",
@@ -182,14 +182,14 @@ void BindTrackEstablishment(py::module& m) {
         "``Track::lc_elements`` from inliers flagged "
         "``ImagePair::are_lc==true`` in ``lc_correspondence_graph`` "
         "(falls back to ``correspondence_graph`` if not provided). "
-        "The helper-side greedy subsample is bypassed in LC mode.");
+        "The helper-side greedy selection is bypassed in LC mode.");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,
         "images"_a,
         "tracks_full"_a,
         "options"_a,
-        "Greedy length-sorted subsample of ``tracks_full``. Reads "
+        "Filter ``tracks_full`` to tracks eligible for the GP problem. Reads "
         "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
         "registered image ids from the keys of the filtered ``images`` dict.");
 }

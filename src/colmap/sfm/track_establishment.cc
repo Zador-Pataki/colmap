@@ -332,8 +332,8 @@ void AppendLoopClosureObservations(
   }
 }
 
-std::unordered_map<point3D_t, Point3D> SubsampleTracks(
-    const TrackSubsampleOptions& options,
+std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
+    const TrackProblemFilterOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
     const std::unordered_map<image_t, std::vector<double>>& depth_priors,
     const std::unordered_map<image_t, std::vector<bool>>& depth_prior_validity,

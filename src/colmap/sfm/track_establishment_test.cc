@@ -180,7 +180,7 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 }
 
 // ============================================================================
-// FindTracksForProblem (greedy subsample + 2-view depth gate)
+// FindTracksForProblem (problem-track filter + 2-view depth gate)
 // ============================================================================
 
 // Build an Image with N features and (optionally) all-valid depth
@@ -222,17 +222,18 @@ Point3D MakePoint3DFromElementsAndLC(
   return p;
 }
 
-// Project an ``images`` test fixture into the three dict inputs SubsampleTracks
-// consumes: registered_image_ids, depth_priors, depth_prior_validity.
-struct SubsampleInputs {
+// Project an ``images`` test fixture into the three dict inputs consumed by
+// FilterTracksForProblem: registered_image_ids, depth_priors, and
+// depth_prior_validity.
+struct ProblemFilterInputs {
   std::unordered_set<image_t> registered_image_ids;
   std::unordered_map<image_t, std::vector<double>> depth_priors;
   std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
 };
 
-SubsampleInputs MakeSubsampleInputs(
+ProblemFilterInputs MakeProblemFilterInputs(
     const std::unordered_map<image_t, Image>& images) {
-  SubsampleInputs inputs;
+  ProblemFilterInputs inputs;
   for (const auto& [image_id, image] : images) {
     inputs.registered_image_ids.insert(image_id);
     inputs.depth_priors.emplace(image_id, image.depth_priors);
@@ -242,10 +243,10 @@ SubsampleInputs MakeSubsampleInputs(
 }
 
 // LengthFilter: with ``min_num_views_per_track=10`` every track here is too
-// short, so SubsampleTracks returns empty. Loosening to 2 surfaces every input
-// track (assuming the per-view greedy quota is satisfied).
+// short, so FilterTracksForProblem returns empty. Loosening to 2 surfaces
+// every input track.
 //
-// Drives SubsampleTracks.
+// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, LengthFilter) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 5));
@@ -257,30 +258,30 @@ TEST(FindTracksForProblem, LengthFilter) {
     tracks_full.emplace(f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
   }
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
   // High-min variant: tracks have length 3, demand 10.
   {
-    TrackSubsampleOptions options;
+    TrackProblemFilterOptions options;
     options.min_num_views_per_track = 10;
-    const auto selected = SubsampleTracks(options,
-                                          inputs.registered_image_ids,
-                                          inputs.depth_priors,
-                                          inputs.depth_prior_validity,
-                                          tracks_full);
+    const auto selected = FilterTracksForProblem(options,
+                                                 inputs.registered_image_ids,
+                                                 inputs.depth_priors,
+                                                 inputs.depth_prior_validity,
+                                                 tracks_full);
     EXPECT_EQ(selected.size(), 0u);
     EXPECT_TRUE(selected.empty());
   }
 
   // Low-min variant: every length-3 track survives.
   {
-    TrackSubsampleOptions options;
+    TrackProblemFilterOptions options;
     options.min_num_views_per_track = 2;
-    const auto selected = SubsampleTracks(options,
-                                          inputs.registered_image_ids,
-                                          inputs.depth_priors,
-                                          inputs.depth_prior_validity,
-                                          tracks_full);
+    const auto selected = FilterTracksForProblem(options,
+                                                 inputs.registered_image_ids,
+                                                 inputs.depth_priors,
+                                                 inputs.depth_prior_validity,
+                                                 tracks_full);
     EXPECT_EQ(selected.size(), 5u);
   }
 }
@@ -293,22 +294,22 @@ TEST(FindTracksForProblem, LengthFilterRequiresRegularElements) {
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, MakePoint3DFromElementsAndLC({{1, 0}}, {{2, 0}}));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
 
   EXPECT_TRUE(selected.empty());
 }
 
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
 //
-// Drives SubsampleTracks.
+// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, MaxLengthFilter) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 5; ++i) {
@@ -321,16 +322,16 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
         f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}, {4, f}, {5, f}}));
   }
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.max_num_views_per_track = 4;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_EQ(selected.size(), 0u);
   EXPECT_TRUE(selected.empty());
 }
@@ -338,7 +339,7 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
 // TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
 // valid depth prior is dropped by the 2-view depth gate.
 //
-// Drives SubsampleTracks.
+// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   std::unordered_map<image_t, Image> images;
   // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
@@ -352,16 +353,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.two_view_depth_gate = true;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_EQ(selected.size(), 0u);
   EXPECT_TRUE(selected.empty());
 }
@@ -370,7 +371,7 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
 // Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
 // uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
 //
-// Drives SubsampleTracks.
+// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeImage(1, 3);
@@ -384,16 +385,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
   tracks_full.emplace(1, MakePoint3DFromElements({{1, 1}, {2, 1}}));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.two_view_depth_gate = true;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_EQ(selected.size(), 1u);
   ASSERT_EQ(selected.count(0), 1u);
   EXPECT_EQ(selected.count(1), 0u);
@@ -403,7 +404,7 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 // LC observations may augment admitted tracks but must not satisfy the
 // post-domain regular-observation lower-bound check.
 //
-// Drives SubsampleTracks.
+// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
@@ -416,16 +417,16 @@ TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, std::move(lc_only));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.two_view_depth_gate = true;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_TRUE(selected.empty());
 }
 
@@ -446,16 +447,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, std::move(point3D));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.two_view_depth_gate = true;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_TRUE(selected.empty());
 }
 
@@ -479,16 +480,16 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, std::move(point3D));
 
-  const auto inputs = MakeSubsampleInputs(images);
+  const auto inputs = MakeProblemFilterInputs(images);
 
-  TrackSubsampleOptions options;
+  TrackProblemFilterOptions options;
   options.min_num_views_per_track = 2;
   options.two_view_depth_gate = true;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
+  const auto selected = FilterTracksForProblem(options,
+                                               inputs.registered_image_ids,
+                                               inputs.depth_priors,
+                                               inputs.depth_prior_validity,
+                                               tracks_full);
   EXPECT_TRUE(selected.empty());
 }
 
