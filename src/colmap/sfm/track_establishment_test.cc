@@ -507,6 +507,8 @@ void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
   // created.
   const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
   auto& image_pair = corr_graph.MutableImagePairs().at(pair_id);
+  image_pair.image_id1 = image_id1;
+  image_pair.image_id2 = image_id2;
   Eigen::MatrixXi matches_mat(static_cast<int>(matches.size()), 2);
   for (size_t i = 0; i < matches.size(); ++i) {
     matches_mat(static_cast<int>(i), 0) = matches[i].first;
@@ -775,6 +777,36 @@ TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
     if (minted_endpoint) {
       EXPECT_GE(tid, 10u) << "minted id " << tid << " collided with native";
     }
+  }
+}
+
+// A non-LC match that reuses an LC endpoint is still suppressed in the
+// first-pass union-find. This preserves the observation-taint semantics:
+// once an observation participates in an LC inlier, it enters tracks only via
+// lc_elements.
+TEST(ProcessLoopClosurePairs, LcEndpointSuppressesOtherMatches) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 1);
+
+  // img1:0 participates in an LC match with img2:0 and a non-LC match with
+  // img3:0. The latter must not create a regular img1-img3 track.
+  AddImagePairWithLC(corr_graph, 1, 2, {{0, 0}}, {0}, {0});
+  AddImagePairWithLC(corr_graph, 1, 3, {{0, 0}}, {0}, {});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3}, 1);
+  const auto pair_ids = CollectPairIds(corr_graph);
+  const auto ignore_match = MakeLoopClosureMatchPredicate(pair_ids, corr_graph);
+  EXPECT_TRUE(ignore_match(1, 0, 3, 0));
+  EXPECT_TRUE(ignore_match(3, 0, 1, 0));
+
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 1;
+  const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
+
+  EXPECT_EQ(tracks.size(), 2u);
+  for (const auto& [tid, p3d] : tracks) {
+    EXPECT_FALSE(TrackHasElement(p3d.track, 3, 0));
+    EXPECT_FALSE(TrackHasLCElement(p3d.track, 3, 0));
   }
 }
 
