@@ -445,6 +445,7 @@ bool GlobalMapper::Solve(const GlobalMapperOptions& options) {
     Timer run_timer;
     run_timer.Start();
     EstablishTracks(opts);
+    SubsampleTracksForProblem(opts);
     LOG(INFO) << "Track establishment done in " << run_timer.ElapsedSeconds()
               << " seconds";
   }

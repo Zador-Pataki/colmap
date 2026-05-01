@@ -152,5 +152,37 @@ TEST(GlobalMapper, WithNoiseAndOutliers) {
                                  /*num_obs_tolerance=*/0.02));
 }
 
+TEST(GlobalMapper, SolveAppliesTrackSubsampleOptions) {
+  SetPRNGSeed(1);
+  const auto database_path = CreateTestDir() / "database.db";
+
+  auto database = Database::Open(database_path);
+  Reconstruction gt_reconstruction;
+  SyntheticDatasetOptions synthetic_dataset_options;
+  synthetic_dataset_options.num_rigs = 2;
+  synthetic_dataset_options.num_cameras_per_rig = 1;
+  synthetic_dataset_options.num_frames_per_rig = 4;
+  synthetic_dataset_options.num_points3D = 50;
+  synthetic_dataset_options.two_view_geometry_has_relative_pose = true;
+  SynthesizeDataset(
+      synthetic_dataset_options, &gt_reconstruction, database.get());
+
+  auto reconstruction = std::make_shared<Reconstruction>();
+
+  GlobalMapper global_mapper(CreateDatabaseCache(*database));
+  global_mapper.BeginReconstruction(reconstruction);
+
+  GlobalMapperOptions options;
+  options.skip_global_positioning = true;
+  options.skip_bundle_adjustment = true;
+  options.skip_retriangulation = true;
+  options.track_max_num_tracks = 3;
+
+  ASSERT_TRUE(global_mapper.Solve(options));
+  EXPECT_GT(reconstruction->NumPoints3D(), 0);
+  // The greedy cap stops after inserting the track that crosses the limit.
+  EXPECT_LE(reconstruction->NumPoints3D(), options.track_max_num_tracks + 1);
+}
+
 }  // namespace
 }  // namespace colmap
