@@ -49,7 +49,6 @@ Image::Image(const Image& other)
       is_depth_outlier(other.is_depth_outlier),
       is_track_anchor(other.is_track_anchor),
       angular_stddevs(other.angular_stddevs),
-      is_registered(other.is_registered),
       features(other.features),
       features_undist(other.features_undist),
       // Private fields (in declaration order).
@@ -89,7 +88,6 @@ Image& Image::operator=(const Image& other) {
     is_depth_outlier = other.is_depth_outlier;
     is_track_anchor = other.is_track_anchor;
     angular_stddevs = other.angular_stddevs;
-    is_registered = other.is_registered;
     features = other.features;
     features_undist = other.features_undist;
   }

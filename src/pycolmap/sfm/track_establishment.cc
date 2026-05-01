@@ -100,9 +100,7 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   for (auto item : images_py) {
     const auto image_id = py::cast<image_t>(item.first);
     const auto image = py::cast<Image>(item.second);
-    if (image.is_registered) {
-      registered_image_ids.insert(image_id);
-    }
+    registered_image_ids.insert(image_id);
     if (options.two_view_depth_gate) {
       depth_priors.emplace(image_id, image.depth_priors);
       depth_prior_validity.emplace(image_id, image.depth_prior_validity);
@@ -186,7 +184,5 @@ void BindTrackEstablishment(py::module& m) {
         "options"_a,
         "Greedy length-sorted subsample of ``tracks_full``. Reads "
         "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
-        "``Image::is_registered`` from ``images``. ``correspondence_graph`` is "
-        "accepted for symmetry with ``establish_full_tracks`` but "
-        "currently unused by the subsample.");
+        "registered image ids from the keys of the filtered ``images`` dict.");
 }

@@ -176,14 +176,13 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 // FindTracksForProblem (greedy subsample + 2-view depth gate)
 // ============================================================================
 
-// Build a registered Image with N features and (optionally) all-valid depth
+// Build an Image with N features and (optionally) all-valid depth
 // priors. Each prior is set to (idx + 1) so they are strictly > 1e-6.
-Image MakeRegisteredImage(image_t image_id,
-                          int num_features,
-                          bool with_valid_depths = true) {
+Image MakeImage(image_t image_id,
+                int num_features,
+                bool with_valid_depths = true) {
   Image image;
   image.SetImageId(image_id);
-  image.is_registered = true;
   image.features.assign(num_features, Eigen::Vector2d::Zero());
   if (with_valid_depths) {
     image.depth_priors.assign(num_features, 1.0);
@@ -218,9 +217,7 @@ SubsampleInputs MakeSubsampleInputs(
     const std::unordered_map<image_t, Image>& images) {
   SubsampleInputs inputs;
   for (const auto& [image_id, image] : images) {
-    if (image.is_registered) {
-      inputs.registered_image_ids.insert(image_id);
-    }
+    inputs.registered_image_ids.insert(image_id);
     inputs.depth_priors.emplace(image_id, image.depth_priors);
     inputs.depth_prior_validity.emplace(image_id, image.depth_prior_validity);
   }
@@ -234,9 +231,9 @@ SubsampleInputs MakeSubsampleInputs(
 // Drives SubsampleTracks.
 TEST(FindTracksForProblem, LengthFilter) {
   std::unordered_map<image_t, Image> images;
-  images.emplace(1, MakeRegisteredImage(1, 5));
-  images.emplace(2, MakeRegisteredImage(2, 5));
-  images.emplace(3, MakeRegisteredImage(3, 5));
+  images.emplace(1, MakeImage(1, 5));
+  images.emplace(2, MakeImage(2, 5));
+  images.emplace(3, MakeImage(3, 5));
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
   for (point2D_t f = 0; f < 5; ++f) {
@@ -280,7 +277,7 @@ TEST(FindTracksForProblem, LengthFilter) {
 TEST(FindTracksForProblem, MaxLengthFilter) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 5; ++i) {
-    images.emplace(i, MakeRegisteredImage(i, 3));
+    images.emplace(i, MakeImage(i, 3));
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
@@ -312,11 +309,11 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
 TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   std::unordered_map<image_t, Image> images;
   // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
-  Image img1 = MakeRegisteredImage(1, 3);
+  Image img1 = MakeImage(1, 3);
   img1.depth_prior_validity[0] = false;
   img1.depth_priors[0] = 0.0;
   images.emplace(1, std::move(img1));
-  images.emplace(2, MakeRegisteredImage(2, 3));  // all valid
+  images.emplace(2, MakeImage(2, 3));  // all valid
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
   // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
@@ -344,12 +341,12 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
 // Drives SubsampleTracks.
 TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   std::unordered_map<image_t, Image> images;
-  Image img1 = MakeRegisteredImage(1, 3);
+  Image img1 = MakeImage(1, 3);
   // Feature 0: valid, prior=1.0  -> survives
   // Feature 1: valid flag true, prior=1e-6 -> caught by ``<= 1e-6`` -> drops
   img1.depth_priors[1] = 1e-6;
   images.emplace(1, std::move(img1));
-  images.emplace(2, MakeRegisteredImage(2, 3));
+  images.emplace(2, MakeImage(2, 3));
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
@@ -379,7 +376,7 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 TEST(FindTracksForProblem, GreedyQuota) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeRegisteredImage(i, 5));
+    images.emplace(i, MakeImage(i, 5));
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
@@ -423,7 +420,7 @@ TEST(FindTracksForProblem, GreedyQuota) {
 TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeRegisteredImage(i, 3));
+    images.emplace(i, MakeImage(i, 3));
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
@@ -800,7 +797,7 @@ TEST(ProcessLoopClosurePairs, BothSameTrack) {
 TEST(FindTracksForProblem, MaxNumTracksLimit) {
   std::unordered_map<image_t, Image> images;
   for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeRegisteredImage(i, 10));
+    images.emplace(i, MakeImage(i, 10));
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
