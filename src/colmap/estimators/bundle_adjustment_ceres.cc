@@ -32,10 +32,10 @@
 #include "colmap/estimators/alignment.h"
 #include "colmap/estimators/cost_functions/depth_prior.h"
 #include "colmap/estimators/cost_functions/manifold.h"
-#include "colmap/estimators/cost_functions/weighted_reprojection_error.h"
 #include "colmap/estimators/cost_functions/pose_prior.h"
 #include "colmap/estimators/cost_functions/reprojection_error.h"
 #include "colmap/estimators/cost_functions/utils.h"
+#include "colmap/estimators/cost_functions/weighted_reprojection_error.h"
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
@@ -673,8 +673,8 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
     Rigid3d& rig_from_world = image.FramePtr()->RigFromWorld();
 
     // Add residuals to bundle adjustment problem.
-    const bool use_covariances = options_.use_keypoint_covariances &&
-                                 image.HasPixelCovariances();
+    const bool use_covariances =
+        options_.use_keypoint_covariances && image.HasPixelCovariances();
     size_t num_observations = 0;
     point2D_t point2D_idx = 0;
     for (const Point2D& point2D : image.Points2D()) {
@@ -697,32 +697,27 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
       num_observations += 1;
       point3D_num_observations_[point2D.point3D_id] += 1;
 
-      const bool use_weighted = use_covariances &&
-                                point2D_idx < image.PixelCholeskyXY().size();
+      const bool use_weighted =
+          use_covariances && point2D_idx < image.PixelCholeskyXY().size();
 
       if (use_weighted) {
         const Eigen::Vector3d& chol = image.PixelCholeskyXY()[point2D_idx];
         if (constant_cam_from_world) {
           problem_->AddResidualBlock(
               CreateCameraCostFunction<
-                  WeightedReprojErrorConstantPoseCostFunctor>(
-                  camera.model_id,
-                  point2D.xy,
-                  rig_from_world,
-                  chol[0],
-                  chol[1],
-                  chol[2]),
+                  WeightedReprojErrorConstantPoseCostFunctor>(camera.model_id,
+                                                              point2D.xy,
+                                                              rig_from_world,
+                                                              chol[0],
+                                                              chol[1],
+                                                              chol[2]),
               loss_function_.get(),
               point3D.xyz.data(),
               camera.params.data());
         } else {
           problem_->AddResidualBlock(
               CreateCameraCostFunction<WeightedReprojErrorCostFunctor>(
-                  camera.model_id,
-                  point2D.xy,
-                  chol[0],
-                  chol[1],
-                  chol[2]),
+                  camera.model_id, point2D.xy, chol[0], chol[1], chol[2]),
               loss_function_.get(),
               point3D.xyz.data(),
               rig_from_world.params.data(),
@@ -738,8 +733,8 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
               camera.params.data());
         } else {
           problem_->AddResidualBlock(
-              CreateCameraCostFunction<ReprojErrorCostFunctor>(
-                  camera.model_id, point2D.xy),
+              CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
+                                                               point2D.xy),
               loss_function_.get(),
               point3D.xyz.data(),
               rig_from_world.params.data(),
@@ -1182,6 +1177,9 @@ void DepthPriorBundleAdjuster(
 
   Image& image = reconstruction.Image(image_id);
   double* pose_params = image.FramePtr()->RigFromWorld().params.data();
+  if (!problem->HasParameterBlock(shift_scale_ptr)) {
+    problem->AddParameterBlock(shift_scale_ptr, 2);
+  }
 
   for (size_t i = 0; i < point3D_ids.size(); ++i) {
     Point3D& point3D = reconstruction.Point3D(point3D_ids[i]);
@@ -1203,9 +1201,21 @@ void DepthPriorBundleAdjuster(
           final_loss, loss_magnitudes[i], ceres::TAKE_OWNERSHIP);
     }
 
-    problem->AddResidualBlock(
-        cost_function, final_loss, pose_params, point3D.xyz.data(),
-        shift_scale_ptr);
+    problem->AddResidualBlock(cost_function,
+                              final_loss,
+                              pose_params,
+                              point3D.xyz.data(),
+                              shift_scale_ptr);
+  }
+
+  if (fix_shift && fix_scale) {
+    problem->SetParameterBlockConstant(shift_scale_ptr);
+  } else if (fix_shift || fix_scale) {
+    std::vector<int> constant_parameters;
+    if (fix_shift) constant_parameters.push_back(0);
+    if (fix_scale) constant_parameters.push_back(1);
+    problem->SetManifold(shift_scale_ptr,
+                         new ceres::SubsetManifold(2, constant_parameters));
   }
 }
 

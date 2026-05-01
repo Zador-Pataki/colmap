@@ -81,8 +81,7 @@ inline bool DepthOutlierFlag(const Image& image,
 
 size_t NumObservationsForMinViewGate(const Track& track,
                                      bool use_lc_observations) {
-  return track.Length() +
-         (use_lc_observations ? track.lc_elements.size() : 0);
+  return track.Length() + (use_lc_observations ? track.lc_elements.size() : 0);
 }
 
 }  // namespace
@@ -542,6 +541,8 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
       !image.depth_prior_validity[observation.point2D_idx]) {
     return;
   }
+  THROW_CHECK_LT(observation.point2D_idx, image.depth_priors.size());
+  THROW_CHECK_LT(observation.point2D_idx, image.depth_prior_stddevs.size());
 
   const double depth_prior = image.depth_priors[observation.point2D_idx];
   const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];

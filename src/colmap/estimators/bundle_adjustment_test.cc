@@ -434,8 +434,8 @@ TEST(CovarianceBA, RunsWithoutCrash) {
 
   // Set identity Cholesky on all images (equivalent to unweighted)
   for (const auto& [img_id, img] : reconstruction.Images()) {
-    std::vector<Eigen::Vector3d> chol(
-        img.NumPoints2D(), Eigen::Vector3d(1.0, 0.0, 1.0));
+    std::vector<Eigen::Vector3d> chol(img.NumPoints2D(),
+                                      Eigen::Vector3d(1.0, 0.0, 1.0));
     reconstruction.Image(img_id).SetPixelCholeskyXY(chol);
   }
 
@@ -467,8 +467,8 @@ TEST(CovarianceBA, IgnoredWhenDisabled) {
 
   // Set non-identity Cholesky that would change results
   for (const auto& [img_id, img] : reconstruction.Images()) {
-    std::vector<Eigen::Vector3d> chol(
-        img.NumPoints2D(), Eigen::Vector3d(2.0, 0.5, 3.0));
+    std::vector<Eigen::Vector3d> chol(img.NumPoints2D(),
+                                      Eigen::Vector3d(2.0, 0.5, 3.0));
     reconstruction.Image(img_id).SetPixelCholeskyXY(chol);
   }
 
@@ -552,6 +552,77 @@ TEST(DepthPriorBA, ConvergesOnSyntheticData) {
   // shift should be near 0, scale should be near 0 (depths are GT)
   EXPECT_NEAR(shift_scale[0], 0.0, 0.5);
   EXPECT_NEAR(shift_scale[1], 0.0, 0.5);
+}
+
+TEST(DepthPriorBA, FixShiftScaleFlagsConstrainParameterBlock) {
+  SetPRNGSeed(0);
+  Reconstruction reconstruction;
+  SyntheticDatasetOptions opts;
+  opts.num_rigs = 1;
+  opts.num_cameras_per_rig = 1;
+  opts.num_frames_per_rig = 3;
+  opts.num_points3D = 20;
+  SynthesizeDataset(opts, &reconstruction);
+
+  const image_t image_id = *reconstruction.RegImageIds().begin();
+  const Image& image = reconstruction.Image(image_id);
+
+  std::vector<point3D_t> point3D_ids;
+  std::vector<double> depths;
+  for (point2D_t idx = 0; idx < image.NumPoints2D(); ++idx) {
+    if (!image.Point2D(idx).HasPoint3D()) continue;
+    const point3D_t point3D_id = image.Point2D(idx).point3D_id;
+    const Point3D& point3D = reconstruction.Point3D(point3D_id);
+    const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D.xyz;
+    if (point_cam.z() <= 0) continue;
+    point3D_ids.push_back(point3D_id);
+    depths.push_back(point_cam.z());
+    break;
+  }
+  ASSERT_FALSE(point3D_ids.empty());
+
+  const std::vector<double> loss_magnitudes(point3D_ids.size(), 1.0);
+  const std::vector<double> loss_params(point3D_ids.size(), 1.0);
+  const std::vector<CeresBundleAdjustmentOptions::LossFunctionType> loss_types(
+      point3D_ids.size(),
+      CeresBundleAdjustmentOptions::LossFunctionType::TRIVIAL);
+
+  {
+    ceres::Problem problem;
+    double shift_scale[2] = {0.0, 0.0};
+    DepthPriorBundleAdjuster(&problem,
+                             image_id,
+                             point3D_ids,
+                             depths,
+                             loss_magnitudes,
+                             loss_params,
+                             loss_types,
+                             shift_scale,
+                             reconstruction,
+                             false,
+                             true,
+                             false);
+    EXPECT_EQ(problem.ParameterBlockSize(shift_scale), 2);
+    EXPECT_EQ(problem.ParameterBlockTangentSize(shift_scale), 1);
+  }
+
+  {
+    ceres::Problem problem;
+    double shift_scale[2] = {0.0, 0.0};
+    DepthPriorBundleAdjuster(&problem,
+                             image_id,
+                             point3D_ids,
+                             depths,
+                             loss_magnitudes,
+                             loss_params,
+                             loss_types,
+                             shift_scale,
+                             reconstruction,
+                             false,
+                             true,
+                             true);
+    EXPECT_TRUE(problem.IsParameterBlockConstant(shift_scale));
+  }
 }
 
 }  // namespace

@@ -21,16 +21,14 @@ inline uint64_t EncodeObservationKey(image_t image_id, point2D_t feature_id) {
 }
 
 void ValidateLoopClosureImagePairMetadata(
-    image_pair_t pair_id,
-    const CorrespondenceGraph::ImagePair& image_pair) {
+    image_pair_t pair_id, const CorrespondenceGraph::ImagePair& image_pair) {
   const int num_matches = image_pair.matches.rows();
   THROW_CHECK_EQ(image_pair.are_lc.size(), static_cast<size_t>(num_matches))
       << "Malformed LC metadata for image pair " << pair_id
       << ": are_lc.size() must match matches.rows()";
   for (const int idx : image_pair.inliers) {
-    THROW_CHECK_GE(idx, 0)
-        << "Malformed LC metadata for image pair " << pair_id
-        << ": negative inlier index";
+    THROW_CHECK_GE(idx, 0) << "Malformed LC metadata for image pair " << pair_id
+                           << ": negative inlier index";
     THROW_CHECK_LT(idx, num_matches)
         << "Malformed LC metadata for image pair " << pair_id
         << ": inlier index outside matches.rows()";
@@ -128,8 +126,8 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     };
     if (matches.rows() > 0 || !image_pair.inliers.empty()) {
       for (const int idx : image_pair.inliers) {
-        THROW_CHECK_GE(idx, 0) << "Negative inlier index for image pair "
-                               << pair_id;
+        THROW_CHECK_GE(idx, 0)
+            << "Negative inlier index for image pair " << pair_id;
         THROW_CHECK_LT(idx, matches.rows())
             << "Inlier index outside matches.rows() for image pair " << pair_id;
         union_match(static_cast<point2D_t>(matches(idx, 0)),
@@ -382,14 +380,23 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     for (const auto& lc_el : src.track.lc_elements) {
       if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
+      distinct_image_ids.insert(lc_el.image_id);
     }
-    if (candidate.track.Length() <
+    const size_t candidate_total_observations =
+        candidate.track.Length() + candidate.track.lc_elements.size();
+    if (candidate_total_observations <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
     }
     if (options.two_view_depth_gate && distinct_image_ids.size() == 2) {
       bool depth_ok = true;
       for (const auto& el : candidate.track.Elements()) {
+        if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
+          depth_ok = false;
+          break;
+        }
+      }
+      for (const auto& el : candidate.track.lc_elements) {
         if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
           depth_ok = false;
           break;
@@ -403,6 +410,16 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     // element regardless of whether the track was added.
     bool added = false;
     for (const auto& el : candidate.track.Elements()) {
+      auto& count = tracks_per_camera[el.image_id];
+      if (count > options.required_tracks_per_view) continue;
+      ++count;
+      if (count > options.required_tracks_per_view) --cameras_left;
+      if (!added) {
+        selected.emplace(track_id, candidate);
+        added = true;
+      }
+    }
+    for (const auto& el : candidate.track.lc_elements) {
       auto& count = tracks_per_camera[el.image_id];
       if (count > options.required_tracks_per_view) continue;
       ++count;

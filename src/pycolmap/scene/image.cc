@@ -115,7 +115,9 @@ void BindSceneImage(py::module& m) {
               return py::none();
             }
           },
-          &Image::SetCameraPtr,
+          py::cpp_function(
+              [](Image& self, Camera* camera) { self.SetCameraPtr(camera); },
+              py::keep_alive<1, 2>()),
           "The associated camera object.")
       .def_property(
           "frame",
@@ -126,7 +128,9 @@ void BindSceneImage(py::module& m) {
               return py::none();
             }
           },
-          &Image::SetFramePtr,
+          py::cpp_function(
+              [](Image& self, Frame* frame) { self.SetFramePtr(frame); },
+              py::keep_alive<1, 2>()),
           "The associated frame object.")
       .def_property("name",
                     py::overload_cast<>(&Image::Name),

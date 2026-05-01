@@ -212,6 +212,16 @@ Point3D MakePoint3DFromElements(
   return p;
 }
 
+Point3D MakePoint3DFromElementsAndLC(
+    const std::vector<std::pair<image_t, point2D_t>>& elements,
+    const std::vector<std::pair<image_t, point2D_t>>& lc_elements) {
+  Point3D p = MakePoint3DFromElements(elements);
+  for (const auto& [image_id, point2D_idx] : lc_elements) {
+    p.track.lc_elements.emplace_back(image_id, point2D_idx);
+  }
+  return p;
+}
+
 // Project an ``images`` test fixture into the three dict inputs SubsampleTracks
 // consumes: registered_image_ids, depth_priors, depth_prior_validity.
 struct SubsampleInputs {
@@ -275,6 +285,30 @@ TEST(FindTracksForProblem, LengthFilter) {
                                           tracks_full);
     EXPECT_EQ(selected.size(), 5u);
   }
+}
+
+TEST(FindTracksForProblem, LengthFilterCountsRegisteredLCElements) {
+  std::unordered_map<image_t, Image> images;
+  images.emplace(1, MakeImage(1, 5));
+  images.emplace(2, MakeImage(2, 5));
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, MakePoint3DFromElementsAndLC({{1, 0}}, {{2, 0}}));
+
+  const auto inputs = MakeSubsampleInputs(images);
+
+  TrackSubsampleOptions options;
+  options.min_num_views_per_track = 2;
+  options.required_tracks_per_view = 1000;
+  const auto selected = SubsampleTracks(options,
+                                        inputs.registered_image_ids,
+                                        inputs.depth_priors,
+                                        inputs.depth_prior_validity,
+                                        tracks_full);
+
+  ASSERT_EQ(selected.size(), 1u);
+  EXPECT_EQ(selected.at(0).track.Length(), 1u);
+  EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
 }
 
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
@@ -374,11 +408,11 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 }
 
 // LC-only two-observation tracks have one regular element and one LC element.
-// The post-domain lower-bound check intentionally requires enough regular
-// observations, preserving the pre-colmap4 fork behavior.
+// The post-domain lower-bound check counts both, matching the pre-domain
+// length filter semantics.
 //
 // Drives SubsampleTracks.
-TEST(FindTracksForProblem, LcOnlyTrackDoesNotSatisfyPostDomainMinViews) {
+TEST(FindTracksForProblem, LcElementsSatisfyPostDomainMinViews) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
   images.emplace(2, MakeImage(2, 3));
@@ -401,7 +435,9 @@ TEST(FindTracksForProblem, LcOnlyTrackDoesNotSatisfyPostDomainMinViews) {
                                         inputs.depth_priors,
                                         inputs.depth_prior_validity,
                                         tracks_full);
-  EXPECT_TRUE(selected.empty());
+  ASSERT_EQ(selected.size(), 1u);
+  EXPECT_EQ(selected.at(0).track.Length(), 1u);
+  EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
 }
 
 // A one-regular + one-LC two-view candidate does not satisfy the post-domain
@@ -435,9 +471,9 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   EXPECT_TRUE(selected.empty());
 }
 
-// Invalid depth on the LC endpoint does not matter for the 2-view depth gate;
-// LC-only support still cannot bypass the regular-observation lower bound.
-TEST(FindTracksForProblem, TwoViewDepthGate_IgnoresInvalidLcEndpoint) {
+// Invalid depth on the LC endpoint now matters because LC observations count
+// toward the two-view depth gate.
+TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
   Image img2 = MakeImage(2, 3);
@@ -865,8 +901,7 @@ TEST(ProcessLoopClosurePairs, NonLcMatchSharingLcEndpointStillBuildsTrack) {
   EXPECT_EQ(tracks.size(), 1u);
   bool found_regular_track = false;
   for (const auto& [tid, p3d] : tracks) {
-    if (TrackHasElement(p3d.track, 1, 0) &&
-        TrackHasElement(p3d.track, 3, 0)) {
+    if (TrackHasElement(p3d.track, 1, 0) && TrackHasElement(p3d.track, 3, 0)) {
       found_regular_track = true;
       EXPECT_TRUE(TrackHasLCElement(p3d.track, 2, 0));
     }
