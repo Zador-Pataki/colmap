@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace colmap {
@@ -56,14 +57,15 @@ bool HasValidDepthPrior(
 MatchPredicate MakeLoopClosureMatchPredicate(
     const std::vector<image_pair_t>& valid_pair_ids,
     const CorrespondenceGraph& corr_graph) {
-  // Build a set of (image_id, point2D_idx) keys that appear as inliers on
-  // LC-flagged matches. Any match touching one of these observations is
-  // suppressed in the first union-find pass so that LC observations only
-  // enter tracks via AppendLoopClosureObservations.
-  auto lc_obs = std::make_shared<std::unordered_set<uint64_t>>();
+  // Build a set of exact LC-flagged match pairs. Only those pairwise
+  // constraints are suppressed from the first union-find pass; the same
+  // endpoint may still participate in regular tracks through non-LC matches.
+  using LCKey = std::pair<uint64_t, uint64_t>;
+  auto lc_matches = std::make_shared<std::set<LCKey>>();
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto it = corr_graph.ImagePairsMap().find(pair_id);
     if (it == corr_graph.ImagePairsMap().end()) continue;
+    const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const auto& image_pair = it->second;
     ValidateLoopClosureImagePairMetadata(pair_id, image_pair);
     const Eigen::MatrixXi& matches = image_pair.matches;
@@ -71,19 +73,21 @@ MatchPredicate MakeLoopClosureMatchPredicate(
     const std::vector<bool>& are_lc = image_pair.are_lc;
     for (const int idx : inliers) {
       if (are_lc[idx]) {
-        lc_obs->insert(EncodeObservationKey(
-            image_pair.image_id1, static_cast<point2D_t>(matches(idx, 0))));
-        lc_obs->insert(EncodeObservationKey(
-            image_pair.image_id2, static_cast<point2D_t>(matches(idx, 1))));
+        const uint64_t key1 = EncodeObservationKey(
+            image_id1, static_cast<point2D_t>(matches(idx, 0)));
+        const uint64_t key2 = EncodeObservationKey(
+            image_id2, static_cast<point2D_t>(matches(idx, 1)));
+        lc_matches->insert({key1, key2});
+        lc_matches->insert({key2, key1});
       }
     }
   }
-  return [lc_obs = std::move(lc_obs)](image_t image_id1,
-                                      point2D_t p1,
-                                      image_t image_id2,
-                                      point2D_t p2) -> bool {
-    return lc_obs->count(EncodeObservationKey(image_id1, p1)) ||
-           lc_obs->count(EncodeObservationKey(image_id2, p2));
+  return [lc_matches = std::move(lc_matches)](image_t image_id1,
+                                              point2D_t p1,
+                                              image_t image_id2,
+                                              point2D_t p2) -> bool {
+    return lc_matches->count({EncodeObservationKey(image_id1, p1),
+                              EncodeObservationKey(image_id2, p2)}) > 0;
   };
 }
 
@@ -96,28 +100,46 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     const MatchPredicate& ignore_match) {
   using Observation = std::pair<image_t, point2D_t>;
 
-  // Union all matching observations.
+  // Union all matching observations. Iterate ImagePair metadata directly:
+  // VideoSfM populates matches/inliers on ImagePair without always using the
+  // flat correspondence graph storage behind ExtractMatchesBetweenImages.
+  // Fall back to the native correspondence storage for vanilla COLMAP pairs.
   UnionFind<Observation> uf;
-  FeatureMatches matches;
+  FeatureMatches extracted_matches;
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     THROW_CHECK(image_id_to_keypoints.count(image_id1))
         << "Missing keypoints for image " << image_id1;
     THROW_CHECK(image_id_to_keypoints.count(image_id2))
         << "Missing keypoints for image " << image_id2;
-    corr_graph.ExtractMatchesBetweenImages(image_id1, image_id2, matches);
-    for (const auto& match : matches) {
-      if (ignore_match &&
-          ignore_match(
-              image_id1, match.point2D_idx1, image_id2, match.point2D_idx2)) {
-        continue;
+    const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
+    const Eigen::MatrixXi& matches = image_pair.matches;
+    const auto union_match = [&](const point2D_t p2d1, const point2D_t p2d2) {
+      if (ignore_match && ignore_match(image_id1, p2d1, image_id2, p2d2)) {
+        return;
       }
-      const Observation obs1(image_id1, match.point2D_idx1);
-      const Observation obs2(image_id2, match.point2D_idx2);
+      const Observation obs1(image_id1, p2d1);
+      const Observation obs2(image_id2, p2d2);
       if (obs2 < obs1) {
         uf.Union(obs1, obs2);
       } else {
         uf.Union(obs2, obs1);
+      }
+    };
+    if (matches.rows() > 0 || !image_pair.inliers.empty()) {
+      for (const int idx : image_pair.inliers) {
+        THROW_CHECK_GE(idx, 0) << "Negative inlier index for image pair "
+                               << pair_id;
+        THROW_CHECK_LT(idx, matches.rows())
+            << "Inlier index outside matches.rows() for image pair " << pair_id;
+        union_match(static_cast<point2D_t>(matches(idx, 0)),
+                    static_cast<point2D_t>(matches(idx, 1)));
+      }
+    } else {
+      corr_graph.ExtractMatchesBetweenImages(
+          image_id1, image_id2, extracted_matches);
+      for (const auto& match : extracted_matches) {
+        union_match(match.point2D_idx1, match.point2D_idx2);
       }
     }
   }
@@ -254,8 +276,7 @@ void AppendLoopClosureObservations(
     }
     if (!has_lc) continue;
 
-    const image_t image_id1 = image_pair.image_id1;
-    const image_t image_id2 = image_pair.image_id2;
+    const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
 
     for (const int idx : inliers) {
       if (!are_lc[idx]) {
@@ -361,11 +382,8 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     for (const auto& lc_el : src.track.lc_elements) {
       if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
-      distinct_image_ids.insert(lc_el.image_id);
     }
-    const size_t candidate_total =
-        candidate.track.Length() + candidate.track.lc_elements.size();
-    if (candidate_total <
+    if (candidate.track.Length() <
         static_cast<size_t>(options.min_num_views_per_track)) {
       continue;
     }
@@ -373,12 +391,6 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
       bool depth_ok = true;
       for (const auto& el : candidate.track.Elements()) {
         if (!HasValidDepthPrior(el, depth_priors, depth_prior_validity)) {
-          depth_ok = false;
-          break;
-        }
-      }
-      for (const auto& lc_el : candidate.track.lc_elements) {
-        if (!HasValidDepthPrior(lc_el, depth_priors, depth_prior_validity)) {
           depth_ok = false;
           break;
         }

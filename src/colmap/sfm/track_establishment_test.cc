@@ -374,11 +374,11 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 }
 
 // LC-only two-observation tracks have one regular element and one LC element.
-// The lower-bound length filter counts regular + LC observations, so a min=2
-// subsample should keep them.
+// The post-domain lower-bound check intentionally requires enough regular
+// observations, preserving the pre-colmap4 fork behavior.
 //
 // Drives SubsampleTracks.
-TEST(FindTracksForProblem, LcOnlyTrackCountsTowardMinViews) {
+TEST(FindTracksForProblem, LcOnlyTrackDoesNotSatisfyPostDomainMinViews) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
   images.emplace(2, MakeImage(2, 3));
@@ -401,14 +401,11 @@ TEST(FindTracksForProblem, LcOnlyTrackCountsTowardMinViews) {
                                         inputs.depth_priors,
                                         inputs.depth_prior_validity,
                                         tracks_full);
-  ASSERT_EQ(selected.size(), 1u);
-  ASSERT_EQ(selected.count(0), 1u);
-  EXPECT_EQ(selected.at(0).track.Length(), 1u);
-  EXPECT_EQ(selected.at(0).track.lc_elements.size(), 1u);
+  EXPECT_TRUE(selected.empty());
 }
 
-// A one-regular + one-LC two-view candidate must run the same depth gate as a
-// native two-view track. Invalid depth on the regular endpoint drops it.
+// A one-regular + one-LC two-view candidate does not satisfy the post-domain
+// regular-observation lower-bound check.
 TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeImage(1, 3);
@@ -438,9 +435,9 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   EXPECT_TRUE(selected.empty());
 }
 
-// Invalid depth on the LC endpoint must also drop a one-regular + one-LC
-// two-view candidate.
-TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
+// Invalid depth on the LC endpoint does not matter for the 2-view depth gate;
+// LC-only support still cannot bypass the regular-observation lower bound.
+TEST(FindTracksForProblem, TwoViewDepthGate_IgnoresInvalidLcEndpoint) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
   Image img2 = MakeImage(2, 3);
@@ -623,9 +620,8 @@ void AddLCOnlyPair(CorrespondenceGraph& corr_graph,
 }
 
 // Run the native + LC two-step end-to-end matching production code path:
-// MakeLoopClosureMatchPredicate suppresses LC-flagged observations from
-// union-find, then AppendLoopClosureObservations attaches them as
-// lc_elements.
+// MakeLoopClosureMatchPredicate suppresses LC-flagged pairwise matches from
+// union-find, then AppendLoopClosureObservations attaches them as lc_elements.
 std::unordered_map<point3D_t, Point3D> EstablishFullTracks(
     const CorrespondenceGraph& corr_graph,
     const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& keypoints,
@@ -843,34 +839,39 @@ TEST(ProcessLoopClosurePairs, SequentialIdsNoCollision) {
   }
 }
 
-// A non-LC match that reuses an LC endpoint is still suppressed in the
-// first-pass union-find. This preserves the observation-taint semantics:
-// once an observation participates in an LC inlier, it enters tracks only via
-// lc_elements.
-TEST(ProcessLoopClosurePairs, LcEndpointSuppressesOtherMatches) {
+// A non-LC match that reuses an LC endpoint is still allowed in the first-pass
+// union-find. Only the exact LC-flagged pairwise constraint is suppressed.
+TEST(ProcessLoopClosurePairs, NonLcMatchSharingLcEndpointStillBuildsTrack) {
   CorrespondenceGraph corr_graph;
   for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 1);
 
   // img1:0 participates in an LC match with img2:0 and a non-LC match with
-  // img3:0. The latter must not create a regular img1-img3 track.
+  // img3:0. The latter must still create a regular img1-img3 track.
   AddImagePairWithLC(corr_graph, 1, 2, {{0, 0}}, {0}, {0});
   AddImagePairWithLC(corr_graph, 1, 3, {{0, 0}}, {0}, {});
 
   const auto kps = MakeWellSeparatedKeypoints({1, 2, 3}, 1);
   const auto pair_ids = CollectPairIds(corr_graph);
   const auto ignore_match = MakeLoopClosureMatchPredicate(pair_ids, corr_graph);
-  EXPECT_TRUE(ignore_match(1, 0, 3, 0));
-  EXPECT_TRUE(ignore_match(3, 0, 1, 0));
+  EXPECT_TRUE(ignore_match(1, 0, 2, 0));
+  EXPECT_TRUE(ignore_match(2, 0, 1, 0));
+  EXPECT_FALSE(ignore_match(1, 0, 3, 0));
+  EXPECT_FALSE(ignore_match(3, 0, 1, 0));
 
   TrackEstablishmentOptions opts;
   opts.min_num_views_per_track = 1;
   const auto tracks = EstablishFullTracks(corr_graph, kps, opts);
 
-  EXPECT_EQ(tracks.size(), 2u);
+  EXPECT_EQ(tracks.size(), 1u);
+  bool found_regular_track = false;
   for (const auto& [tid, p3d] : tracks) {
-    EXPECT_FALSE(TrackHasElement(p3d.track, 3, 0));
-    EXPECT_FALSE(TrackHasLCElement(p3d.track, 3, 0));
+    if (TrackHasElement(p3d.track, 1, 0) &&
+        TrackHasElement(p3d.track, 3, 0)) {
+      found_regular_track = true;
+      EXPECT_TRUE(TrackHasLCElement(p3d.track, 2, 0));
+    }
   }
+  EXPECT_TRUE(found_regular_track);
 }
 
 // Both LC endpoints fall on the SAME native track. This is a degenerate
