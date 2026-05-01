@@ -241,7 +241,7 @@ TEST(LossConfig, CauchyAndSoftL1Smoke) {
   }
 }
 
-// ---- MetricDepthError smooth_transition C¹ continuity at threshold ----
+// ---- MetricDepthError log-linear C¹ continuity at threshold ----
 
 TEST(MetricDepthError, SmoothLogLinearTransitionC1Continuity) {
   const Eigen::Quaterniond identity = Eigen::Quaterniond::Identity();
@@ -249,17 +249,14 @@ TEST(MetricDepthError, SmoothLogLinearTransitionC1Continuity) {
   const double sigma_depth = 0.2;
   const double threshold = 0.5;
 
-  MetricDepthError functor(identity,
-                           depth_prior,
-                           sigma_depth,
-                           /*use_log_scale=*/false,
-                           /*use_log_residual=*/true,
-                           /*zero_residual_behind=*/false,
-                           /*smooth_transition=*/true,
-                           threshold);
+  MetricDepthOptions options;
+  options.residual_type = MetricDepthResidualType::kLogLinear;
+  options.log_linear_threshold = threshold;
 
-  // Helper: evaluate residual at z_est with camera at origin, identity rotation,
-  // point at (0, 0, z_est), dmap_scale = 1.0.
+  MetricDepthError functor(identity, depth_prior, sigma_depth, options);
+
+  // Helper: evaluate residual at z_est with camera at origin, identity
+  // rotation, point at (0, 0, z_est), dmap_scale = 1.0.
   auto eval = [&](double z_est) -> double {
     const double c_i[3] = {0.0, 0.0, 0.0};
     const double X_k[3] = {0.0, 0.0, z_est};
@@ -482,9 +479,8 @@ TEST(GlobalPositioning, MetricDepthConstraintConverges) {
   ASSERT_FALSE(dmap_scales.empty());
 
   for (const auto& [image_id, scale] : dmap_scales) {
-    EXPECT_NEAR(scale, 1.0, 0.5)
-        << "dmap_scale for image " << image_id << " = " << scale
-        << ", expected ~1.0";
+    EXPECT_NEAR(scale, 1.0, 0.5) << "dmap_scale for image " << image_id << " = "
+                                 << scale << ", expected ~1.0";
   }
 }
 
@@ -522,8 +518,8 @@ TEST(GlobalPositioning, Gate_UseLcObservations_On_IteratesLcElements) {
 
   const size_t expected_regular = CountValidObservations(
       data.reconstruction, options.min_num_view_per_track);
-  const size_t expected_lc = CountLcObservations(
-      data.reconstruction, options.min_num_view_per_track);
+  const size_t expected_lc =
+      CountLcObservations(data.reconstruction, options.min_num_view_per_track);
   ASSERT_GT(expected_lc, 0u);
 
   TestableGlobalPositioner positioner(options);
@@ -544,8 +540,7 @@ void StampGtDepthPriors(Reconstruction& reconstruction) {
     image.depth_prior_validity.assign(n, false);
     for (point2D_t idx = 0; idx < static_cast<point2D_t>(n); ++idx) {
       if (!image.Point2D(idx).HasPoint3D()) continue;
-      const auto& p3d =
-          reconstruction.Point3D(image.Point2D(idx).point3D_id);
+      const auto& p3d = reconstruction.Point3D(image.Point2D(idx).point3D_id);
       const Eigen::Vector3d pc = image.CamFromWorld() * p3d.xyz;
       if (pc[2] > 0) {
         image.depth_priors[idx] = pc[2];
@@ -568,8 +563,7 @@ TEST(GlobalPositioning, FilterDepthOutliersRoutesSoftFallback) {
     bool corrupted = false;
     for (const auto& [image_id, _] : data.reconstruction.Images()) {
       Image& image = data.reconstruction.Image(image_id);
-      for (point2D_t idx = 0;
-           idx < static_cast<point2D_t>(image.NumPoints2D());
+      for (point2D_t idx = 0; idx < static_cast<point2D_t>(image.NumPoints2D());
            ++idx) {
         if (image.depth_prior_validity[idx]) {
           image.depth_priors[idx] *= 100.0;  // wildly wrong
@@ -614,7 +608,7 @@ TEST(GlobalPositioning, CallerSuppliedInitialDmapScales) {
   GlobalPositionerOptions options = BaselineGpOptions();
   options.use_metric_depth_constraint = true;
   options.initial_dmap_scales = init_scales;
-  options.optimize_scales = false;  // freeze BATA scales
+  options.optimize_scales = false;                // freeze BATA scales
   options.solver_options.max_num_iterations = 0;  // no optimization
   options.use_init = false;
 
@@ -626,9 +620,8 @@ TEST(GlobalPositioning, CallerSuppliedInitialDmapScales) {
   const auto& dmap_scales = positioner.GetDmapScales();
   EXPECT_FALSE(dmap_scales.empty());
   for (const auto& [image_id, scale] : dmap_scales) {
-    EXPECT_NEAR(scale, 2.5, 0.01)
-        << "dmap_scale for image " << image_id
-        << " deviated from initial value";
+    EXPECT_NEAR(scale, 2.5, 0.01) << "dmap_scale for image " << image_id
+                                  << " deviated from initial value";
   }
 }
 

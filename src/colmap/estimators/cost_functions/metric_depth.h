@@ -2,6 +2,7 @@
 
 #include "colmap/util/logging.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 #include <Eigen/Core>
@@ -10,38 +11,39 @@
 
 namespace colmap {
 
+enum class MetricDepthResidualType { kLinear, kLog, kLogLinear };
+
+struct MetricDepthOptions {
+  bool use_log_scale = false;
+  MetricDepthResidualType residual_type = MetricDepthResidualType::kLinear;
+  bool zero_residual_behind = false;
+  double log_linear_threshold = 0.1;
+
+  bool IsValid() const {
+    return residual_type != MetricDepthResidualType::kLogLinear ||
+           log_linear_threshold > 0.0;
+  }
+};
+
 // 1-D residual: camera-frame z-depth vs scaled depth prior (s_i * m_ik).
-// Five toggles (use_log_scale, use_log_residual, zero_residual_behind,
-// smooth_transition, threshold) control residual shape; 12 reachable
-// combinations since smooth_transition requires use_log_residual.
 // AutoDiff<1, 3, 3, 1> over (frame_center, point3D, dmap_scale).
 struct MetricDepthError {
   MetricDepthError(const Eigen::Quaterniond& rotation,
                    double depth_prior,
                    double sigma_depth,
-                   bool use_log_scale = false,
-                   bool use_log_residual = false,
-                   bool zero_residual_behind = false,
-                   bool smooth_transition = false,
-                   double threshold = 0.1)
+                   const MetricDepthOptions& options = MetricDepthOptions())
       : rotation_(rotation),
         depth_prior_(depth_prior),
         sigma_depth_(sigma_depth),
-        use_log_scale_(use_log_scale),
-        use_log_residual_(use_log_residual),
-        zero_residual_behind_(zero_residual_behind),
-        smooth_transition_(smooth_transition),
-        threshold_(threshold) {
+        options_(options) {
     if (sigma_depth <= 1e-9) {
       throw std::invalid_argument(
           "MetricDepthError: Standard deviation must be positive.");
     }
-    if (smooth_transition && threshold <= 0.0) {
+    if (!options.IsValid()) {
       throw std::invalid_argument(
-          "MetricDepthError: threshold must be > 0 when smooth_transition=true.");
+          "MetricDepthError: log-linear threshold must be positive.");
     }
-    THROW_CHECK(!smooth_transition || use_log_residual)
-        << "smooth_transition requires use_log_residual=true.";
   }
 
   template <typename T>
@@ -56,11 +58,12 @@ struct MetricDepthError {
         rotation_.cast<T>() * point_vec_world;
     const T z_est = point_vec_cam[2];
 
-    const T scale = use_log_scale_ ? ceres::exp(dmap_scale[0]) : dmap_scale[0];
+    const T scale =
+        options_.use_log_scale ? ceres::exp(dmap_scale[0]) : dmap_scale[0];
     const T scaled_prior = scale * T(depth_prior_);
     const T scaled_sigma = scale * T(sigma_depth_);
 
-    if (zero_residual_behind_ && z_est <= T(0.0)) {
+    if (options_.zero_residual_behind && z_est <= T(0.0)) {
       residuals[0] = T(0.0);
       return true;
     }
@@ -68,13 +71,13 @@ struct MetricDepthError {
     T r_depth;
     T weight;
 
-    if (use_log_residual_) {
+    if (options_.residual_type != MetricDepthResidualType::kLinear) {
       const T depth_prior_safe = std::max(T(depth_prior_), T(1e-6));
       const T sigma_log = T(sigma_depth_) / depth_prior_safe;
       const T weight_log = T(1.0) / std::max(T(1e-6), sigma_log);
 
-      if (smooth_transition_) {
-        const T thresh = T(threshold_);
+      if (options_.residual_type == MetricDepthResidualType::kLogLinear) {
+        const T thresh = T(options_.log_linear_threshold);
         const T scaled_prior_safe = std::max(scaled_prior, T(1e-6));
         if (z_est > thresh) {
           const T z_est_safe = std::max(z_est, T(1e-6));
@@ -105,49 +108,31 @@ struct MetricDepthError {
     return true;
   }
 
-  static ceres::CostFunction* Create(const Eigen::Quaterniond& rotation,
-                                     double depth_prior,
-                                     double sigma_depth,
-                                     bool use_log_scale = false,
-                                     bool use_log_residual = false,
-                                     bool zero_residual_behind = false,
-                                     bool smooth_transition = false,
-                                     double threshold = 0.1) {
+  static ceres::CostFunction* Create(
+      const Eigen::Quaterniond& rotation,
+      double depth_prior,
+      double sigma_depth,
+      const MetricDepthOptions& options = MetricDepthOptions()) {
     if (sigma_depth <= 1e-9) {
       LOG(ERROR) << "Cannot create MetricDepthError: Standard deviation must "
                     "be positive.";
       return nullptr;
     }
-    if (smooth_transition && threshold <= 0.0) {
-      LOG(ERROR) << "Cannot create MetricDepthError: threshold must be > 0 "
-                    "when smooth_transition=true.";
-      return nullptr;
-    }
-    if (smooth_transition && !use_log_residual) {
-      LOG(ERROR) << "Cannot create MetricDepthError: smooth_transition "
-                    "requires use_log_residual=true.";
+    if (!options.IsValid()) {
+      LOG(ERROR)
+          << "Cannot create MetricDepthError: log-linear threshold must be "
+             "positive.";
       return nullptr;
     }
     return new ceres::AutoDiffCostFunction<MetricDepthError, 1, 3, 3, 1>(
-        new MetricDepthError(rotation,
-                             depth_prior,
-                             sigma_depth,
-                             use_log_scale,
-                             use_log_residual,
-                             zero_residual_behind,
-                             smooth_transition,
-                             threshold));
+        new MetricDepthError(rotation, depth_prior, sigma_depth, options));
   }
 
  private:
   const Eigen::Quaterniond rotation_;
   const double depth_prior_;
   const double sigma_depth_;
-  const bool use_log_scale_;
-  const bool use_log_residual_;
-  const bool zero_residual_behind_;
-  const bool smooth_transition_;
-  const double threshold_;
+  const MetricDepthOptions options_;
 };
 
 // ScalePriorError + LogScalePriorError replaced by native

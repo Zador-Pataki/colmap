@@ -1,7 +1,5 @@
 #include "colmap/estimators/global_positioning.h"
 
-#include <cstdlib>
-
 #include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
 #include "colmap/estimators/cost_functions/utils.h"
@@ -9,6 +7,8 @@
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
+
+#include <cstdlib>
 
 namespace colmap {
 namespace {
@@ -19,16 +19,33 @@ Eigen::Vector3d RandVector3d(double low, double high) {
                          RandomUniformReal(low, high));
 }
 
+MetricDepthOptions CreateMetricDepthOptions(
+    const GlobalPositionerOptions& options) {
+  MetricDepthOptions metric_depth_options;
+  metric_depth_options.use_log_scale =
+      options.use_log_scale_for_depth_map_scales;
+  metric_depth_options.zero_residual_behind = options.zero_residual_behind;
+  metric_depth_options.log_linear_threshold = options.log_linear_threshold;
+
+  if (options.smooth_log_linear_transition) {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLogLinear;
+  } else if (options.use_log_residual_for_depth) {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLog;
+  } else {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLinear;
+  }
+  return metric_depth_options;
+}
+
 // Per-observation depth outlier check. Returns true when the log-space
 // residual |log(z_est / scaled_prior)| exceeds sigma * sigma_log.
-inline bool DepthOutlierFlag(
-    const Image& image,
-    point2D_t feature_id,
-    const Eigen::Vector3d& point3D_xyz,
-    bool use_log_scale,
-    const std::map<image_t, double>& dmap_scales,
-    image_t image_id,
-    double sigma) {
+inline bool DepthOutlierFlag(const Image& image,
+                             point2D_t feature_id,
+                             const Eigen::Vector3d& point3D_xyz,
+                             bool use_log_scale,
+                             const std::map<image_t, double>& dmap_scales,
+                             image_t image_id,
+                             double sigma) {
   if (feature_id >= image.depth_prior_validity.size() ||
       !image.depth_prior_validity[feature_id]) {
     return false;
@@ -90,7 +107,8 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
       THROW_CHECK(image.IsRefInFrame())
           << "use_metric_depth_constraint=true is not yet supported with "
              "multi-camera rigs. Image "
-          << image_id << " is a non-ref sensor in its frame; its depth "
+          << image_id
+          << " is a non-ref sensor in its frame; its depth "
              "residual would be silently dropped. Either disable "
              "use_metric_depth_constraint or run on single-camera rigs.";
     }
@@ -107,8 +125,8 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
 
   // No caller-supplied seed for dmap_scales_; derive one from per-image
   // median observed z_est/depth_prior.
-  if (options_.use_metric_depth_constraint &&
-      options_.use_init && !options_.initial_dmap_scales.has_value()) {
+  if (options_.use_metric_depth_constraint && options_.use_init &&
+      !options_.initial_dmap_scales.has_value()) {
     InitializeDepthMapScalesFromObservations(reconstruction);
   }
 
@@ -202,7 +220,8 @@ void GlobalPositioner::InitializeRandomPositions(
     }
     if (options_.generate_random_positions && options_.optimize_positions &&
         !options_.use_init) {
-      frame_centers_[frame_id] = options_.random_init_scale * RandVector3d(-1, 1);
+      frame_centers_[frame_id] =
+          options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -253,8 +272,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   // Seed dmap_scales_ from initial values before outlier filtering.
   if (options_.use_metric_depth_constraint &&
       options_.initial_dmap_scales.has_value()) {
-    for (const auto& [image_id, linear_scale] :
-         *options_.initial_dmap_scales) {
+    for (const auto& [image_id, linear_scale] : *options_.initial_dmap_scales) {
       const double init_value = options_.use_log_scale_for_depth_map_scales
                                     ? std::log(std::max(linear_scale, 1e-9))
                                     : linear_scale;
@@ -264,8 +282,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
   }
 
   depth_outliers_.clear();
-  if (options_.use_metric_depth_constraint &&
-      options_.filter_depth_outliers) {
+  if (options_.use_metric_depth_constraint && options_.filter_depth_outliers) {
     FilterDepthOutliers(reconstruction);
   }
 
@@ -291,8 +308,8 @@ void GlobalPositioner::AddPointToCameraConstraints(
       // Prior: pulls log_s toward 0 (log-space) or s toward 1 (linear).
       const Eigen::Matrix<double, 1, 1> prior_vec(
           options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0);
-      const Eigen::Matrix<double, 1, 1> cov_1x1(
-          options_.scale_prior_stddev * options_.scale_prior_stddev);
+      const Eigen::Matrix<double, 1, 1> cov_1x1(options_.scale_prior_stddev *
+                                                options_.scale_prior_stddev);
       ceres::CostFunction* scale_prior_cost =
           CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(
               cov_1x1, prior_vec);
@@ -300,10 +317,10 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
       ceres::LossFunction* obs_count_scaled_loss = nullptr;
       if (cached_loss_scale_prior_) {
-        per_image_scale_losses_.push_back(std::make_unique<ceres::ScaledLoss>(
-            cached_loss_scale_prior_.get(),
-            obs_count,
-            ceres::DO_NOT_TAKE_OWNERSHIP));
+        per_image_scale_losses_.push_back(
+            std::make_unique<ceres::ScaledLoss>(cached_loss_scale_prior_.get(),
+                                                obs_count,
+                                                ceres::DO_NOT_TAKE_OWNERSHIP));
       } else {
         per_image_scale_losses_.push_back(std::make_unique<ceres::ScaledLoss>(
             new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP));
@@ -323,9 +340,9 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
-  const bool random_initialization =
-      options_.optimize_points && options_.generate_random_points &&
-      !options_.use_init;
+  const bool random_initialization = options_.optimize_points &&
+                                     options_.generate_random_points &&
+                                     !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
@@ -337,10 +354,8 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
   // Walk regular elements then LC elements as separate passes — they
   // share the residual layout but use different loss function groups.
   for (const auto& observation : point3D.track.Elements()) {
-    AddObservationToProblem(point3D_id,
-                            observation,
-                            random_initialization,
-                            reconstruction);
+    AddObservationToProblem(
+        point3D_id, observation, random_initialization, reconstruction);
   }
   if (options_.use_lc_observations) {
     for (const auto& observation : point3D.track.lc_elements) {
@@ -365,13 +380,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   if (!image.HasPose()) return;
 
   const std::optional<Eigen::Vector2d> cam_point =
-      image.CameraPtr()->CamFromImg(
-          image.Point2D(observation.point2D_idx).xy);
+      image.CameraPtr()->CamFromImg(image.Point2D(observation.point2D_idx).xy);
   if (!cam_point.has_value()) {
-    LOG(WARNING)
-        << "Ignoring feature because it failed to project: point3D_id="
-        << point3D_id << ", image_id=" << observation.image_id
-        << ", feature_id=" << observation.point2D_idx;
+    LOG(WARNING) << "Ignoring feature because it failed to project: point3D_id="
+                 << point3D_id << ", image_id=" << observation.image_id
+                 << ", feature_id=" << observation.point2D_idx;
     return;
   }
 
@@ -396,15 +409,15 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   // Down weight the uncalibrated cameras
   Camera& camera = reconstruction.Camera(image.CameraId());
   ceres::LossFunction* loss_function =
-      (camera.has_prior_focal_length)
-          ? loss_function_ptcam_calibrated_.get()
-          : loss_function_ptcam_uncalibrated_.get();
+      (camera.has_prior_focal_length) ? loss_function_ptcam_calibrated_.get()
+                                      : loss_function_ptcam_uncalibrated_.get();
 
   // Geometry-loss cascade. Per-observation route:
-  //   is_lc           -> cached_loss_lc_geometry_  (always, regardless of depth)
-  //   is_track_anchor -> cached_loss_normal_geometry_trackstart_  (depth only)
-  //   is_inlier       -> cached_loss_normal_geometry_inlier_      (depth only)
-  //   else            -> cached_loss_normal_geometry_              (depth only)
+  //   is_lc           -> cached_loss_lc_geometry_  (always, regardless of
+  //   depth) is_track_anchor -> cached_loss_normal_geometry_trackstart_  (depth
+  //   only) is_inlier       -> cached_loss_normal_geometry_inlier_      (depth
+  //   only) else            -> cached_loss_normal_geometry_              (depth
+  //   only)
   if (is_lc_observation && cached_loss_lc_geometry_) {
     loss_function = cached_loss_lc_geometry_.get();
   } else if (options_.use_metric_depth_constraint) {
@@ -439,14 +452,13 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           image.CamFromWorld().rotation().toRotationMatrix();
       const Eigen::Matrix3d cov_world =
           R.transpose() *
-          Eigen::Vector3d(sigma_x * sigma_x,
-                          sigma_y * sigma_y,
-                          sigma_z * sigma_z)
+          Eigen::Vector3d(
+              sigma_x * sigma_x, sigma_y * sigma_y, sigma_z * sigma_z)
               .asDiagonal() *
           R;
-      cost_function =
-          CovarianceWeightedCostFunctor<BATAPairwiseDirectionCostFunctor>::
-              Create(cov_world, cam_from_point3D_dir);
+      cost_function = CovarianceWeightedCostFunctor<
+          BATAPairwiseDirectionCostFunctor>::Create(cov_world,
+                                                    cam_from_point3D_dir);
     }
     if (cost_function == nullptr) {
       cost_function =
@@ -511,11 +523,10 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   problem_->SetParameterLowerBound(&scale, 0, 1e-5);
 }
 
-void GlobalPositioner::AddMetricDepthResidual(
-    point3D_t point3D_id,
-    const TrackElement& observation,
-    bool is_lc_observation,
-    Reconstruction& reconstruction) {
+void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
+                                              const TrackElement& observation,
+                                              bool is_lc_observation,
+                                              Reconstruction& reconstruction) {
   if (!reconstruction.ExistsImage(observation.image_id)) return;
   const Image& image = reconstruction.Image(observation.image_id);
 
@@ -525,15 +536,13 @@ void GlobalPositioner::AddMetricDepthResidual(
   }
 
   const double depth_prior = image.depth_priors[observation.point2D_idx];
-  const double depth_sigma =
-      image.depth_prior_stddevs[observation.point2D_idx];
+  const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];
 
   if (depth_prior <= 0.0 || depth_sigma <= 1e-9) return;
 
   // Lazy-insert dmap_scales_ on first valid observation per image.
   if (dmap_scales_.find(observation.image_id) == dmap_scales_.end()) {
-    double init_value =
-        options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+    double init_value = options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
     if (options_.initial_dmap_scales.has_value()) {
       const auto& init_map = *options_.initial_dmap_scales;
       auto it = init_map.find(observation.image_id);
@@ -549,15 +558,11 @@ void GlobalPositioner::AddMetricDepthResidual(
   }
   dmap_scale_observation_counts_[observation.image_id]++;
 
-  ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
-      image.CamFromWorld().rotation(),
-      depth_prior,
-      depth_sigma,
-      options_.use_log_scale_for_depth_map_scales,
-      options_.use_log_residual_for_depth,
-      options_.zero_residual_behind,
-      options_.smooth_log_linear_transition,
-      options_.log_linear_threshold);
+  ceres::CostFunction* metric_depth_cost =
+      MetricDepthError::Create(image.CamFromWorld().rotation(),
+                               depth_prior,
+                               depth_sigma,
+                               CreateMetricDepthOptions(options_));
 
   if (metric_depth_cost == nullptr) return;
 
@@ -610,12 +615,11 @@ void GlobalPositioner::AddMetricDepthResidual(
   }
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
-  problem_->AddResidualBlock(
-      metric_depth_cost,
-      depth_loss,
-      frame_centers_[image.FrameId()].data(),
-      point3D.xyz.data(),
-      &dmap_scales_[observation.image_id]);
+  problem_->AddResidualBlock(metric_depth_cost,
+                             depth_loss,
+                             frame_centers_[image.FrameId()].data(),
+                             point3D.xyz.data(),
+                             &dmap_scales_[observation.image_id]);
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -826,8 +830,7 @@ void GlobalPositioner::FilterDepthOutliers(
                            dmap_scales_,
                            observation.image_id,
                            options_.filter_depth_outlier_sigma)) {
-        depth_outliers_.insert(
-            {observation.image_id, observation.point2D_idx});
+        depth_outliers_.insert({observation.image_id, observation.point2D_idx});
       }
     }
     if (options_.use_lc_observations) {
@@ -857,7 +860,8 @@ void GlobalPositioner::InitializeDepthMapScalesFromObservations(
   // Per-image scale estimates: scale = z_est / depth_prior.
   std::map<image_t, std::vector<double>> image_scale_estimates;
 
-  auto consume_observation = [&](image_t image_id, point2D_t feature_id,
+  auto consume_observation = [&](image_t image_id,
+                                 point2D_t feature_id,
                                  const Eigen::Vector3d& point_world) {
     if (!reconstruction.ExistsImage(image_id)) return;
     const Image& image = reconstruction.Image(image_id);

@@ -75,6 +75,7 @@ struct GlobalPositionerOptions {
   bool use_log_scale_for_depth_map_scales = false;
   bool use_log_residual_for_depth = false;
   bool zero_residual_behind = false;
+  // Selects the log-linear residual shape and implies log residuals.
   bool smooth_log_linear_transition = false;
   double log_linear_threshold = 1.0;
   double scale_prior_stddev = 1.0;
@@ -91,7 +92,8 @@ struct GlobalPositionerOptions {
   // Soft fallback loss for depth outliers flagged by FilterDepthOutliers.
   LossConfig loss_soft_outlier_fallback = {LossFunctionType::HUBER, 1.0, 1.0};
 
-  // Per-observation loss routing (only active when use_metric_depth_constraint).
+  // Per-observation loss routing (only active when
+  // use_metric_depth_constraint).
   LossConfig loss_normal_geometry;
   LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;

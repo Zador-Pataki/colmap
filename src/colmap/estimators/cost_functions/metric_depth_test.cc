@@ -28,6 +28,19 @@ Eigen::Vector3d MakePointWithDepth(const Eigen::Quaterniond& rotation,
   return camera_center + vec_world;
 }
 
+MetricDepthOptions MakeMetricDepthOptions(
+    MetricDepthResidualType residual_type = MetricDepthResidualType::kLinear,
+    bool use_log_scale = false,
+    bool zero_residual_behind = false,
+    double log_linear_threshold = 0.1) {
+  MetricDepthOptions options;
+  options.use_log_scale = use_log_scale;
+  options.residual_type = residual_type;
+  options.zero_residual_behind = zero_residual_behind;
+  options.log_linear_threshold = log_linear_threshold;
+  return options;
+}
+
 TEST(MetricDepthError, ZeroResidualWhenPriorMatchesPredicted) {
   const Eigen::Quaterniond rotation = MakeRotation();
   const double sigma_depth = 0.5;
@@ -58,12 +71,8 @@ TEST(MetricDepthError, LinearResidualMatchesFormula) {
   const Eigen::Vector3d point3D =
       MakePointWithDepth(rotation, camera_center, z_est);
 
-  std::unique_ptr<ceres::CostFunction> cost_function(MetricDepthError::Create(
-      rotation,
-      depth_prior,
-      sigma_depth,
-      /*use_log_scale=*/false,
-      /*use_log_residual=*/false));
+  std::unique_ptr<ceres::CostFunction> cost_function(
+      MetricDepthError::Create(rotation, depth_prior, sigma_depth));
 
   // residual = (z - s*m) / (s*sigma)
   const double expected =
@@ -90,13 +99,13 @@ TEST(MetricDepthError, LogResidualMatchesFormula) {
       rotation,
       depth_prior,
       sigma_depth,
-      /*use_log_scale=*/false,
-      /*use_log_residual=*/true));
+      MakeMetricDepthOptions(MetricDepthResidualType::kLog)));
 
-  // sigma_log = sigma_depth / depth_prior; residual = log(z / (s*m)) / sigma_log
+  // sigma_log = sigma_depth / depth_prior; residual = log(z / (s*m)) /
+  // sigma_log
   const double sigma_log = sigma_depth / depth_prior;
-  const double expected = std::log(z_est / (dmap_scale * depth_prior)) /
-                          sigma_log;
+  const double expected =
+      std::log(z_est / (dmap_scale * depth_prior)) / sigma_log;
 
   double residual = std::numeric_limits<double>::quiet_NaN();
   const double* parameters[3] = {
@@ -119,9 +128,9 @@ TEST(MetricDepthError, ZeroResidualBehindCameraGate) {
       rotation,
       depth_prior,
       sigma_depth,
-      /*use_log_scale=*/false,
-      /*use_log_residual=*/false,
-      /*zero_residual_behind=*/true));
+      MakeMetricDepthOptions(MetricDepthResidualType::kLinear,
+                             /*use_log_scale=*/false,
+                             /*zero_residual_behind=*/true)));
 
   double residual = std::numeric_limits<double>::quiet_NaN();
   const double* parameters[3] = {
@@ -131,12 +140,8 @@ TEST(MetricDepthError, ZeroResidualBehindCameraGate) {
 
   // Sanity: without the gate, the residual is non-zero for the same input.
   std::unique_ptr<ceres::CostFunction> cost_function_no_gate(
-      MetricDepthError::Create(rotation,
-                               depth_prior,
-                               sigma_depth,
-                               /*use_log_scale=*/false,
-                               /*use_log_residual=*/false,
-                               /*zero_residual_behind=*/false));
+      MetricDepthError::Create(
+          rotation, depth_prior, sigma_depth, MakeMetricDepthOptions()));
   double residual_no_gate = std::numeric_limits<double>::quiet_NaN();
   EXPECT_TRUE(
       cost_function_no_gate->Evaluate(parameters, &residual_no_gate, nullptr));
@@ -155,11 +160,12 @@ TEST(MetricDepthError, LogScaleParameterization) {
       MakePointWithDepth(rotation, camera_center, linear_scale * depth_prior);
 
   std::unique_ptr<ceres::CostFunction> cost_function_log(
-      MetricDepthError::Create(rotation,
-                               depth_prior,
-                               sigma_depth,
-                               /*use_log_scale=*/true,
-                               /*use_log_residual=*/false));
+      MetricDepthError::Create(
+          rotation,
+          depth_prior,
+          sigma_depth,
+          MakeMetricDepthOptions(MetricDepthResidualType::kLinear,
+                                 /*use_log_scale=*/true)));
 
   double residual = std::numeric_limits<double>::quiet_NaN();
   const double* parameters[3] = {
@@ -168,7 +174,7 @@ TEST(MetricDepthError, LogScaleParameterization) {
   EXPECT_NEAR(residual, 0.0, 1e-9);
 }
 
-TEST(MetricDepthError, AllTogglesSmokeFinite) {
+TEST(MetricDepthError, AllOptionsSmokeFinite) {
   const Eigen::Quaterniond rotation = MakeRotation();
   const double sigma_depth = 0.5;
   const double depth_prior = 5.0;
@@ -177,35 +183,25 @@ TEST(MetricDepthError, AllTogglesSmokeFinite) {
   const Eigen::Vector3d point3D =
       MakePointWithDepth(rotation, camera_center, 4.0);
 
-  // Walk through each toggle in turn. ``smooth_transition`` is only
-  // reachable via ``use_log_residual=true`` (per metric_depth.h header).
-  struct Toggle {
-    bool use_log_scale;
-    bool use_log_residual;
-    bool zero_residual_behind;
-    bool smooth_transition;
-  };
-  const Toggle toggles[] = {
-      {true, false, false, false},
-      {false, true, false, false},
-      {false, false, true, false},
-      {false, true, false, true},
-      {true, true, true, true},
+  const MetricDepthOptions options[] = {
+      MakeMetricDepthOptions(MetricDepthResidualType::kLinear,
+                             /*use_log_scale=*/true),
+      MakeMetricDepthOptions(MetricDepthResidualType::kLog),
+      MakeMetricDepthOptions(MetricDepthResidualType::kLinear,
+                             /*use_log_scale=*/false,
+                             /*zero_residual_behind=*/true),
+      MakeMetricDepthOptions(MetricDepthResidualType::kLogLinear),
+      MakeMetricDepthOptions(MetricDepthResidualType::kLogLinear,
+                             /*use_log_scale=*/true,
+                             /*zero_residual_behind=*/true),
   };
 
-  for (const auto& t : toggles) {
+  for (const MetricDepthOptions& option : options) {
     std::unique_ptr<ceres::CostFunction> cost_function(
-        MetricDepthError::Create(rotation,
-                                 depth_prior,
-                                 sigma_depth,
-                                 t.use_log_scale,
-                                 t.use_log_residual,
-                                 t.zero_residual_behind,
-                                 t.smooth_transition,
-                                 /*threshold=*/0.1));
+        MetricDepthError::Create(rotation, depth_prior, sigma_depth, option));
     ASSERT_NE(cost_function, nullptr);
     // For the log-scale variants, dmap_scale must be log(scale); use 0 → s=1.
-    const double scale_param = t.use_log_scale ? 0.0 : dmap_scale;
+    const double scale_param = option.use_log_scale ? 0.0 : dmap_scale;
     const double* params[3] = {
         camera_center.data(), point3D.data(), &scale_param};
     double residual = std::numeric_limits<double>::quiet_NaN();
@@ -218,6 +214,17 @@ TEST(MetricDepthError, RejectsNonPositiveSigma) {
   const Eigen::Quaterniond rotation = MakeRotation();
   ceres::CostFunction* cost_function =
       MetricDepthError::Create(rotation, /*depth_prior=*/1.0, /*sigma=*/0.0);
+  EXPECT_EQ(cost_function, nullptr);
+}
+
+TEST(MetricDepthError, RejectsNonPositiveLogLinearThreshold) {
+  const Eigen::Quaterniond rotation = MakeRotation();
+  MetricDepthOptions options;
+  options.residual_type = MetricDepthResidualType::kLogLinear;
+  options.log_linear_threshold = 0.0;
+
+  ceres::CostFunction* cost_function = MetricDepthError::Create(
+      rotation, /*depth_prior=*/1.0, /*sigma_depth=*/0.5, options);
   EXPECT_EQ(cost_function, nullptr);
 }
 
