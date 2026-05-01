@@ -263,7 +263,6 @@ TEST(FindTracksForProblem, LengthFilter) {
   {
     TrackSubsampleOptions options;
     options.min_num_views_per_track = 10;
-    options.required_tracks_per_view = 1000;  // never saturate
     const auto selected = SubsampleTracks(options,
                                           inputs.registered_image_ids,
                                           inputs.depth_priors,
@@ -277,7 +276,6 @@ TEST(FindTracksForProblem, LengthFilter) {
   {
     TrackSubsampleOptions options;
     options.min_num_views_per_track = 2;
-    options.required_tracks_per_view = 1000;
     const auto selected = SubsampleTracks(options,
                                           inputs.registered_image_ids,
                                           inputs.depth_priors,
@@ -299,7 +297,6 @@ TEST(FindTracksForProblem, LengthFilterCountsRegisteredLCElements) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
                                         inputs.depth_priors,
@@ -331,7 +328,6 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
   options.max_num_views_per_track = 4;
-  options.required_tracks_per_view = 1000;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
                                         inputs.depth_priors,
@@ -362,7 +358,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   options.two_view_depth_gate = true;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
@@ -395,7 +390,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   options.two_view_depth_gate = true;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
@@ -428,7 +422,6 @@ TEST(FindTracksForProblem, LcElementsSatisfyPostDomainMinViews) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   options.two_view_depth_gate = true;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
@@ -461,7 +454,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   options.two_view_depth_gate = true;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
@@ -492,7 +484,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
 
   TrackSubsampleOptions options;
   options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
   options.two_view_depth_gate = true;
   const auto selected = SubsampleTracks(options,
                                         inputs.registered_image_ids,
@@ -500,80 +491,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
                                         inputs.depth_prior_validity,
                                         tracks_full);
   EXPECT_TRUE(selected.empty());
-}
-
-// GreedyQuota: 5 length-3 tracks across 3 images,
-// ``required_tracks_per_view=2`` per-view quota. Greedy keeps as soon as every
-// image is satisfied -> 2 tracks suffice (each contributes to all 3 images at
-// once).
-//
-// Drives SubsampleTracks.
-TEST(FindTracksForProblem, GreedyQuota) {
-  std::unordered_map<image_t, Image> images;
-  for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeImage(i, 5));
-  }
-
-  std::unordered_map<point3D_t, Point3D> tracks_full;
-  for (point2D_t f = 0; f < 5; ++f) {
-    tracks_full.emplace(f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
-  }
-
-  const auto inputs = MakeSubsampleInputs(images);
-
-  TrackSubsampleOptions options;
-  options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 2;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
-  const size_t n_selected = selected.size();
-
-  // Each track touches all 3 images so 2 tracks fully satisfy the per-view
-  // quota of 2. Bound: at most all 5 input tracks; at least 2 (the quota).
-  EXPECT_GE(n_selected, 2u);
-  EXPECT_LE(n_selected, 5u);
-}
-
-// MinTracksPerViewBugDocumentation: enshrines the actual behaviour of the
-// default ``required_tracks_per_view = INT_MAX``.
-//
-// The per-view quota is a signed ``int`` and the default is
-// ``std::numeric_limits<int>::max()``. The greedy gate compares an ``int``
-// per-camera counter against this value; with INT_MAX as the bar the
-// counter can never exceed it (we'd overflow first), so the gate is *never*
-// taken. Symmetrically the cameras-left bookkeeping never fires, so the
-// loop only stops on ``max_num_tracks``. Net effect: with the default, the
-// greedy quota is disabled entirely and every length+depth-filtered track
-// is selected.
-//
-// Documented as a test so future refactors that "fix" the default to a
-// finite non-max number trip this and force a conscious update.
-TEST(FindTracksForProblem, MinTracksPerViewBugDocumentation) {
-  std::unordered_map<image_t, Image> images;
-  for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeImage(i, 3));
-  }
-
-  std::unordered_map<point3D_t, Point3D> tracks_full;
-  for (point2D_t f = 0; f < 3; ++f) {
-    tracks_full.emplace(f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
-  }
-
-  const auto inputs = MakeSubsampleInputs(images);
-
-  TrackSubsampleOptions options;
-  options.min_num_views_per_track = 2;
-  // options.required_tracks_per_view stays at default = INT_MAX.
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
-  // All 3 tracks are kept — the quota gate is disabled by INT_MAX bar.
-  EXPECT_EQ(selected.size(), 3u);
 }
 
 // ============================================================================
@@ -1007,38 +924,6 @@ TEST(ProcessLoopClosurePairs, AppendThrowsOnOutOfRangeInlierIndex) {
   const std::vector<image_pair_t> pair_ids = {pair_id};
   EXPECT_THROW(AppendLoopClosureObservations(pair_ids, corr_graph, tracks),
                std::invalid_argument);
-}
-
-// ============================================================================
-// SubsampleTracks: max_num_tracks limit
-// ============================================================================
-
-// Verify that ``max_num_tracks`` stops the greedy subsample early.
-TEST(FindTracksForProblem, MaxNumTracksLimit) {
-  std::unordered_map<image_t, Image> images;
-  for (image_t i = 1; i <= 3; ++i) {
-    images.emplace(i, MakeImage(i, 10));
-  }
-
-  std::unordered_map<point3D_t, Point3D> tracks_full;
-  for (point2D_t f = 0; f < 10; ++f) {
-    tracks_full.emplace(f, MakePoint3DFromElements({{1, f}, {2, f}, {3, f}}));
-  }
-
-  const auto inputs = MakeSubsampleInputs(images);
-
-  TrackSubsampleOptions options;
-  options.min_num_views_per_track = 2;
-  options.required_tracks_per_view = 1000;
-  options.max_num_tracks = 3;
-  const auto selected = SubsampleTracks(options,
-                                        inputs.registered_image_ids,
-                                        inputs.depth_priors,
-                                        inputs.depth_prior_validity,
-                                        tracks_full);
-  EXPECT_LE(static_cast<int>(selected.size()), options.max_num_tracks);
-  EXPECT_EQ(selected.size(), 3u);
-  EXPECT_LT(selected.size(), tracks_full.size());
 }
 
 }  // namespace

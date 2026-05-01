@@ -1,22 +1,23 @@
 // Binding for EstablishTracksFromCorrGraph, AppendLoopClosureObservations,
 // and SubsampleTracks.
 
+#include "colmap/sfm/track_establishment.h"
+
 #include "colmap/scene/correspondence_graph.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/point3d.h"
 #include "colmap/scene/track.h"
-#include "colmap/sfm/track_establishment.h"
 #include "colmap/util/types.h"
 
 #include "pycolmap/helpers.h"
 
-#include <pybind11/eigen.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+
+#include <pybind11/eigen.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 using namespace colmap;
 using namespace pybind11::literals;
@@ -45,8 +46,7 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
-    images.emplace(py::cast<image_t>(item.first),
-                   py::cast<Image>(item.second));
+    images.emplace(py::cast<image_t>(item.first), py::cast<Image>(item.second));
   }
 
   // Build keypoints map from ``Image::features``. The Reconstruction-based
@@ -72,11 +72,10 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
       // When the LC pass is enabled, the caller owns subsampling, so the
       // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
-      CorrespondenceGraph& lc_cg =
-          lc_correspondence_graph ? *lc_correspondence_graph
-                                  : correspondence_graph;
-      const std::vector<image_pair_t> lc_pair_ids =
-          CollectValidPairIds(lc_cg);
+      CorrespondenceGraph& lc_cg = lc_correspondence_graph
+                                       ? *lc_correspondence_graph
+                                       : correspondence_graph;
+      const std::vector<image_pair_t> lc_pair_ids = CollectValidPairIds(lc_cg);
       ignore_match = MakeLoopClosureMatchPredicate(lc_pair_ids, lc_cg);
     }
     tracks = EstablishTracksFromCorrGraph(valid_pair_ids,
@@ -87,11 +86,10 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     if (lc_second_pass) {
       // LC observations come from the separate LC correspondence graph which
       // retains the matches/inliers/are_lc ImagePair fields.
-      CorrespondenceGraph& lc_cg =
-          lc_correspondence_graph ? *lc_correspondence_graph
-                                  : correspondence_graph;
-      const std::vector<image_pair_t> lc_pair_ids =
-          CollectValidPairIds(lc_cg);
+      CorrespondenceGraph& lc_cg = lc_correspondence_graph
+                                       ? *lc_correspondence_graph
+                                       : correspondence_graph;
+      const std::vector<image_pair_t> lc_pair_ids = CollectValidPairIds(lc_cg);
       AppendLoopClosureObservations(lc_pair_ids, lc_cg, tracks);
     }
   }
@@ -130,10 +128,10 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   {
     py::gil_scoped_release release;
     selected = SubsampleTracks(options,
-                                registered_image_ids,
-                                depth_priors,
-                                depth_prior_validity,
-                                tracks_full);
+                               registered_image_ids,
+                               depth_priors,
+                               depth_prior_validity,
+                               tracks_full);
   }
 
   py::dict tracks_out;
@@ -149,8 +147,9 @@ void BindTrackEstablishment(py::module& m) {
   auto PyEstOpts =
       py::classh<TrackEstablishmentOptions>(m, "TrackEstablishmentOptions")
           .def(py::init<>())
-          .def_readwrite("intra_image_consistency_threshold",
-                         &TrackEstablishmentOptions::intra_image_consistency_threshold)
+          .def_readwrite(
+              "intra_image_consistency_threshold",
+              &TrackEstablishmentOptions::intra_image_consistency_threshold)
           .def_readwrite("min_num_views_per_track",
                          &TrackEstablishmentOptions::min_num_views_per_track)
           .def_readwrite("required_tracks_per_view",
@@ -164,10 +163,6 @@ void BindTrackEstablishment(py::module& m) {
                          &TrackSubsampleOptions::min_num_views_per_track)
           .def_readwrite("max_num_views_per_track",
                          &TrackSubsampleOptions::max_num_views_per_track)
-          .def_readwrite("required_tracks_per_view",
-                         &TrackSubsampleOptions::required_tracks_per_view)
-          .def_readwrite("max_num_tracks",
-                         &TrackSubsampleOptions::max_num_tracks)
           .def_readwrite("two_view_depth_gate",
                          &TrackSubsampleOptions::two_view_depth_gate);
   MakeDataclass(PySubOpts);

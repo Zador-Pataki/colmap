@@ -129,10 +129,11 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   to.intra_image_consistency_threshold =
       options.track_intra_image_consistency_threshold;
   to.min_num_views_per_track = options.track_min_num_views_per_track;
-  // Problem selection is owned by SubsampleTracksForProblem. Keep every
-  // helper-side candidate so the quota is applied once, after optional LC
-  // observations have been attached.
-  to.required_tracks_per_view = std::numeric_limits<int>::max();
+  // LC second pass appends observations after the union-find pass, so it needs
+  // the full candidate set. Without LC, preserve native per-view limiting.
+  to.required_tracks_per_view = options.track_lc_second_pass
+                                    ? std::numeric_limits<int>::max()
+                                    : options.track_required_tracks_per_view;
 
   std::vector<image_pair_t> valid_pair_ids;
   valid_pair_ids.reserve(pose_graph_->NumEdges());
@@ -160,52 +161,6 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   }
   LOG(INFO) << "Track establishment: " << reconstruction_->NumPoints3D()
             << " tracks added to reconstruction";
-}
-
-void GlobalMapper::SubsampleTracksForProblem(
-    const GlobalMapperOptions& options) {
-  TrackSubsampleOptions opts;
-  opts.min_num_views_per_track = options.track_min_num_views_per_track;
-  opts.max_num_views_per_track = options.track_max_num_views_per_track;
-  opts.required_tracks_per_view = options.track_required_tracks_per_view;
-  opts.max_num_tracks = options.track_max_num_tracks;
-
-  opts.two_view_depth_gate = options.track_two_view_depth_gate;
-
-  std::unordered_set<image_t> registered_image_ids;
-  std::unordered_map<image_t, std::vector<double>> depth_priors;
-  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
-  for (const image_t image_id : reconstruction_->RegImageIds()) {
-    registered_image_ids.insert(image_id);
-    if (opts.two_view_depth_gate) {
-      const auto& image = reconstruction_->Image(image_id);
-      depth_priors.emplace(image_id, image.depth_priors);
-      depth_prior_validity.emplace(image_id, image.depth_prior_validity);
-    }
-  }
-
-  auto selected = SubsampleTracks(opts,
-                                  registered_image_ids,
-                                  depth_priors,
-                                  depth_prior_validity,
-                                  reconstruction_->Points3D());
-
-  // Sync back: drop everything not in the selected dict, replace tracks
-  // present in selected so post-restriction Track elements are written.
-  std::vector<point3D_t> to_delete;
-  for (const auto& [pid, _] : reconstruction_->Points3D()) {
-    if (selected.count(pid) == 0) {
-      to_delete.push_back(pid);
-    }
-  }
-  for (const point3D_t pid : to_delete) {
-    reconstruction_->DeletePoint3D(pid);
-  }
-  for (auto& [pid, p3d] : selected) {
-    if (reconstruction_->ExistsPoint3D(pid)) {
-      reconstruction_->Point3D(pid).track = std::move(p3d.track);
-    }
-  }
 }
 
 bool GlobalMapper::GlobalPositioning(const GlobalPositionerOptions& options,
@@ -441,7 +396,6 @@ bool GlobalMapper::Solve(const GlobalMapperOptions& options) {
     Timer run_timer;
     run_timer.Start();
     EstablishTracks(opts);
-    SubsampleTracksForProblem(opts);
     LOG(INFO) << "Track establishment done in " << run_timer.ElapsedSeconds()
               << " seconds";
   }

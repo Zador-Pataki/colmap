@@ -136,9 +136,6 @@ TEST(OptionManager, WriteAndRead) {
   options_write.feature_extraction->max_image_size = 2048;
   options_write.feature_extraction->sift->max_num_features = 4096;
   options_write.mapper->min_num_matches = 20;
-  options_write.global_mapper->mapper.track_max_num_views_per_track = 100;
-  options_write.global_mapper->mapper.track_max_num_tracks = 5000;
-  options_write.global_mapper->mapper.track_two_view_depth_gate = true;
   options_write.global_mapper->mapper.track_lc_second_pass = true;
 
   // Write to file
@@ -164,13 +161,6 @@ TEST(OptionManager, WriteAndRead) {
             options_write.feature_extraction->sift->max_num_features);
   EXPECT_EQ(options_read.mapper->min_num_matches,
             options_write.mapper->min_num_matches);
-  EXPECT_EQ(
-      options_read.global_mapper->mapper.track_max_num_views_per_track,
-      options_write.global_mapper->mapper.track_max_num_views_per_track);
-  EXPECT_EQ(options_read.global_mapper->mapper.track_max_num_tracks,
-            options_write.global_mapper->mapper.track_max_num_tracks);
-  EXPECT_EQ(options_read.global_mapper->mapper.track_two_view_depth_gate,
-            options_write.global_mapper->mapper.track_two_view_depth_gate);
   EXPECT_EQ(options_read.global_mapper->mapper.track_lc_second_pass,
             options_write.global_mapper->mapper.track_lc_second_pass);
 }

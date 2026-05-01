@@ -356,16 +356,13 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
   std::sort(track_lengths.begin(), track_lengths.end(), std::greater<>());
 
   // Selection domain = registered images.
-  std::unordered_map<image_t, int> tracks_per_camera;
+  std::unordered_set<image_t> registered_image_id_set;
   for (const image_t image_id : registered_image_ids) {
-    tracks_per_camera[image_id] = 0;
+    registered_image_id_set.insert(image_id);
   }
 
   std::unordered_map<point3D_t, Point3D> selected;
-  int cameras_left = static_cast<int>(tracks_per_camera.size());
   for (const auto& [track_length, track_id] : track_lengths) {
-    if (static_cast<int>(selected.size()) >= options.max_num_tracks) break;
-
     const Point3D& src = tracks_full.at(track_id);
 
     // Restrict to selection domain + lc-elements that fall in the
@@ -373,12 +370,12 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     std::unordered_set<image_t> distinct_image_ids;
     Point3D candidate;
     for (const auto& el : src.track.Elements()) {
-      if (tracks_per_camera.count(el.image_id) == 0) continue;
+      if (registered_image_id_set.count(el.image_id) == 0) continue;
       candidate.track.AddElement(el);
       distinct_image_ids.insert(el.image_id);
     }
     for (const auto& lc_el : src.track.lc_elements) {
-      if (tracks_per_camera.count(lc_el.image_id) == 0) continue;
+      if (registered_image_id_set.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
       distinct_image_ids.insert(lc_el.image_id);
     }
@@ -405,33 +402,9 @@ std::unordered_map<point3D_t, Point3D> SubsampleTracks(
       if (!depth_ok) continue;
     }
 
-    // Greedy quota: a track is added if any element's PRE-increment
-    // count is within the target. Counters increment for every kept
-    // element regardless of whether the track was added.
-    bool added = false;
-    for (const auto& el : candidate.track.Elements()) {
-      auto& count = tracks_per_camera[el.image_id];
-      if (count > options.required_tracks_per_view) continue;
-      ++count;
-      if (count > options.required_tracks_per_view) --cameras_left;
-      if (!added) {
-        selected.emplace(track_id, candidate);
-        added = true;
-      }
-    }
-    for (const auto& el : candidate.track.lc_elements) {
-      auto& count = tracks_per_camera[el.image_id];
-      if (count > options.required_tracks_per_view) continue;
-      ++count;
-      if (count > options.required_tracks_per_view) --cameras_left;
-      if (!added) {
-        selected.emplace(track_id, candidate);
-        added = true;
-      }
-    }
-    if (cameras_left == 0) break;
+    selected.emplace(track_id, candidate);
   }
-  LOG(INFO) << "Subsampled to " << selected.size() << " tracks (dropped "
+  LOG(INFO) << "Filtered to " << selected.size() << " tracks (dropped "
             << (tracks_full.size() - selected.size()) << ", "
             << dropped_by_length << " by length)";
   return selected;

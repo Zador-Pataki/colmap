@@ -31,7 +31,8 @@ struct TrackEstablishmentOptions {
 
 // Predicate called for each match (image_id1, point2D_idx1, image_id2,
 // point2D_idx2). Returns true to skip (ignore) the match.
-using MatchPredicate = std::function<bool(image_t, point2D_t, image_t, point2D_t)>;
+using MatchPredicate =
+    std::function<bool(image_t, point2D_t, image_t, point2D_t)>;
 
 // Returns a MatchPredicate that ignores exact LC-flagged inlier matches
 // (are_lc==true) in the correspondence graph. This excludes LC pairwise
@@ -64,13 +65,10 @@ void AppendLoopClosureObservations(
 struct TrackSubsampleOptions {
   int min_num_views_per_track = 3;
   int max_num_views_per_track = std::numeric_limits<int>::max();
-  int required_tracks_per_view = std::numeric_limits<int>::max();
-  int max_num_tracks = std::numeric_limits<int>::max();
   bool two_view_depth_gate = false;
 };
 
-// Greedy length-sorted subsample with per-image quota and optional
-// 2-view depth gate. Returns selected tracks.
+// Filter tracks for the optimization problem with optional 2-view depth gate.
 std::unordered_map<point3D_t, Point3D> SubsampleTracks(
     const TrackSubsampleOptions& options,
     const std::unordered_set<image_t>& registered_image_ids,
