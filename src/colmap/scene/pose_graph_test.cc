@@ -351,6 +351,44 @@ TEST(PoseGraph, ComputeLargestConnectedFrameComponentEmpty) {
   EXPECT_TRUE(result.empty());
 }
 
+TEST(PoseGraph, ComputeLargestConnectedFrameComponentFilterUnregistered) {
+  SyntheticDatasetOptions synthetic_options;
+  synthetic_options.num_rigs = 5;
+  synthetic_options.num_cameras_per_rig = 1;
+  synthetic_options.num_frames_per_rig = 1;
+  synthetic_options.num_points3D = 10;
+  Reconstruction reconstruction;
+  SynthesizeDataset(synthetic_options, &reconstruction);
+
+  const auto reg_image_ids = reconstruction.RegImageIds();
+  ASSERT_EQ(reg_image_ids.size(), 5);
+
+  // Build a fully connected pose graph over all 5 images.
+  PoseGraph pose_graph;
+  pose_graph.AddEdge(reg_image_ids[0], reg_image_ids[1], SynthesizeEdge());
+  pose_graph.AddEdge(reg_image_ids[1], reg_image_ids[2], SynthesizeEdge());
+  pose_graph.AddEdge(reg_image_ids[2], reg_image_ids[3], SynthesizeEdge());
+  pose_graph.AddEdge(reg_image_ids[3], reg_image_ids[4], SynthesizeEdge());
+
+  // Without filtering, all 5 frames should be in the component.
+  const auto unfiltered = pose_graph.ComputeLargestConnectedFrameComponent(
+      reconstruction, /*filter_unregistered=*/false);
+  EXPECT_EQ(unfiltered.size(), 5);
+
+  // Unregister one frame by resetting its pose.
+  const frame_t frame_to_reset =
+      reconstruction.Image(reg_image_ids[2]).FrameId();
+  reconstruction.Frame(frame_to_reset).ResetPose();
+
+  // With filter_unregistered=true, pairs touching the unregistered frame are
+  // skipped, splitting the graph into two components {0,1} and {3,4}.
+  const auto filtered = pose_graph.ComputeLargestConnectedFrameComponent(
+      reconstruction, /*filter_unregistered=*/true);
+  EXPECT_LT(filtered.size(), unfiltered.size());
+  EXPECT_EQ(filtered.size(), 2);
+  EXPECT_EQ(filtered.count(frame_to_reset), 0);
+}
+
 TEST(PoseGraph, InvalidatePairsOutsideActiveImageIds) {
   PoseGraph pose_graph;
   pose_graph.AddEdge(1, 2, SynthesizeEdge());

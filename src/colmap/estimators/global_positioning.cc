@@ -357,17 +357,17 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           ? loss_function_ptcam_calibrated_.get()
           : loss_function_ptcam_uncalibrated_.get();
 
-  // metric-depth geometry-loss cascade. Per-observation route:
-  //   is_lc           -> cached_loss_lc_geometry_
-  //   is_track_anchor -> cached_loss_normal_geometry_trackstart_
-  //   is_inlier       -> cached_loss_normal_geometry_inlier_
-  //   else            -> cached_loss_normal_geometry_
-  if (options_.use_metric_depth_constraint) {
+  // Geometry-loss cascade. Per-observation route:
+  //   is_lc           -> cached_loss_lc_geometry_  (always, regardless of depth)
+  //   is_track_anchor -> cached_loss_normal_geometry_trackstart_  (depth only)
+  //   is_inlier       -> cached_loss_normal_geometry_inlier_      (depth only)
+  //   else            -> cached_loss_normal_geometry_              (depth only)
+  if (is_lc_observation && cached_loss_lc_geometry_) {
+    loss_function = cached_loss_lc_geometry_.get();
+  } else if (options_.use_metric_depth_constraint) {
     ceres::LossFunction* cascade = nullptr;
-    if (is_lc_observation) {
-      cascade = cached_loss_lc_geometry_.get();
-    } else if (observation.point2D_idx < image.is_track_anchor.size() &&
-               image.is_track_anchor[observation.point2D_idx]) {
+    if (observation.point2D_idx < image.is_track_anchor.size() &&
+        image.is_track_anchor[observation.point2D_idx]) {
       cascade = cached_loss_normal_geometry_trackstart_.get();
     } else if (observation.point2D_idx < image.is_inlier.size() &&
                image.is_inlier[observation.point2D_idx]) {

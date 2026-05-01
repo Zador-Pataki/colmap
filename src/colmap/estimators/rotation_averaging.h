@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <Eigen/Core>
+#include <ceres/ceres.h>
 
 // Code is adapted from Theia's RobustRotationEstimator
 // (http://www.theia-sfm.org/). For gravity aligned rotation averaging, refer
@@ -70,6 +71,15 @@ struct RotationEstimatorOptions {
 
   // Drop pairs where LC inliers exceed tracking inliers.
   bool skip_risky_lc_pairs = false;
+
+  // Ceres solver options for the video-aware SolveCeres path.
+  // Defaults match the previously hardcoded values.
+  ceres::Solver::Options solver_options = []() {
+    ceres::Solver::Options opts;
+    opts.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+    opts.max_num_iterations = 100;
+    return opts;
+  }();
 
   // Use Ceres solver with per-pair Huber/Cauchy loss instead of L1+IRLS.
   // Mutually exclusive with use_gravity.

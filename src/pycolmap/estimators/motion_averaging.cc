@@ -275,7 +275,26 @@ void BindRotationEstimator(py::module& m) {
               "video_lc_cauchy_scale",
               &RotationEstimatorOptions::video_lc_cauchy_scale,
               "Cauchy loss scale for loop-closure pairs in the video "
-              "solver.");
+              "solver.")
+          // --- Ceres solver_options (SolveCeres path) ---
+          .def_property(
+              "num_threads",
+              [](const RotationEstimatorOptions& self) {
+                return self.solver_options.num_threads;
+              },
+              [](RotationEstimatorOptions& self, int v) {
+                self.solver_options.num_threads = v;
+              },
+              "Ceres solver thread count.")
+          .def_property(
+              "max_num_iterations",
+              [](const RotationEstimatorOptions& self) {
+                return self.solver_options.max_num_iterations;
+              },
+              [](RotationEstimatorOptions& self, int v) {
+                self.solver_options.max_num_iterations = v;
+              },
+              "Ceres solver max iterations (SolveCeres path).");
   MakeDataclass(PyRotationEstimatorOptions);
 
   m.def(

@@ -59,7 +59,14 @@ void BindCorrespondenceGraph(py::module& m) {
       .def_readwrite("rel_depth_scale",
                      &CorrespondenceGraph::ImagePair::rel_depth_scale)
       .def_readwrite("cov_t", &CorrespondenceGraph::ImagePair::cov_t)
-      .def_readwrite("are_lc", &CorrespondenceGraph::ImagePair::are_lc)
+      .def_property("are_lc",
+          [](const CorrespondenceGraph::ImagePair& p)
+              -> const std::vector<bool>& { return p.are_lc; },
+          [](CorrespondenceGraph::ImagePair& p, std::vector<bool> v) {
+            THROW_CHECK_EQ(v.size(),
+                           static_cast<size_t>(p.matches.rows()));
+            p.are_lc = std::move(v);
+          })
       .def_readwrite("num_matches",
                      &CorrespondenceGraph::ImagePair::num_matches)
       .def_readwrite("two_view_geometry",
