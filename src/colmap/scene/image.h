@@ -167,9 +167,6 @@ class Image {
   std::vector<bool> is_track_anchor;
   // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.
   std::vector<Eigen::Vector2d> angular_stddevs;
-  // Direct cam_from_world override for standalone pipeline.
-  Rigid3d cam_from_world;
-
   // Whether this image is currently registered.
   bool is_registered = false;
 

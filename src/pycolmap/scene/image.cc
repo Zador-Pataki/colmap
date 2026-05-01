@@ -132,10 +132,18 @@ void BindSceneImage(py::module& m) {
                     py::overload_cast<>(&Image::Name),
                     &Image::SetName,
                     "Name of the image.")
-      .def("cam_from_world",
-           &Image::CamFromWorld,
-           "The pose of the image, defined as the transformation from world to "
-           "camera space. Read-only; supports non-trivial frame (rig).")
+      .def_property_readonly(
+          "cam_from_world",
+          [](const Image& self) -> py::object {
+            if (self.HasPose()) {
+              return py::cast(self.CamFromWorld());
+            } else {
+              return py::none();
+            }
+          },
+          "The pose of the image, defined as the transformation from world to "
+          "camera space. Read-only; supports non-trivial frame (rig). "
+          "Returns None if the image has no valid pose.")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
       .def_property(
@@ -259,7 +267,28 @@ void BindSceneImage(py::module& m) {
   DefBoolVectorProperty(PyImage, "is_inlier", &Image::is_inlier);
   DefBoolVectorProperty(PyImage, "is_depth_outlier", &Image::is_depth_outlier);
   DefBoolVectorProperty(PyImage, "is_track_anchor", &Image::is_track_anchor);
-  MakeDataclass(PyImage);
+  MakeDataclass(PyImage,
+                {"angular_stddevs",
+                 "camera",
+                 "camera_id",
+                 "data_id",
+                 "depth_prior_stddevs",
+                 "depth_prior_validity",
+                 "depth_priors",
+                 "features",
+                 "features_undist",
+                 "frame",
+                 "frame_id",
+                 "has_pose",
+                 "image_id",
+                 "is_depth_outlier",
+                 "is_inlier",
+                 "is_registered",
+                 "is_track_anchor",
+                 "name",
+                 "num_points3D",
+                 "pixel_cholesky_xy",
+                 "points2D"});
 
   py::bind_map<ImageMap>(m, "ImageMap");
 }
