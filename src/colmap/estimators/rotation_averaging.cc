@@ -42,12 +42,14 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
   return all_known;
 }
 
-// Compute maximum spanning tree of the pose graph weighted by inlier count.
-// Returns the root image_id and populates the parents map.
+}  // namespace
+
 image_t ComputeMaximumPoseGraphSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& image_ids,
-    std::unordered_map<image_t, image_t>& parents) {
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    const CorrespondenceGraph* correspondence_graph) {
   // Build mapping between image_id and contiguous indices.
   std::unordered_map<image_t, int> image_id_to_idx;
   std::vector<image_t> idx_to_image_id;
@@ -59,11 +61,24 @@ image_t ComputeMaximumPoseGraphSpanningTree(
     idx_to_image_id.push_back(image_id);
   }
 
-  // Build edges and weights from view graph.
+  // Build edges and weights from the pose graph.
   std::vector<std::pair<int, int>> edges;
   std::vector<float> weights;
   edges.reserve(pose_graph.NumEdges());
   weights.reserve(pose_graph.NumEdges());
+
+  // Edge weight = inlier count when a CorrespondenceGraph is plumbed
+  // through (post-RANSAC survivor count, matches the inlier-count semantic),
+  // falling back to ``edge.num_matches`` (raw match count) otherwise so
+  // mainline colmap callers without a CG keep their existing behavior.
+  //
+  // When ``prioritize_tracking`` is also enabled, LC-dominated edges
+  // additionally have ``kLCPenalty`` subtracted so the spanning tree
+  // picks tracking-dominated edges as parents.
+  constexpr float kLCPenalty = 1e9f;
+  const auto* cg_map_ptr = (correspondence_graph != nullptr)
+                               ? &correspondence_graph->ImagePairsMap()
+                               : nullptr;
 
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
@@ -73,7 +88,21 @@ image_t ComputeMaximumPoseGraphSpanningTree(
       continue;
     }
     edges.emplace_back(it1->second, it2->second);
-    weights.push_back(static_cast<float>(edge.num_matches));
+    const CorrespondenceGraph::ImagePair* cg_pair_ptr = nullptr;
+    if (cg_map_ptr != nullptr) {
+      auto cg_pair_it = cg_map_ptr->find(pair_id);
+      if (cg_pair_it != cg_map_ptr->end()) {
+        cg_pair_ptr = &cg_pair_it->second;
+      }
+    }
+    float w = (cg_pair_ptr != nullptr)
+                  ? static_cast<float>(cg_pair_ptr->inliers.size())
+                  : static_cast<float>(edge.num_matches);
+    if (prioritize_tracking && cg_pair_ptr != nullptr &&
+        !IsTrackingPair(*cg_pair_ptr)) {
+      w -= kLCPenalty;
+    }
+    weights.push_back(w);
   }
 
   // Compute spanning tree using generic algorithm.
@@ -90,6 +119,8 @@ image_t ComputeMaximumPoseGraphSpanningTree(
 
   return idx_to_image_id[tree.root];
 }
+
+namespace {
 
 // Computes the largest connected component and returns image ids.
 std::unordered_set<image_t> ComputeLargestConnectedComponentImageIds(
@@ -270,7 +301,9 @@ bool RotationEstimator::EstimateRotations(
     const PoseGraph& pose_graph,
     const std::vector<PosePrior>& pose_priors,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    std::unordered_map<image_pair_t, double>* final_weights,
+    const CorrespondenceGraph* correspondence_graph) {
   if (UseGravity(options_, pose_priors) &&
       !AllSensorsFromRigKnown(reconstruction.Rigs())) {
     return false;
@@ -278,15 +311,22 @@ bool RotationEstimator::EstimateRotations(
 
   // Handle stratified solving for mixed gravity systems.
   if (UseGravity(options_, pose_priors) && options_.use_stratified) {
-    if (!MaybeSolveGravityAlignedSubset(
-            pose_graph, pose_priors, active_image_ids, reconstruction)) {
+    if (!MaybeSolveGravityAlignedSubset(pose_graph,
+                                        pose_priors,
+                                        active_image_ids,
+                                        reconstruction,
+                                        correspondence_graph)) {
       return false;
     }
   }
 
   // Solve the full system.
-  if (!SolveRotationAveraging(
-          pose_graph, pose_priors, active_image_ids, reconstruction)) {
+  if (!SolveRotationAveraging(pose_graph,
+                              pose_priors,
+                              active_image_ids,
+                              reconstruction,
+                              final_weights,
+                              correspondence_graph)) {
     return false;
   }
 
@@ -304,7 +344,8 @@ bool RotationEstimator::MaybeSolveGravityAlignedSubset(
     const PoseGraph& pose_graph,
     const std::vector<PosePrior>& pose_priors,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    const CorrespondenceGraph* correspondence_graph) {
   // Build map from image to pose prior.
   std::unordered_map<image_t, const PosePrior*> image_to_pose_prior;
   for (const auto& pose_prior : pose_priors) {
@@ -367,7 +408,9 @@ bool RotationEstimator::MaybeSolveGravityAlignedSubset(
     if (!SolveRotationAveraging(gravity_pose_graph,
                                 pose_priors,
                                 gravity_image_ids,
-                                gravity_reconstruction)) {
+                                gravity_reconstruction,
+                                nullptr,
+                                correspondence_graph)) {
       return false;
     }
 
@@ -396,18 +439,24 @@ bool RotationEstimator::SolveRotationAveraging(
     const PoseGraph& pose_graph,
     const std::vector<PosePrior>& pose_priors,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    std::unordered_map<image_pair_t, double>* final_weights,
+    const CorrespondenceGraph* correspondence_graph) {
   // Initialize rotations from maximum spanning tree. Note that without
   // intialization, the gravity-aligned rotation averaging is prone to random
   // flips by 180deg.
   if (!options_.skip_initialization) {
     InitializeFromMaximumSpanningTree(
-        pose_graph, active_image_ids, reconstruction);
+        pose_graph, active_image_ids, reconstruction, correspondence_graph);
   }
 
   // Build the optimization problem.
-  RotationAveragingProblem problem(
-      pose_graph, pose_priors, options_, active_image_ids, reconstruction);
+  RotationAveragingProblem problem(pose_graph,
+                                   pose_priors,
+                                   options_,
+                                   active_image_ids,
+                                   reconstruction,
+                                   correspondence_graph);
 
   // Solve and apply results.
   RotationAveragingSolver solver(options_);
@@ -422,11 +471,16 @@ bool RotationEstimator::SolveRotationAveraging(
 void RotationEstimator::InitializeFromMaximumSpanningTree(
     const PoseGraph& pose_graph,
     const std::unordered_set<image_t>& active_image_ids,
-    Reconstruction& reconstruction) {
+    Reconstruction& reconstruction,
+    const CorrespondenceGraph* correspondence_graph) {
   // Compute maximum spanning tree over active images.
   std::unordered_map<image_t, image_t> parents;
   const image_t root = ComputeMaximumPoseGraphSpanningTree(
-      pose_graph, active_image_ids, parents);
+      pose_graph,
+      active_image_ids,
+      parents,
+      /*prioritize_tracking=*/options_.use_video_constraints,
+      correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
   // Iterate through the tree to initialize the rotation.
@@ -576,10 +630,13 @@ bool InitializeRigRotationsFromImages(
   return true;
 }
 
-bool RunRotationAveraging(const RotationEstimatorOptions& options,
-                          PoseGraph& pose_graph,
-                          Reconstruction& reconstruction,
-                          const std::vector<PosePrior>& pose_priors) {
+bool RunRotationAveraging(
+    const RotationEstimatorOptions& options,
+    PoseGraph& pose_graph,
+    Reconstruction& reconstruction,
+    const std::vector<PosePrior>& pose_priors,
+    std::unordered_map<image_pair_t, double>* final_weights,
+    const CorrespondenceGraph* correspondence_graph) {
   std::unordered_set<image_t> active_image_ids;
 
   // Step 1: Solve rotation averaging on the largest connected component.
@@ -596,8 +653,12 @@ bool RunRotationAveraging(const RotationEstimatorOptions& options,
     pose_graph.InvalidatePairsOutsideActiveImageIds(active_image_ids);
 
     RotationEstimator rotation_estimator(options);
-    if (!rotation_estimator.EstimateRotations(
-            pose_graph, pose_priors, active_image_ids, reconstruction)) {
+    if (!rotation_estimator.EstimateRotations(pose_graph,
+                                              pose_priors,
+                                              active_image_ids,
+                                              reconstruction,
+                                              final_weights,
+                                              correspondence_graph)) {
       return false;
     }
   } else {
@@ -627,7 +688,9 @@ bool RunRotationAveraging(const RotationEstimatorOptions& options,
             pose_graph,
             pose_priors,
             expanded_active_image_ids,
-            recon_expanded)) {
+            recon_expanded,
+            nullptr,
+            correspondence_graph)) {
       return false;
     }
 
@@ -657,8 +720,12 @@ bool RunRotationAveraging(const RotationEstimatorOptions& options,
     options_ra.skip_initialization = true;
     options_ra.use_stratified = false;
     RotationEstimator rotation_estimator(options_ra);
-    if (!rotation_estimator.EstimateRotations(
-            pose_graph, pose_priors, active_image_ids, reconstruction)) {
+    if (!rotation_estimator.EstimateRotations(pose_graph,
+                                              pose_priors,
+                                              active_image_ids,
+                                              reconstruction,
+                                              final_weights,
+                                              correspondence_graph)) {
       return false;
     }
   }

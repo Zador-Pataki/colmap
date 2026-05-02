@@ -89,16 +89,24 @@ bool GlobalMapper::RotationAveraging(const RotationEstimatorOptions& options) {
   // connected component.
   RotationEstimatorOptions custom_options = options;
   custom_options.filter_unregistered = false;
-  if (!RunRotationAveraging(
-          custom_options, *pose_graph_, *reconstruction_, pose_priors)) {
+  if (!RunRotationAveraging(custom_options,
+                            *pose_graph_,
+                            *reconstruction_,
+                            pose_priors,
+                            nullptr,
+                            database_cache_->CorrespondenceGraph().get())) {
     return false;
   }
 
   // Second pass: re-solve on registered frames only to refine rotations
   // after outlier removal.
   custom_options.filter_unregistered = true;
-  if (!RunRotationAveraging(
-          custom_options, *pose_graph_, *reconstruction_, pose_priors)) {
+  if (!RunRotationAveraging(custom_options,
+                            *pose_graph_,
+                            *reconstruction_,
+                            pose_priors,
+                            nullptr,
+                            database_cache_->CorrespondenceGraph().get())) {
     return false;
   }
 
@@ -129,7 +137,11 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   to.intra_image_consistency_threshold =
       options.track_intra_image_consistency_threshold;
   to.min_num_views_per_track = options.track_min_num_views_per_track;
-  to.required_tracks_per_view = options.track_required_tracks_per_view;
+  // LC second pass appends observations after the union-find pass, so it needs
+  // the full candidate set. Without LC, preserve native per-view limiting.
+  to.required_tracks_per_view = options.track_lc_second_pass
+                                    ? std::numeric_limits<int>::max()
+                                    : options.track_required_tracks_per_view;
 
   std::vector<image_pair_t> valid_pair_ids;
   valid_pair_ids.reserve(pose_graph_->NumEdges());
@@ -137,11 +149,21 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
     valid_pair_ids.push_back(pair_id);
   }
 
-  auto selected = EstablishTracksFromCorrGraph(
-      valid_pair_ids,
-      *database_cache_->CorrespondenceGraph(),
-      image_id_to_keypoints,
-      to);
+  MatchPredicate ignore_match;
+  if (options.track_lc_second_pass) {
+    ignore_match = MakeLoopClosureMatchPredicate(
+        valid_pair_ids, *database_cache_->CorrespondenceGraph());
+  }
+  auto selected =
+      EstablishTracksFromCorrGraph(valid_pair_ids,
+                                   *database_cache_->CorrespondenceGraph(),
+                                   image_id_to_keypoints,
+                                   to,
+                                   ignore_match);
+  if (options.track_lc_second_pass) {
+    AppendLoopClosureObservations(
+        valid_pair_ids, *database_cache_->CorrespondenceGraph(), selected);
+  }
   for (auto& [point3D_id, point3D] : selected) {
     reconstruction_->AddPoint3D(point3D_id, std::move(point3D));
   }

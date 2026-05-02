@@ -76,6 +76,11 @@ COLMAP_ADD_TEST(
     LINK_LIBS colmap_sfm
 )
 COLMAP_ADD_TEST(
+    NAME track_establishment_test
+    SRCS track_establishment_test.cc
+    LINK_LIBS colmap_sfm
+)
+COLMAP_ADD_TEST(
     NAME track_filter_test
     SRCS track_filter_test.cc
     LINK_LIBS colmap_sfm

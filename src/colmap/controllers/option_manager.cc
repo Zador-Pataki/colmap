@@ -715,6 +715,8 @@ void OptionManager::AddGlobalMapperOptions() {
                    &global_mapper->mapper.track_required_tracks_per_view);
   AddDefaultOption("GlobalMapper.track_min_num_views_per_track",
                    &global_mapper->mapper.track_min_num_views_per_track);
+  AddDefaultOption("GlobalMapper.track_lc_second_pass",
+                   &global_mapper->mapper.track_lc_second_pass);
 
   // Global positioning options.
   AddDefaultOption("GlobalMapper.gp_use_gpu",

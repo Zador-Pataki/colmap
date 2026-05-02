@@ -67,6 +67,17 @@ struct RotationEstimatorOptions {
   // If > 0, filter image pairs with rotation error exceeding this threshold
   // after solving, then recompute active set.
   double max_rotation_error_deg = 10.0;
+
+  // Drop pairs where LC inliers exceed tracking inliers.
+  bool skip_risky_lc_pairs = false;
+
+  // Use Ceres solver with per-pair Huber/Cauchy loss instead of L1+IRLS.
+  // Mutually exclusive with use_gravity.
+  bool use_video_constraints = false;
+
+  // Loss scales for the video-aware Ceres solver.
+  double video_tracking_huber_scale = 0.1;  // ~5.7 degrees
+  double video_lc_cauchy_scale = 0.05;      // ~2.8 degrees
 };
 
 // High-level interface for rotation averaging.
@@ -82,10 +93,13 @@ class RotationEstimator {
   // Solves rotation averaging and registers frames with computed poses.
   // active_image_ids defines which images to include.
   // Returns true on successful estimation.
-  bool EstimateRotations(const PoseGraph& pose_graph,
-                         const std::vector<PosePrior>& pose_priors,
-                         const std::unordered_set<image_t>& active_image_ids,
-                         Reconstruction& reconstruction);
+  bool EstimateRotations(
+      const PoseGraph& pose_graph,
+      const std::vector<PosePrior>& pose_priors,
+      const std::unordered_set<image_t>& active_image_ids,
+      Reconstruction& reconstruction,
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
  private:
   // Maybe solves 1-DOF rotation averaging on the gravity-aligned subset.
@@ -94,20 +108,24 @@ class RotationEstimator {
       const PoseGraph& pose_graph,
       const std::vector<PosePrior>& pose_priors,
       const std::unordered_set<image_t>& active_image_ids,
-      Reconstruction& reconstruction);
+      Reconstruction& reconstruction,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   // Core rotation averaging solver.
   bool SolveRotationAveraging(
       const PoseGraph& pose_graph,
       const std::vector<PosePrior>& pose_priors,
       const std::unordered_set<image_t>& active_image_ids,
-      Reconstruction& reconstruction);
+      Reconstruction& reconstruction,
+      std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   // Initializes rotations from maximum spanning tree.
   void InitializeFromMaximumSpanningTree(
       const PoseGraph& pose_graph,
       const std::unordered_set<image_t>& active_image_ids,
-      Reconstruction& reconstruction);
+      Reconstruction& reconstruction,
+      const class CorrespondenceGraph* correspondence_graph = nullptr);
 
   const RotationEstimatorOptions options_;
 };
@@ -123,9 +141,21 @@ bool InitializeRigRotationsFromImages(
 // For cameras with unknown cam_from_rig, first estimates their orientations
 // independently using an expanded reconstruction, then initializes the
 // cam_from_rig and runs rotation averaging on the original reconstruction.
-bool RunRotationAveraging(const RotationEstimatorOptions& options,
-                          PoseGraph& pose_graph,
-                          Reconstruction& reconstruction,
-                          const std::vector<PosePrior>& pose_priors);
+bool RunRotationAveraging(
+    const RotationEstimatorOptions& options,
+    PoseGraph& pose_graph,
+    Reconstruction& reconstruction,
+    const std::vector<PosePrior>& pose_priors,
+    std::unordered_map<image_pair_t, double>* final_weights = nullptr,
+    const class CorrespondenceGraph* correspondence_graph = nullptr);
+
+// MST weighted by inlier count. When prioritize_tracking is set and a
+// CorrespondenceGraph is provided, LC-dominated edges are penalized.
+image_t ComputeMaximumPoseGraphSpanningTree(
+    const PoseGraph& pose_graph,
+    const std::unordered_set<image_t>& image_ids,
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    const class CorrespondenceGraph* correspondence_graph);
 
 }  // namespace colmap

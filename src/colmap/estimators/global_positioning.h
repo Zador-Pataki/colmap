@@ -4,8 +4,10 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include <ceres/ceres.h>
 
@@ -46,6 +48,15 @@ struct GlobalPositionerOptions {
   // Apply 0.5x ScaledLoss to BATA residuals from cameras without an EXIF
   // focal-length prior.
   bool apply_uncalibrated_loss_downweight = true;
+  // Scale factor applied to the loss of uncalibrated cameras when
+  // apply_uncalibrated_loss_downweight is true.
+  double uncalibrated_loss_downweight = 0.5;
+
+  // The options for the solver
+  ceres::Solver::Options solver_options;
+
+  // Include loop-closure observations in point3D problems.
+  bool use_lc_observations = false;
 
   // Skip random initialization and reuse existing positions/points.
   bool use_init = false;
@@ -53,8 +64,8 @@ struct GlobalPositionerOptions {
   // Cube half-extent for random initialization of positions and points.
   double random_init_scale = 100.0;
 
-  // The options for the solver
-  ceres::Solver::Options solver_options;
+  // Per-observation geometry loss config for LC routing.
+  LossConfig loss_lc_geometry;
 
   GlobalPositionerOptions() {
     solver_options.num_threads = -1;
@@ -94,6 +105,12 @@ class GlobalPositioner {
   void AddPoint3DToProblem(point3D_t point3D_id,
                            Reconstruction& reconstruction);
 
+  void AddObservationToProblem(point3D_t point3D_id,
+                               const TrackElement& observation,
+                               bool random_initialization,
+                               Reconstruction& reconstruction,
+                               bool is_lc_observation = false);
+
   // Set the parameter groups
   void AddCamerasAndPointsToParameterGroups(Reconstruction& reconstruction);
 
@@ -112,6 +129,7 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> loss_function_;
   std::shared_ptr<ceres::LossFunction> loss_function_ptcam_uncalibrated_;
   std::shared_ptr<ceres::LossFunction> loss_function_ptcam_calibrated_;
+  std::shared_ptr<ceres::LossFunction> cached_loss_lc_geometry_;
 
   // Auxiliary scale variables.
   std::vector<double> scales_;

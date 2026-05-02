@@ -66,6 +66,8 @@ struct GlobalMapperOptions {
   int track_required_tracks_per_view = std::numeric_limits<int>::max();
   // Minimum number of views per track.
   int track_min_num_views_per_track = 3;
+  // Append LC observations to tracks after establishment.
+  bool track_lc_second_pass = false;
 
   // Thresholds for each component.
   double max_angular_reproj_error_deg = 1.;   // for global positioning

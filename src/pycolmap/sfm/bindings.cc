@@ -8,6 +8,7 @@ void BindIncrementalMapper(py::module& m);
 void BindViewGraphManipulation(py::module& m);
 void BindTrackFilter(py::module& m);
 void BindImagePairInliers(py::module& m);
+void BindTrackEstablishment(py::module& m);
 
 void BindSfm(py::module& m) {
   BindObservationManager(m);
@@ -16,4 +17,5 @@ void BindSfm(py::module& m) {
   BindViewGraphManipulation(m);
   BindTrackFilter(m);
   BindImagePairInliers(m);
+  BindTrackEstablishment(m);
 }

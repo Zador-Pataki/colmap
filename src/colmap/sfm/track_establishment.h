@@ -4,8 +4,10 @@
 #include "colmap/scene/point3d.h"
 #include "colmap/util/types.h"
 
+#include <functional>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Core>
@@ -27,28 +29,49 @@ struct TrackEstablishmentOptions {
   int required_tracks_per_view = std::numeric_limits<int>::max();
 };
 
-// Build tracks from a correspondence graph via union-find over inlier
-// matches, intra-image consistency check, length filter, and an optional
-// greedy length-sorted subsample. Returns ``{point3D_id: Point3D}`` with
-// each ``Point3D::track`` populated; xyz / color are default-constructed
-// and left for downstream triangulation to fill.
-//
-// Inputs:
-//   * ``valid_pair_ids``: image pairs to iterate. Native callers pass
-//     ``pose_graph.ValidEdges() | keys``; callers pass the subset of edges to
-//     consider (e.g. ``correspondence_graph.image_pairs`` with
-//     ``is_valid==true``).
-//   * ``corr_graph``: ``ExtractMatchesBetweenImages`` reads the inlier
-//     matches stored as ``flat_corrs`` (already filtered to RANSAC inliers
-//     by the geom-verify step).
-//   * ``image_id_to_keypoints``: per-image 2D keypoints used for the
-//     intra-image consistency check.
-//   * ``options``: the three thresholds above.
+// Predicate called for each match (image_id1, point2D_idx1, image_id2,
+// point2D_idx2). Returns true to skip (ignore) the match.
+using MatchPredicate =
+    std::function<bool(image_t, point2D_t, image_t, point2D_t)>;
+
+// Returns a MatchPredicate that ignores exact LC-flagged inlier matches
+// (are_lc==true) in the correspondence graph. This excludes LC pairwise
+// constraints from the first-pass union-find while still allowing the same
+// endpoints to participate in regular tracks through non-LC matches.
+MatchPredicate MakeLoopClosureMatchPredicate(
+    const std::vector<image_pair_t>& valid_pair_ids,
+    const CorrespondenceGraph& corr_graph);
+
+// Build tracks via union-find over matches extracted from the correspondence
+// graph with consistency check, length filter, and optional greedy subsample.
+// Returns {point3D_id: Point3D} with Track populated; xyz/color left for
+// triangulation.
 std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     const std::vector<image_pair_t>& valid_pair_ids,
     const CorrespondenceGraph& corr_graph,
     const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>&
         image_id_to_keypoints,
-    const TrackEstablishmentOptions& options);
+    const TrackEstablishmentOptions& options,
+    const MatchPredicate& ignore_match = {});
+
+// Append LC observations to existing tracks as Track::lc_elements.
+// 4 cases: neither/both-distinct/both-same/one-side has a track.
+// New track ids minted from max(track_id)+1.
+void AppendLoopClosureObservations(
+    const std::vector<image_pair_t>& valid_pair_ids,
+    const CorrespondenceGraph& corr_graph,
+    std::unordered_map<point3D_t, Point3D>& tracks);
+
+struct TrackProblemFilterOptions {
+  int min_num_views_per_track = 3;
+  int max_num_views_per_track = std::numeric_limits<int>::max();
+};
+
+// Filter tracks for the optimization problem. LC observations may augment an
+// admitted regular track, but do not satisfy the regular-view admission gate.
+std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
+    const TrackProblemFilterOptions& options,
+    const std::unordered_set<image_t>& registered_image_ids,
+    const std::unordered_map<point3D_t, Point3D>& tracks_full);
 
 }  // namespace colmap

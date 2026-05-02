@@ -325,7 +325,8 @@ bool Image::operator==(const Image& other) const {
                       name_ == other.name_ &&                  //
                       num_points3D_ == other.num_points3D_ &&  //
                       HasPose() == other.HasPose() &&          //
-                      points2D_ == other.points2D_;
+                      points2D_ == other.points2D_ &&          //
+                      pixel_cholesky_xy_ == other.pixel_cholesky_xy_;
   if (!HasPose()) {
     return result;
   } else {

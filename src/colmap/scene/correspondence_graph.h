@@ -66,6 +66,8 @@ class CorrespondenceGraph {
   };
 
   // Two-view image pair with geometry, matches, and metadata.
+  // Extends colmap core with image IDs, validity flags,
+  // loop closure markers, covariance, and full match data.
   struct ImagePair {
     // Default constructor.
     ImagePair() = default;
@@ -105,6 +107,9 @@ class CorrespondenceGraph {
 
     // Row indices of inliers in the matches matrix.
     std::vector<int> inliers;
+
+    // Whether each match is a loop closure match (same size as matches.rows()).
+    std::vector<bool> are_lc;
   };
 
   CorrespondenceGraph() = default;
@@ -198,7 +203,9 @@ class CorrespondenceGraph {
   inline std::unordered_map<image_pair_t, ImagePair>& MutableImagePairs() {
     return image_pairs_;
   }
-  // Const accessor for the internal image_pairs map.
+  // Const accessor for the internal image_pairs map. RA's
+  // skip_risky_lc_pairs path uses this to read ImagePair.{inliers, are_lc}
+  // without taking mutable access.
   inline const std::unordered_map<image_pair_t, ImagePair>& ImagePairsMap()
       const {
     return image_pairs_;

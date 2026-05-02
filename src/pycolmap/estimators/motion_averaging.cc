@@ -13,6 +13,8 @@ using namespace pybind11::literals;
 namespace py = pybind11;
 
 void BindGlobalPositioner(py::module& m) {
+  // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
+  // bundle_adjustment.cc), which runs earlier in ``BindEstimators``.
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -49,13 +51,16 @@ void BindGlobalPositioner(py::module& m) {
                          "Minimum number of views per track.")
           .def_readwrite("random_seed",
                          &GlobalPositionerOptions::random_seed,
-                         "PRNG seed for random initialization. -1 for "
-                         "non-deterministic.")
+                         "PRNG seed for random initialization. Default -1 "
+                         "(non-deterministic random_device). When -1 the "
+                         "ctor honors a GP_SEED env var for deterministic "
+                         "reproducibility; set explicitly (>=0) to override.")
           .def_readwrite("loss",
                          &GlobalPositionerOptions::loss,
                          "Top-level robust loss applied to the BATA "
                          "direction residual (LossConfig: type, scale, "
-                         "weight). Default HUBER@0.1.")
+                         "weight). Default HUBER@0.1 — was hardcoded in "
+                         "upstream colmap GP.")
           .def_readwrite("use_parameter_block_ordering",
                          &GlobalPositionerOptions::use_parameter_block_ordering,
                          "Whether to use custom parameter block ordering.")
@@ -65,15 +70,11 @@ void BindGlobalPositioner(py::module& m) {
               "Apply 0.5x ScaledLoss to BATA residuals from cameras whose "
               "focal length lacks an EXIF prior. Default true. Set false "
               "to disable the downweight.")
-          .def_readwrite("use_init",
-                         &GlobalPositionerOptions::use_init,
-                         "If true, skip random init for both camera centers "
-                         "and track xyz.")
           .def_readwrite(
-              "random_init_scale",
-              &GlobalPositionerOptions::random_init_scale,
-              "Cube size for random init of camera centers / points (linear).")
-          // Pass-through to ceres::Solver::Options sub-fields.
+              "uncalibrated_loss_downweight",
+              &GlobalPositionerOptions::uncalibrated_loss_downweight,
+              "Scale factor applied to the loss of uncalibrated cameras when "
+              "apply_uncalibrated_loss_downweight is true. Default 0.5.")
           .def_property(
               "num_threads",
               [](const GlobalPositionerOptions& self) {
@@ -118,7 +119,26 @@ void BindGlobalPositioner(py::module& m) {
               [](GlobalPositionerOptions& self, double v) {
                 self.solver_options.parameter_tolerance = v;
               },
-              "Ceres solver parameter tolerance.");
+              "Ceres solver parameter tolerance.")
+          // Optional extensions (default OFF — vanilla call = vanilla GP).
+          .def_readwrite("use_init",
+                         &GlobalPositionerOptions::use_init,
+                         "If true, skip random init for both camera centers "
+                         "and track xyz.")
+          .def_readwrite("use_lc_observations",
+                         &GlobalPositionerOptions::use_lc_observations,
+                         "If true, AddPoint3DToProblem also iterates "
+                         "track.lc_elements (loop-closure observations).")
+          .def_readwrite(
+              "random_init_scale",
+              &GlobalPositionerOptions::random_init_scale,
+              "Cube size for random init of camera centers / points (linear).");
+
+  // LC geometry loss config. ``LossConfig`` carries
+  // (type=LossFunctionType enum, scale, weight).
+  PyGlobalPositionerOptions.def_readwrite(
+      "loss_lc_geometry", &GlobalPositionerOptions::loss_lc_geometry);
+
   MakeDataclass(PyGlobalPositionerOptions);
 
   m.def(
@@ -126,16 +146,20 @@ void BindGlobalPositioner(py::module& m) {
       [](const GlobalPositionerOptions& options,
          const PoseGraph& pose_graph,
          Reconstruction& reconstruction) {
-        py::gil_scoped_release release;
-        bool success =
-            RunGlobalPositioning(options, pose_graph, reconstruction);
+        GlobalPositioner positioner(options);
+        bool success = false;
+        {
+          py::gil_scoped_release release;
+          success = positioner.Solve(pose_graph, reconstruction);
+        }
         return success;
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "Solve global positioning using point-to-camera constraints. Returns "
-      "True if optimization succeeded.");
+      "True on success. ``reconstruction`` is mutated in place with the "
+      "optimized poses + track xyz.");
 }
 
 void BindGravityRefiner(py::module& m) {
@@ -227,7 +251,26 @@ void BindRotationEstimator(py::module& m) {
               "max_rotation_error_deg",
               &RotationEstimatorOptions::max_rotation_error_deg,
               "Filter pairs with rotation error exceeding this threshold "
-              "(degrees).");
+              "(degrees).")
+          // --- Video / loop-closure extensions ---
+          .def_readwrite("skip_risky_lc_pairs",
+                         &RotationEstimatorOptions::skip_risky_lc_pairs,
+                         "Drop pairs whose LC inliers exceed non-LC inliers.")
+          .def_readwrite(
+              "use_video_constraints",
+              &RotationEstimatorOptions::use_video_constraints,
+              "Use Ceres video-aware solver with differential loss "
+              "functions. Mutually exclusive with use_gravity. Also gates "
+              "the LC-penalty branch in the MST initializer.")
+          .def_readwrite(
+              "video_tracking_huber_scale",
+              &RotationEstimatorOptions::video_tracking_huber_scale,
+              "Huber loss scale for tracking pairs in the video solver.")
+          .def_readwrite(
+              "video_lc_cauchy_scale",
+              &RotationEstimatorOptions::video_lc_cauchy_scale,
+              "Cauchy loss scale for loop-closure pairs in the video "
+              "solver.");
   MakeDataclass(PyRotationEstimatorOptions);
 
   m.def(
@@ -235,17 +278,31 @@ void BindRotationEstimator(py::module& m) {
       [](const RotationEstimatorOptions& options,
          PoseGraph& pose_graph,
          Reconstruction& reconstruction,
-         const std::vector<PosePrior>& pose_priors) {
-        py::gil_scoped_release release;
-        return RunRotationAveraging(
-            options, pose_graph, reconstruction, pose_priors);
+         const std::vector<PosePrior>& pose_priors,
+         const CorrespondenceGraph* correspondence_graph) {
+        bool success = false;
+        {
+          py::gil_scoped_release release;
+          success = RunRotationAveraging(options,
+                                         pose_graph,
+                                         reconstruction,
+                                         pose_priors,
+                                         nullptr,
+                                         correspondence_graph);
+        }
+        return py::cast(success);
       },
       "options"_a,
       "pose_graph"_a,
       "reconstruction"_a,
       "pose_priors"_a,
+      "correspondence_graph"_a = nullptr,
       "High-level rotation averaging solver that handles rig expansion. "
-      "Returns True if rotation averaging succeeded.");
+      "Returns True if rotation averaging succeeded. "
+      "``correspondence_graph`` is required when "
+      "``options.skip_risky_lc_pairs=True`` so the LC-majority filter can "
+      "read ImagePair.{inliers, are_lc} (PoseGraph::Edge does not carry "
+      "them).");
 }
 
 void BindMotionAveraging(py::module& m) {
