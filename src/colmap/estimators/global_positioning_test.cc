@@ -1058,10 +1058,13 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
       residual_values_dir / "iter_000000_raw_costs_f64.bin";
   const std::filesystem::path robust_costs_path =
       residual_values_dir / "iter_000000_robust_costs_f64.bin";
+  const std::filesystem::path raw_jacobians_path =
+      residual_values_dir / "iter_000000_raw_jacobians_f64.bin";
   ASSERT_TRUE(ExistsFile(metadata_path));
   ASSERT_TRUE(ExistsFile(raw_residuals_path));
   ASSERT_TRUE(ExistsFile(raw_costs_path));
   ASSERT_TRUE(ExistsFile(robust_costs_path));
+  ASSERT_FALSE(ExistsFile(raw_jacobians_path));
 
   const std::string manifest = ReadFileForTest(trace_dir / "manifest.json");
   EXPECT_NE(manifest.find("\"trace_level\": \"residual_values\""),
@@ -1070,6 +1073,7 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
   const std::string metadata = ReadFileForTest(metadata_path);
   for (const char* key : {"\"num_residual_blocks\"",
                           "\"total_scalar_residuals\"",
+                          "\"has_raw_jacobians\"",
                           "\"residual_ids\"",
                           "\"residual_dims\"",
                           "\"residual_offsets\"",
@@ -1082,6 +1086,10 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
             std::string::npos);
   EXPECT_NE(metadata.find("iter_000000_raw_costs_f64.bin"), std::string::npos);
   EXPECT_NE(metadata.find("iter_000000_robust_costs_f64.bin"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"has_raw_jacobians\": false"), std::string::npos);
+  EXPECT_EQ(metadata.find("\"raw_jacobians\": {"), std::string::npos);
+  EXPECT_EQ(metadata.find("iter_000000_raw_jacobians_f64.bin"),
             std::string::npos);
 
   const std::optional<int64_t> num_residual_blocks =
@@ -1187,6 +1195,127 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
   EXPECT_NEAR(robust_cost_sum,
               *ceres_iteration_cost,
               std::max(1e-9, std::abs(*ceres_iteration_cost) * 1e-12));
+}
+
+TEST(GlobalPositioning, ResidualJacobiansTraceWritesMetadataAndSidecars) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+  const std::filesystem::path trace_dir =
+      CreateTestDir() / "gp_residual_jacobians";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.trace.level = GlobalPositioningTraceLevel::kResidualJacobians;
+  options.trace.output_path = trace_dir;
+  options.trace.snapshot_every_n_iterations = 1;
+  options.trace.max_snapshotted_points = 2;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+  EXPECT_GT(positioner.NumReplayEntries(), 0u);
+
+  const std::filesystem::path residual_values_dir =
+      trace_dir / "residual_values";
+  ASSERT_TRUE(ExistsDir(residual_values_dir));
+
+  const std::filesystem::path metadata_path =
+      residual_values_dir / "iter_000000.json";
+  const std::filesystem::path raw_jacobians_path =
+      residual_values_dir / "iter_000000_raw_jacobians_f64.bin";
+  ASSERT_TRUE(ExistsFile(metadata_path));
+  ASSERT_TRUE(ExistsFile(raw_jacobians_path));
+
+  const std::string manifest = ReadFileForTest(trace_dir / "manifest.json");
+  EXPECT_NE(manifest.find("\"trace_level\": \"residual_jacobians\""),
+            std::string::npos);
+
+  const std::string metadata = ReadFileForTest(metadata_path);
+  for (const char* key : {"\"has_raw_jacobians\"",
+                          "\"total_jacobian_scalars\"",
+                          "\"parameter_block_sizes\"",
+                          "\"raw_jacobian_offsets\"",
+                          "\"parameter_blocks\"",
+                          "\"parameter_block_is_constant\"",
+                          "\"parameter_block_lower_bounds\"",
+                          "\"raw_jacobian_layout\"",
+                          "\"jacobian_domain\"",
+                          "\"loss_applied_to_jacobians\"",
+                          "\"manifold_applied_to_jacobians\"",
+                          "\"constant_parameter_blocks_included\"",
+                          "\"raw_jacobians\""}) {
+    EXPECT_NE(metadata.find(key), std::string::npos)
+        << "Missing residual-jacobians metadata key: " << key;
+  }
+  EXPECT_NE(metadata.find("\"has_raw_jacobians\": true"), std::string::npos);
+  EXPECT_NE(
+      metadata.find("\"raw_jacobian_layout\": "
+                    "\"residual_block_major/parameter_block_major/row_major\""),
+      std::string::npos);
+  EXPECT_NE(metadata.find("\"jacobian_domain\": "
+                          "\"raw_cost_function_ambient_parameters\""),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"loss_applied_to_jacobians\": false"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"manifold_applied_to_jacobians\": false"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"constant_parameter_blocks_included\": true"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("iter_000000_raw_jacobians_f64.bin"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"role\":\"frame_center\""), std::string::npos);
+  EXPECT_NE(metadata.find("\"role\":\"point3D\""), std::string::npos);
+  EXPECT_NE(metadata.find("\"role\":\"bata_scale\""), std::string::npos);
+  EXPECT_NE(metadata.find("\"role\":\"dmap_scale\""), std::string::npos);
+
+  const std::optional<int64_t> num_residual_blocks =
+      FindJsonIntForTest(metadata, "num_residual_blocks");
+  const std::optional<int64_t> total_jacobian_scalars =
+      FindJsonIntForTest(metadata, "total_jacobian_scalars");
+  ASSERT_TRUE(num_residual_blocks.has_value());
+  ASSERT_TRUE(total_jacobian_scalars.has_value());
+  ASSERT_GT(*num_residual_blocks, 0);
+  ASSERT_GT(*total_jacobian_scalars, 0);
+
+  std::vector<size_t> expected_parameter_block_sizes;
+  std::vector<size_t> expected_raw_jacobian_offsets;
+  size_t expected_jacobian_scalars = 0;
+  for (const GlobalPositioningResidualReplayEntry& entry :
+       positioner.ResidualReplayEntries()) {
+    ASSERT_EQ(entry.parameter_blocks.size(), entry.parameter_block_sizes.size())
+        << entry.residual_id;
+    for (const int parameter_block_size : entry.parameter_block_sizes) {
+      expected_parameter_block_sizes.push_back(
+          static_cast<size_t>(parameter_block_size));
+      expected_raw_jacobian_offsets.push_back(expected_jacobian_scalars);
+      expected_jacobian_scalars +=
+          entry.residual_dimension * static_cast<size_t>(parameter_block_size);
+    }
+  }
+
+  EXPECT_EQ(static_cast<size_t>(*total_jacobian_scalars),
+            expected_jacobian_scalars);
+  EXPECT_EQ(FindJsonSizeArrayForTest(metadata, "parameter_block_sizes"),
+            expected_parameter_block_sizes);
+  EXPECT_EQ(FindJsonSizeArrayForTest(metadata, "raw_jacobian_offsets"),
+            expected_raw_jacobian_offsets);
+  EXPECT_EQ(std::filesystem::file_size(raw_jacobians_path),
+            static_cast<uintmax_t>(*total_jacobian_scalars) * sizeof(double));
+
+  const std::vector<bool> evaluation_success =
+      FindJsonBoolArrayForTest(metadata, "evaluation_success");
+  ASSERT_EQ(evaluation_success.size(),
+            static_cast<size_t>(*num_residual_blocks));
+  EXPECT_TRUE(std::all_of(evaluation_success.begin(),
+                          evaluation_success.end(),
+                          [](const bool success) { return success; }));
+
+  const std::vector<double> raw_jacobians = ReadDoubleSidecarForTest(
+      raw_jacobians_path, static_cast<size_t>(*total_jacobian_scalars));
+  EXPECT_TRUE(std::all_of(
+      raw_jacobians.begin(), raw_jacobians.end(), [](const double value) {
+        return std::isfinite(value);
+      }));
 }
 
 TEST(GlobalPositioning, LowerTraceLevelsDoNotCreateResidualValues) {

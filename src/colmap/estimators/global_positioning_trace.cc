@@ -155,6 +155,11 @@ bool IsResidualValuesLevel(const GlobalPositioningTraceLevel level) {
          static_cast<int>(GlobalPositioningTraceLevel::kResidualValues);
 }
 
+bool IsResidualJacobiansLevel(const GlobalPositioningTraceLevel level) {
+  return static_cast<int>(level) >=
+         static_cast<int>(GlobalPositioningTraceLevel::kResidualJacobians);
+}
+
 std::string IterationPrefix(const int iteration) {
   std::ostringstream stream;
   stream << "iter_" << std::setw(6) << std::setfill('0') << iteration;
@@ -190,6 +195,99 @@ std::string JsonSizeArray(const std::vector<size_t>& values) {
       stream << ",";
     }
     stream << values[i];
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonNestedSizeArray(
+    const std::vector<std::vector<size_t>>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << JsonSizeArray(values[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonNestedBoolArray(const std::vector<std::vector<bool>>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << "[";
+    for (size_t j = 0; j < values[i].size(); ++j) {
+      if (j > 0) {
+        stream << ",";
+      }
+      stream << (values[i][j] ? "true" : "false");
+    }
+    stream << "]";
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonDoubleArray(const std::vector<double>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << JsonDouble(values[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonNestedDoubleArray(
+    const std::vector<std::vector<std::vector<double>>>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << "[";
+    for (size_t j = 0; j < values[i].size(); ++j) {
+      if (j > 0) {
+        stream << ",";
+      }
+      stream << JsonDoubleArray(values[i][j]);
+    }
+    stream << "]";
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonParameterBlockDescriptors(
+    const std::vector<
+        std::vector<GlobalPositioningTraceParameterBlockDescriptor>>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << "[";
+    for (size_t j = 0; j < values[i].size(); ++j) {
+      if (j > 0) {
+        stream << ",";
+      }
+      stream << "{"
+             << "\"role\":" << JsonEscape(values[i][j].role) << ","
+             << "\"kind\":" << JsonEscape(values[i][j].kind) << ","
+             << "\"id\":" << values[i][j].id << "}";
+    }
+    stream << "]";
   }
   stream << "]";
   return stream.str();
@@ -311,6 +409,86 @@ size_t ValidateResidualValues(
   }
   THROW_CHECK_EQ(residual_values.raw_residuals.size(), total_scalar_residuals)
       << "Residual value raw_residuals count must match sum(residual_dims).";
+  if (residual_values.has_raw_jacobians) {
+    THROW_CHECK_EQ(residual_values.parameter_block_sizes.size(),
+                   num_residual_blocks)
+        << "Residual value parameter_block_sizes count must match "
+           "residual_ids count.";
+    THROW_CHECK_EQ(residual_values.raw_jacobian_offsets.size(),
+                   num_residual_blocks)
+        << "Residual value raw_jacobian_offsets count must match "
+           "residual_ids count.";
+    THROW_CHECK_EQ(residual_values.parameter_blocks.size(), num_residual_blocks)
+        << "Residual value parameter_blocks count must match residual_ids "
+           "count.";
+    THROW_CHECK_EQ(residual_values.parameter_block_is_constant.size(),
+                   num_residual_blocks)
+        << "Residual value parameter_block_is_constant count must match "
+           "residual_ids count.";
+    THROW_CHECK_EQ(residual_values.parameter_block_lower_bounds.size(),
+                   num_residual_blocks)
+        << "Residual value parameter_block_lower_bounds count must match "
+           "residual_ids count.";
+    size_t total_jacobian_scalars = 0;
+    for (size_t i = 0; i < num_residual_blocks; ++i) {
+      THROW_CHECK_EQ(residual_values.raw_jacobian_offsets[i].size(),
+                     residual_values.parameter_block_sizes[i].size())
+          << "Residual value raw_jacobian_offsets inner count must match "
+             "parameter_block_sizes inner count.";
+      THROW_CHECK_EQ(residual_values.parameter_blocks[i].size(),
+                     residual_values.parameter_block_sizes[i].size())
+          << "Residual value parameter_blocks inner count must match "
+             "parameter_block_sizes inner count.";
+      THROW_CHECK_EQ(residual_values.parameter_block_is_constant[i].size(),
+                     residual_values.parameter_block_sizes[i].size())
+          << "Residual value parameter_block_is_constant inner count must "
+             "match parameter_block_sizes inner count.";
+      THROW_CHECK_EQ(residual_values.parameter_block_lower_bounds[i].size(),
+                     residual_values.parameter_block_sizes[i].size())
+          << "Residual value parameter_block_lower_bounds inner count must "
+             "match parameter_block_sizes inner count.";
+      for (size_t block_idx = 0;
+           block_idx < residual_values.parameter_block_sizes[i].size();
+           ++block_idx) {
+        THROW_CHECK(
+            !residual_values.parameter_blocks[i][block_idx].role.empty())
+            << "Residual value parameter block role must be non-empty.";
+        THROW_CHECK(
+            !residual_values.parameter_blocks[i][block_idx].kind.empty())
+            << "Residual value parameter block kind must be non-empty.";
+        THROW_CHECK_EQ(
+            residual_values.parameter_block_lower_bounds[i][block_idx].size(),
+            residual_values.parameter_block_sizes[i][block_idx])
+            << "Residual value parameter_block_lower_bounds block shape must "
+               "match parameter_block_sizes.";
+        THROW_CHECK_EQ(residual_values.raw_jacobian_offsets[i][block_idx],
+                       total_jacobian_scalars)
+            << "Residual value raw_jacobian_offsets must be contiguous "
+               "cumulative offsets.";
+        total_jacobian_scalars +=
+            residual_values.residual_dims[i] *
+            residual_values.parameter_block_sizes[i][block_idx];
+      }
+    }
+    THROW_CHECK_EQ(residual_values.raw_jacobians.size(), total_jacobian_scalars)
+        << "Residual value raw_jacobians count must match residual_dims times "
+           "parameter_block_sizes.";
+  } else {
+    THROW_CHECK(residual_values.parameter_block_sizes.empty())
+        << "Residual value parameter_block_sizes require has_raw_jacobians.";
+    THROW_CHECK(residual_values.raw_jacobian_offsets.empty())
+        << "Residual value raw_jacobian_offsets require has_raw_jacobians.";
+    THROW_CHECK(residual_values.parameter_blocks.empty())
+        << "Residual value parameter_blocks require has_raw_jacobians.";
+    THROW_CHECK(residual_values.parameter_block_is_constant.empty())
+        << "Residual value parameter_block_is_constant require "
+           "has_raw_jacobians.";
+    THROW_CHECK(residual_values.parameter_block_lower_bounds.empty())
+        << "Residual value parameter_block_lower_bounds require "
+           "has_raw_jacobians.";
+    THROW_CHECK(residual_values.raw_jacobians.empty())
+        << "Residual value raw_jacobians require has_raw_jacobians.";
+  }
   return total_scalar_residuals;
 }
 
@@ -337,6 +515,8 @@ std::string GlobalPositioningTraceLevelToString(
       return "parameter_snapshots";
     case GlobalPositioningTraceLevel::kResidualValues:
       return "residual_values";
+    case GlobalPositioningTraceLevel::kResidualJacobians:
+      return "residual_jacobians";
   }
   return "unknown";
 }
@@ -481,6 +661,10 @@ bool GlobalPositioningTraceRecorder::IsParameterSnapshotsEnabled() const {
 
 bool GlobalPositioningTraceRecorder::IsResidualValuesEnabled() const {
   return IsResidualValuesLevel(options_.level);
+}
+
+bool GlobalPositioningTraceRecorder::IsResidualJacobiansEnabled() const {
+  return IsResidualJacobiansLevel(options_.level);
 }
 
 std::string GlobalPositioningTraceRecorder::AllocateResidualId() {
@@ -721,6 +905,7 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
   const std::string raw_residuals_filename = prefix + "_raw_residuals_f64.bin";
   const std::string raw_costs_filename = prefix + "_raw_costs_f64.bin";
   const std::string robust_costs_filename = prefix + "_robust_costs_f64.bin";
+  const std::string raw_jacobians_filename = prefix + "_raw_jacobians_f64.bin";
 
   WriteDoubleSidecar(residual_values_path / raw_residuals_filename,
                      residual_values.raw_residuals);
@@ -728,6 +913,10 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                      residual_values.raw_costs);
   WriteDoubleSidecar(residual_values_path / robust_costs_filename,
                      residual_values.robust_costs);
+  if (residual_values.has_raw_jacobians) {
+    WriteDoubleSidecar(residual_values_path / raw_jacobians_filename,
+                       residual_values.raw_jacobians);
+  }
 
   std::ofstream metadata_stream(metadata_path, std::ios::out | std::ios::trunc);
   THROW_CHECK_FILE_OPEN(metadata_stream, metadata_path);
@@ -741,15 +930,49 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                   << ",\n"
                   << "  \"total_scalar_residuals\": " << total_scalar_residuals
                   << ",\n"
-                  << "  \"residual_ids\": "
+                  << "  \"has_raw_jacobians\": "
+                  << (residual_values.has_raw_jacobians ? "true" : "false")
+                  << ",\n";
+  if (residual_values.has_raw_jacobians) {
+    metadata_stream << "  \"total_jacobian_scalars\": "
+                    << residual_values.raw_jacobians.size() << ",\n";
+  }
+  metadata_stream << "  \"residual_ids\": "
                   << JsonStringArray(residual_values.residual_ids) << ",\n"
                   << "  \"residual_dims\": "
                   << JsonSizeArray(residual_values.residual_dims) << ",\n"
                   << "  \"residual_offsets\": "
                   << JsonSizeArray(residual_values.residual_offsets) << ",\n"
                   << "  \"evaluation_success\": "
-                  << JsonBoolArray(residual_values.evaluation_success) << ",\n"
-                  << "  \"artifacts\": {\n";
+                  << JsonBoolArray(residual_values.evaluation_success) << ",\n";
+  if (residual_values.has_raw_jacobians) {
+    metadata_stream
+        << "  \"parameter_block_sizes\": "
+        << JsonNestedSizeArray(residual_values.parameter_block_sizes) << ",\n"
+        << "  \"raw_jacobian_offsets\": "
+        << JsonNestedSizeArray(residual_values.raw_jacobian_offsets) << ",\n"
+        << "  \"parameter_blocks\": "
+        << JsonParameterBlockDescriptors(residual_values.parameter_blocks)
+        << ",\n"
+        << "  \"parameter_block_is_constant\": "
+        << JsonNestedBoolArray(residual_values.parameter_block_is_constant)
+        << ",\n"
+        << "  \"parameter_block_lower_bounds\": "
+        << JsonNestedDoubleArray(residual_values.parameter_block_lower_bounds)
+        << ",\n"
+        << "  \"raw_jacobian_layout\": "
+        << JsonEscape(
+               "residual_block_major/parameter_block_major/"
+               "row_major")
+        << ",\n"
+        << "  \"jacobian_domain\": "
+        << JsonEscape("raw_cost_function_ambient_parameters") << ",\n"
+        << "  \"loss_applied_to_jacobians\": false,\n"
+        << "  \"manifold_applied_to_jacobians\": false,\n"
+        << "  \"constant_parameter_blocks_included\": true"
+        << ",\n";
+  }
+  metadata_stream << "  \"artifacts\": {\n";
   WriteResidualValueArtifactMetadata(metadata_stream,
                                      "raw_residuals",
                                      raw_residuals_filename,
@@ -762,6 +985,13 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                                      "robust_costs",
                                      robust_costs_filename,
                                      num_residual_blocks);
+  if (residual_values.has_raw_jacobians) {
+    metadata_stream << ",\n";
+    WriteResidualValueArtifactMetadata(metadata_stream,
+                                       "raw_jacobians",
+                                       raw_jacobians_filename,
+                                       residual_values.raw_jacobians.size());
+  }
   metadata_stream << "\n"
                   << "  }\n"
                   << "}\n";

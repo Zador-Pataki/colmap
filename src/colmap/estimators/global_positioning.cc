@@ -21,6 +21,11 @@ Eigen::Vector3d RandVector3d(double low, double high) {
                          RandomUniformReal(low, high));
 }
 
+GlobalPositioningTraceParameterBlockDescriptor TraceParameterBlock(
+    std::string role, std::string kind, const uint64_t id) {
+  return {std::move(role), std::move(kind), id};
+}
+
 MetricDepthOptions CreateMetricDepthOptions(
     const GlobalPositionerOptions& options) {
   MetricDepthOptions metric_depth_options;
@@ -263,6 +268,7 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     std::unique_ptr<ceres::IterationCallback> trace_callback;
     if (tracer_->Enabled()) {
       trace_callback = tracer_->CreateIterationCallback({
+          *problem_,
           reconstruction,
           frame_centers_,
           scales_,
@@ -552,7 +558,11 @@ void GlobalPositioner::AddPointToCameraConstraints(
       residual.dmap_scale_image_id = image_id;
       residual.loss_bucket = "scale_prior";
       tracer_->RecordResidual(
-          residual, scale_prior_cost, obs_count_scaled_loss, {&scale});
+          residual,
+          scale_prior_cost,
+          obs_count_scaled_loss,
+          {&scale},
+          {TraceParameterBlock("dmap_scale", "dmap_scale", image_id)});
     }
   }
   tracer_->RecordBucketSummaries();
@@ -784,7 +794,10 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
         residual,
         cost_function,
         loss_function,
-        {frame_centers_[image.FrameId()].data(), point3D.xyz.data(), &scale});
+        {frame_centers_[image.FrameId()].data(), point3D.xyz.data(), &scale},
+        {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+         TraceParameterBlock("point3D", "point3D", point3D_id),
+         TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
 
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint) {
@@ -824,7 +837,10 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           residual,
           cost_function,
           loss_function,
-          {point3D.xyz.data(), frame_centers_[image.FrameId()].data(), &scale});
+          {point3D.xyz.data(), frame_centers_[image.FrameId()].data(), &scale},
+          {TraceParameterBlock("point3D", "point3D", point3D_id),
+           TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+           TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
     } else {
       // If the cam_from_rig contains nan values, it needs to be re-estimated.
       // Initialize cams_in_rig_ if not already done.
@@ -849,13 +865,18 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       GlobalPositioningResidualDescriptor residual = observation_record;
       residual.residual_type = "bata_variable_rig";
       residual.loss_bucket = geometry_loss_bucket;
-      tracer_->RecordResidual(residual,
-                              cost_function,
-                              loss_function,
-                              {point3D.xyz.data(),
-                               frame_centers_[image.FrameId()].data(),
-                               cams_in_rig_[sensor_id].data(),
-                               &scale});
+      tracer_->RecordResidual(
+          residual,
+          cost_function,
+          loss_function,
+          {point3D.xyz.data(),
+           frame_centers_[image.FrameId()].data(),
+           cams_in_rig_[sensor_id].data(),
+           &scale},
+          {TraceParameterBlock("point3D", "point3D", point3D_id),
+           TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+           TraceParameterBlock("cam_in_rig", "cam_in_rig", sensor_id.id),
+           TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
     }
     if (!options_.use_metric_depth_constraint) {
       GlobalPositioningResidualDescriptor skip = observation_record;
@@ -1012,12 +1033,16 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
   residual.loss_bucket = depth_loss_bucket;
-  tracer_->RecordResidual(residual,
-                          metric_depth_cost,
-                          depth_loss,
-                          {frame_centers_[image.FrameId()].data(),
-                           point3D.xyz.data(),
-                           &dmap_scales_[observation.image_id]});
+  tracer_->RecordResidual(
+      residual,
+      metric_depth_cost,
+      depth_loss,
+      {frame_centers_[image.FrameId()].data(),
+       point3D.xyz.data(),
+       &dmap_scales_[observation.image_id]},
+      {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+       TraceParameterBlock("point3D", "point3D", point3D_id),
+       TraceParameterBlock("dmap_scale", "dmap_scale", observation.image_id)});
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(

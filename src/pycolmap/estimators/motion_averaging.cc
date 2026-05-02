@@ -23,7 +23,8 @@ void BindGlobalPositioner(py::module& m) {
           .value("SUMMARY", TraceLevel::kSummary)
           .value("RESIDUAL_LEDGER", TraceLevel::kResidualLedger)
           .value("PARAMETER_SNAPSHOTS", TraceLevel::kParameterSnapshots)
-          .value("RESIDUAL_VALUES", TraceLevel::kResidualValues);
+          .value("RESIDUAL_VALUES", TraceLevel::kResidualValues)
+          .value("RESIDUAL_JACOBIANS", TraceLevel::kResidualJacobians);
   AddStringToEnumConstructor(PyGlobalPositioningTraceLevel);
 
   auto PyGlobalPositioningTraceOptions =

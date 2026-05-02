@@ -48,9 +48,12 @@ struct GlobalPositioningResidualReplayEntry {
   size_t residual_dimension = 0;
   std::vector<int> parameter_block_sizes;
   std::vector<const double*> parameter_blocks;
+  std::vector<GlobalPositioningTraceParameterBlockDescriptor>
+      parameter_block_descriptors;
 };
 
 struct GlobalPositioningTraceLiveState {
+  const ceres::Problem& problem;
   const Reconstruction& reconstruction;
   const std::unordered_map<frame_t, Eigen::Vector3d>& frame_centers;
   const std::vector<double>& scales;
@@ -68,6 +71,7 @@ class GlobalPositioningTracer {
   bool ResidualLedgerEnabled() const;
   bool ParameterSnapshotsEnabled() const;
   bool ResidualValuesEnabled() const;
+  bool ResidualJacobiansEnabled() const;
 
   void WriteEvent(std::string event_type,
                   std::string stage,
@@ -86,7 +90,9 @@ class GlobalPositioningTracer {
       const GlobalPositioningResidualDescriptor& residual,
       const ceres::CostFunction* cost_function,
       const ceres::LossFunction* loss_function,
-      std::vector<const double*> parameter_blocks);
+      std::vector<const double*> parameter_blocks,
+      std::vector<GlobalPositioningTraceParameterBlockDescriptor>
+          parameter_block_descriptors);
 
   void RecordSkip(const GlobalPositioningResidualDescriptor& residual,
                   std::string skip_reason);

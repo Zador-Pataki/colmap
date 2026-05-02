@@ -19,6 +19,7 @@ enum class GlobalPositioningTraceLevel {
   kResidualLedger = 2,
   kParameterSnapshots = 3,
   kResidualValues = 4,
+  kResidualJacobians = 5,
 };
 
 std::string GlobalPositioningTraceLevelToString(
@@ -83,6 +84,12 @@ struct GlobalPositioningTraceParameterSnapshot {
   std::optional<GlobalPositioningTraceSnapshotArray> cams_in_rig;
 };
 
+struct GlobalPositioningTraceParameterBlockDescriptor {
+  std::string role;
+  std::string kind;
+  uint64_t id = 0;
+};
+
 struct GlobalPositioningTraceResidualValues {
   int iteration = 0;
   std::vector<std::string> residual_ids;
@@ -92,6 +99,14 @@ struct GlobalPositioningTraceResidualValues {
   std::vector<double> raw_residuals;
   std::vector<double> raw_costs;
   std::vector<double> robust_costs;
+  bool has_raw_jacobians = false;
+  std::vector<std::vector<size_t>> parameter_block_sizes;
+  std::vector<std::vector<size_t>> raw_jacobian_offsets;
+  std::vector<std::vector<GlobalPositioningTraceParameterBlockDescriptor>>
+      parameter_blocks;
+  std::vector<std::vector<bool>> parameter_block_is_constant;
+  std::vector<std::vector<std::vector<double>>> parameter_block_lower_bounds;
+  std::vector<double> raw_jacobians;
 };
 
 class GlobalPositioningTraceRecorder {
@@ -103,6 +118,7 @@ class GlobalPositioningTraceRecorder {
   bool IsResidualLedgerEnabled() const;
   bool IsParameterSnapshotsEnabled() const;
   bool IsResidualValuesEnabled() const;
+  bool IsResidualJacobiansEnabled() const;
   std::string AllocateResidualId();
 
   void WriteEvent(GlobalPositioningTraceRecord record);
