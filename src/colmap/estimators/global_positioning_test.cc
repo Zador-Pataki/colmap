@@ -336,10 +336,12 @@ class TestableGlobalPositioner : public GlobalPositioner {
   using GlobalPositioner::GlobalPositioner;
   size_t NumScales() const { return scales_.size(); }
   size_t NumFrameCenters() const { return frame_centers_.size(); }
-  size_t NumReplayEntries() const { return residual_replay_entries_.size(); }
+  size_t NumReplayEntries() const {
+    return ResidualReplayEntriesForTest().size();
+  }
   const std::vector<GlobalPositioningResidualReplayEntry>&
   ResidualReplayEntries() const {
-    return residual_replay_entries_;
+    return ResidualReplayEntriesForTest();
   }
   void SetupOnlyForTest(const PoseGraph& pose_graph,
                         Reconstruction& reconstruction) {

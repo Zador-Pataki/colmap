@@ -2,6 +2,7 @@
 
 #include "colmap/estimators/ceres_loss.h"
 #include "colmap/estimators/global_positioning_trace.h"
+#include "colmap/estimators/global_positioning_tracer.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
@@ -123,14 +124,6 @@ struct GlobalPositionerOptions {
   }
 };
 
-struct GlobalPositioningResidualReplayEntry {
-  std::string residual_id;
-  const ceres::CostFunction* cost_function = nullptr;
-  const ceres::LossFunction* loss_function = nullptr;
-  size_t residual_dimension = 0;
-  std::vector<const double*> parameter_blocks;
-};
-
 class GlobalPositioner {
  public:
   explicit GlobalPositioner(const GlobalPositionerOptions& options);
@@ -240,54 +233,10 @@ class GlobalPositioner {
   // Owned here because problem_ uses DO_NOT_TAKE_OWNERSHIP.
   std::vector<std::unique_ptr<ceres::LossFunction>> per_image_scale_losses_;
 
-  struct ResidualLedgerEntry {
-    std::string residual_type;
-    std::optional<point3D_t> point3D_id;
-    std::optional<image_t> image_id;
-    std::optional<point2D_t> point2D_idx;
-    std::optional<frame_t> frame_id;
-    std::optional<camera_t> camera_id;
-    std::optional<sensor_t> sensor_id;
-    bool is_lc_observation = false;
-    bool is_ref_in_frame = false;
-    bool camera_has_prior_focal_length = false;
-    std::string loss_bucket = "none";
-    bool uses_keypoint_covariance = false;
-    bool has_depth_prior = false;
-    std::optional<double> depth_prior;
-    std::optional<double> depth_sigma;
-    std::optional<image_t> dmap_scale_image_id;
-    std::string depth_outlier_source = "none";
-  };
+  const std::vector<GlobalPositioningResidualReplayEntry>&
+  ResidualReplayEntriesForTest() const;
 
-  struct ScaleObservationMetadata {
-    point3D_t point3D_id = kInvalidPoint3DId;
-    image_t image_id = kInvalidImageId;
-    point2D_t point2D_idx = kInvalidPoint2DIdx;
-    bool is_lc_observation = false;
-  };
-
-  bool ShouldTraceResidualLedger() const;
-  bool ShouldTraceParameterSnapshots() const;
-  bool ShouldTraceResidualValues() const;
-  void ResetResidualLedger();
-  void RecordScaleObservation(size_t scale_index,
-                              point3D_t point3D_id,
-                              const TrackElement& observation,
-                              bool is_lc_observation);
-  std::string RecordResidualBlock(const ResidualLedgerEntry& entry);
-  void RecordReplayResidual(const std::string& residual_id,
-                            const ceres::CostFunction* cost_function,
-                            const ceres::LossFunction* loss_function,
-                            std::vector<const double*> parameter_blocks);
-  void RecordResidualSkip(const ResidualLedgerEntry& entry,
-                          const std::string& skip_reason);
-  void RecordResidualBucketSummaries();
-
-  GlobalPositioningTraceRecorder* trace_recorder_ = nullptr;
-  std::map<std::string, uint64_t> residual_bucket_counts_;
-  std::vector<ScaleObservationMetadata> scale_observations_;
-  std::vector<GlobalPositioningResidualReplayEntry> residual_replay_entries_;
+  std::unique_ptr<GlobalPositioningTracer> tracer_;
 };
 
 // Solve global positioning using point-to-camera constraints.
