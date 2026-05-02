@@ -4,6 +4,7 @@
 #include "colmap/util/file.h"
 #include "colmap/util/logging.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <iomanip>
@@ -18,6 +19,11 @@ namespace colmap {
 namespace {
 
 constexpr int kSchemaVersion = 1;
+constexpr char kRawBinaryStorageFormat[] = "global_positioning_raw_binary_v1";
+constexpr char kRawBinaryLedgerMagic[] = "GPTRLGR1";
+constexpr char kRawBinaryArrayMagic[] = "GPTRARR1";
+constexpr char kRawBinaryResidualValuesMagic[] = "GPTRRSV1";
+constexpr int64_t kRawBinaryNoneId = -1;
 
 int64_t UnixNowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -84,6 +90,163 @@ std::string JsonDouble(const double value) {
   return stream.str();
 }
 
+std::string JsonOptionalDouble(const std::optional<double>& value) {
+  return value.has_value() ? JsonDouble(*value) : "null";
+}
+
+std::string JsonDoubleArray(const std::vector<double>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << JsonDouble(values[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonParameterBlockDescriptors(
+    const std::vector<GlobalPositioningTraceParameterBlockDescriptor>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << "{"
+           << "\"role\":" << JsonEscape(values[i].role) << ","
+           << "\"kind\":" << JsonEscape(values[i].kind) << ","
+           << "\"id\":" << values[i].id;
+    if (values[i].size.has_value()) {
+      stream << ",\"size\":" << *values[i].size;
+    }
+    stream << "}";
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonLossConfig(const GlobalPositioningTraceLossConfig& value) {
+  std::ostringstream stream;
+  stream << "{"
+         << "\"bucket\":" << JsonEscape(value.bucket) << ","
+         << "\"type\":" << JsonEscape(value.type) << ","
+         << "\"scale\":" << JsonOptionalDouble(value.scale) << ","
+         << "\"weight\":" << JsonOptionalDouble(value.weight) << ","
+         << "\"source\":" << JsonEscape(value.source);
+  if (value.observation_count_weight.has_value()) {
+    stream << ",\"observation_count_weight\":"
+           << JsonDouble(*value.observation_count_weight);
+  }
+  stream << "}";
+  return stream.str();
+}
+
+void WriteOptionalDoubleArray(std::ostringstream& stream,
+                              bool& first,
+                              const std::string& key,
+                              const std::optional<std::vector<double>>& value) {
+  if (!value.has_value()) {
+    return;
+  }
+  if (!first) {
+    stream << ",";
+  }
+  first = false;
+  stream << JsonEscape(key) << ":" << JsonDoubleArray(*value);
+}
+
+void WriteOptionalBool(std::ostringstream& stream,
+                       bool& first,
+                       const std::string& key,
+                       const std::optional<bool>& value) {
+  if (!value.has_value()) {
+    return;
+  }
+  if (!first) {
+    stream << ",";
+  }
+  first = false;
+  stream << JsonEscape(key) << ":" << (*value ? "true" : "false");
+}
+
+void WriteOptionalString(std::ostringstream& stream,
+                         bool& first,
+                         const std::string& key,
+                         const std::optional<std::string>& value) {
+  if (!value.has_value()) {
+    return;
+  }
+  if (!first) {
+    stream << ",";
+  }
+  first = false;
+  stream << JsonEscape(key) << ":" << JsonEscape(*value);
+}
+
+void WriteOptionalDouble(std::ostringstream& stream,
+                         bool& first,
+                         const std::string& key,
+                         const std::optional<double>& value) {
+  if (!value.has_value()) {
+    return;
+  }
+  if (!first) {
+    stream << ",";
+  }
+  first = false;
+  stream << JsonEscape(key) << ":" << JsonDouble(*value);
+}
+
+std::string JsonFixedParameters(
+    const GlobalPositioningTraceFixedParameters& value) {
+  std::ostringstream stream;
+  stream << "{";
+  bool first = true;
+  WriteOptionalDoubleArray(
+      stream, first, "cam_from_point3D_dir", value.cam_from_point3D_dir);
+  WriteOptionalDoubleArray(stream,
+                           first,
+                           "keypoint_covariance_world_row_major",
+                           value.keypoint_covariance_world_row_major);
+  WriteOptionalDoubleArray(
+      stream, first, "cam_from_rig_dir", value.cam_from_rig_dir);
+  WriteOptionalDoubleArray(stream,
+                           first,
+                           "rig_from_world_rotation_wxyz",
+                           value.rig_from_world_rotation_wxyz);
+  WriteOptionalDoubleArray(stream,
+                           first,
+                           "world_from_rig_rotation_wxyz",
+                           value.world_from_rig_rotation_wxyz);
+  WriteOptionalDoubleArray(
+      stream, first, "camera_rotation_wxyz", value.camera_rotation_wxyz);
+  WriteOptionalBool(stream,
+                    first,
+                    "metric_depth_use_log_scale",
+                    value.metric_depth_use_log_scale);
+  WriteOptionalString(stream,
+                      first,
+                      "metric_depth_residual_type",
+                      value.metric_depth_residual_type);
+  WriteOptionalBool(stream,
+                    first,
+                    "metric_depth_zero_residual_behind",
+                    value.metric_depth_zero_residual_behind);
+  WriteOptionalDouble(stream,
+                      first,
+                      "metric_depth_log_linear_threshold",
+                      value.metric_depth_log_linear_threshold);
+  WriteOptionalDouble(
+      stream, first, "scale_prior_target", value.scale_prior_target);
+  WriteOptionalDouble(
+      stream, first, "scale_prior_stddev", value.scale_prior_stddev);
+  stream << "}";
+  return stream.str();
+}
+
 std::string JsonValue(const GlobalPositioningTraceValue& value) {
   switch (value.type) {
     case GlobalPositioningTraceValue::Type::kNull:
@@ -110,6 +273,12 @@ std::string JsonValue(const GlobalPositioningTraceValue& value) {
       stream << "]";
       return stream.str();
     }
+    case GlobalPositioningTraceValue::Type::kParameterBlockArray:
+      return JsonParameterBlockDescriptors(value.parameter_block_array_value);
+    case GlobalPositioningTraceValue::Type::kLossConfig:
+      return JsonLossConfig(value.loss_config_value);
+    case GlobalPositioningTraceValue::Type::kFixedParameters:
+      return JsonFixedParameters(value.fixed_parameters_value);
   }
   return "null";
 }
@@ -164,6 +333,26 @@ std::string IterationPrefix(const int iteration) {
   std::ostringstream stream;
   stream << "iter_" << std::setw(6) << std::setfill('0') << iteration;
   return stream.str();
+}
+
+std::filesystem::path RawBinaryPath(
+    const GlobalPositioningTraceOptions& options) {
+  return options.output_path / "raw_binary";
+}
+
+std::filesystem::path RawBinaryStaticPath(
+    const GlobalPositioningTraceOptions& options) {
+  return RawBinaryPath(options) / "static";
+}
+
+std::filesystem::path RawBinaryIterationsPath(
+    const GlobalPositioningTraceOptions& options) {
+  return RawBinaryPath(options) / "iterations";
+}
+
+std::filesystem::path RawBinaryIterationPath(
+    const GlobalPositioningTraceOptions& options, const int iteration) {
+  return RawBinaryIterationsPath(options) / IterationPrefix(iteration);
 }
 
 uint64_t ShapeElementCount(const std::vector<size_t>& shape) {
@@ -234,19 +423,6 @@ std::string JsonNestedBoolArray(const std::vector<std::vector<bool>>& values) {
   return stream.str();
 }
 
-std::string JsonDoubleArray(const std::vector<double>& values) {
-  std::ostringstream stream;
-  stream << "[";
-  for (size_t i = 0; i < values.size(); ++i) {
-    if (i > 0) {
-      stream << ",";
-    }
-    stream << JsonDouble(values[i]);
-  }
-  stream << "]";
-  return stream.str();
-}
-
 std::string JsonNestedDoubleArray(
     const std::vector<std::vector<std::vector<double>>>& values) {
   std::ostringstream stream;
@@ -268,7 +444,7 @@ std::string JsonNestedDoubleArray(
   return stream.str();
 }
 
-std::string JsonParameterBlockDescriptors(
+std::string JsonNestedParameterBlockDescriptors(
     const std::vector<
         std::vector<GlobalPositioningTraceParameterBlockDescriptor>>& values) {
   std::ostringstream stream;
@@ -277,17 +453,7 @@ std::string JsonParameterBlockDescriptors(
     if (i > 0) {
       stream << ",";
     }
-    stream << "[";
-    for (size_t j = 0; j < values[i].size(); ++j) {
-      if (j > 0) {
-        stream << ",";
-      }
-      stream << "{"
-             << "\"role\":" << JsonEscape(values[i][j].role) << ","
-             << "\"kind\":" << JsonEscape(values[i][j].kind) << ","
-             << "\"id\":" << values[i][j].id << "}";
-    }
-    stream << "]";
+    stream << JsonParameterBlockDescriptors(values[i]);
   }
   stream << "]";
   return stream.str();
@@ -317,6 +483,123 @@ std::string JsonBoolArray(const std::vector<bool>& values) {
   }
   stream << "]";
   return stream.str();
+}
+
+void WriteRawBytes(std::ofstream& stream,
+                   const char* data,
+                   const size_t size,
+                   const std::filesystem::path& path) {
+  stream.write(data, static_cast<std::streamsize>(size));
+  THROW_CHECK(stream.good())
+      << "Failed while writing global positioning raw binary trace: " << path;
+}
+
+template <typename T>
+void WriteRawLittleEndian(std::ofstream& stream,
+                          const T value,
+                          const std::filesystem::path& path) {
+  WriteBinaryLittleEndian<T>(&stream, value);
+  THROW_CHECK(stream.good())
+      << "Failed while writing global positioning raw binary trace: " << path;
+}
+
+void WriteRawBool(std::ofstream& stream,
+                  const bool value,
+                  const std::filesystem::path& path) {
+  const char byte = value ? 1 : 0;
+  WriteRawBytes(stream, &byte, 1, path);
+}
+
+void WriteRawString(std::ofstream& stream,
+                    const std::string& value,
+                    const std::filesystem::path& path) {
+  THROW_CHECK_LE(value.size(), std::numeric_limits<uint32_t>::max())
+      << "Raw binary trace strings are length-prefixed with uint32.";
+  WriteRawLittleEndian<uint32_t>(
+      stream, static_cast<uint32_t>(value.size()), path);
+  if (!value.empty()) {
+    WriteRawBytes(stream, value.data(), value.size(), path);
+  }
+}
+
+void WriteRawParameterBlockDescriptor(
+    std::ofstream& stream,
+    const GlobalPositioningTraceParameterBlockDescriptor& descriptor,
+    const std::filesystem::path& path) {
+  THROW_CHECK(!descriptor.role.empty())
+      << "Raw binary parameter block role must be non-empty.";
+  THROW_CHECK(!descriptor.kind.empty())
+      << "Raw binary parameter block kind must be non-empty.";
+  WriteRawString(stream, descriptor.role, path);
+  WriteRawString(stream, descriptor.kind, path);
+  WriteRawLittleEndian<uint64_t>(stream, descriptor.id, path);
+}
+
+std::string TraceAttrString(
+    const std::map<std::string, GlobalPositioningTraceValue>& attrs,
+    const std::string& key) {
+  const auto it = attrs.find(key);
+  THROW_CHECK(it != attrs.end()) << "Missing trace attr: " << key;
+  THROW_CHECK(it->second.type == GlobalPositioningTraceValue::Type::kString)
+      << "Trace attr must be a string: " << key;
+  return it->second.string_value;
+}
+
+int64_t TraceAttrOptionalId(
+    const std::map<std::string, GlobalPositioningTraceValue>& attrs,
+    const std::string& key) {
+  const auto it = attrs.find(key);
+  THROW_CHECK(it != attrs.end()) << "Missing trace attr: " << key;
+  if (it->second.type == GlobalPositioningTraceValue::Type::kNull) {
+    return kRawBinaryNoneId;
+  }
+  THROW_CHECK(it->second.type == GlobalPositioningTraceValue::Type::kUInt)
+      << "Trace attr must be an unsigned ID or null: " << key;
+  THROW_CHECK_LE(it->second.uint_value,
+                 static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      << "Raw binary trace IDs are stored as signed int64.";
+  return static_cast<int64_t>(it->second.uint_value);
+}
+
+bool TraceAttrBool(
+    const std::map<std::string, GlobalPositioningTraceValue>& attrs,
+    const std::string& key) {
+  const auto it = attrs.find(key);
+  THROW_CHECK(it != attrs.end()) << "Missing trace attr: " << key;
+  THROW_CHECK(it->second.type == GlobalPositioningTraceValue::Type::kBool)
+      << "Trace attr must be a bool: " << key;
+  return it->second.bool_value;
+}
+
+void ValidateSnapshotArray(const std::string& name,
+                           const GlobalPositioningTraceSnapshotArray& array);
+
+void WriteRawSnapshotArray(const std::filesystem::path& path,
+                           const std::string& name,
+                           const GlobalPositioningTraceSnapshotArray& array) {
+  ValidateSnapshotArray(name, array);
+  THROW_CHECK_LE(array.shape.size(), 2)
+      << "Raw binary snapshot arrays support rank-1 or rank-2 arrays.";
+  const uint64_t rows = static_cast<uint64_t>(array.shape.front());
+  const uint64_t cols =
+      array.shape.size() == 1 ? 1 : static_cast<uint64_t>(array.shape[1]);
+  std::ofstream stream(path,
+                       std::ios::binary | std::ios::out | std::ios::trunc);
+  THROW_CHECK_FILE_OPEN(stream, path);
+  WriteRawBytes(stream, kRawBinaryArrayMagic, 8, path);
+  WriteRawLittleEndian<uint32_t>(stream, kSchemaVersion, path);
+  WriteRawLittleEndian<uint64_t>(stream, rows, path);
+  WriteRawLittleEndian<uint64_t>(stream, cols, path);
+  WriteRawString(stream, name, path);
+  for (const uint64_t id : array.ids) {
+    THROW_CHECK_LE(id,
+                   static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+        << "Raw binary snapshot IDs are stored as signed int64.";
+    WriteRawLittleEndian<int64_t>(stream, static_cast<int64_t>(id), path);
+  }
+  for (const double value : array.values) {
+    WriteRawLittleEndian<double>(stream, value, path);
+  }
 }
 
 void ValidateSnapshotArray(const std::string& name,
@@ -585,6 +868,30 @@ GlobalPositioningTraceValue GlobalPositioningTraceValue::StringArray(
   return trace_value;
 }
 
+GlobalPositioningTraceValue GlobalPositioningTraceValue::ParameterBlockArray(
+    std::vector<GlobalPositioningTraceParameterBlockDescriptor> value) {
+  GlobalPositioningTraceValue trace_value;
+  trace_value.type = Type::kParameterBlockArray;
+  trace_value.parameter_block_array_value = std::move(value);
+  return trace_value;
+}
+
+GlobalPositioningTraceValue GlobalPositioningTraceValue::LossConfig(
+    GlobalPositioningTraceLossConfig value) {
+  GlobalPositioningTraceValue trace_value;
+  trace_value.type = Type::kLossConfig;
+  trace_value.loss_config_value = std::move(value);
+  return trace_value;
+}
+
+GlobalPositioningTraceValue GlobalPositioningTraceValue::FixedParameters(
+    GlobalPositioningTraceFixedParameters value) {
+  GlobalPositioningTraceValue trace_value;
+  trace_value.type = Type::kFixedParameters;
+  trace_value.fixed_parameters_value = std::move(value);
+  return trace_value;
+}
+
 GlobalPositioningTraceRecorder::GlobalPositioningTraceRecorder(
     const GlobalPositioningTraceOptions& options)
     : options_(options), created_at_unix_ns_(UnixNowNs()) {
@@ -609,6 +916,7 @@ GlobalPositioningTraceRecorder::GlobalPositioningTraceRecorder(
   RemoveTraceArtifactIfExists(options_.output_path / "residual_skips.jsonl");
   RemoveTraceArtifactIfExists(options_.output_path / "snapshots");
   RemoveTraceArtifactIfExists(options_.output_path / "residual_values");
+  RemoveTraceArtifactIfExists(options_.output_path / "raw_binary");
 
   run_id_ = MakeRunId(created_at_unix_ns_, options_.run_label);
 
@@ -630,6 +938,25 @@ GlobalPositioningTraceRecorder::GlobalPositioningTraceRecorder(
                                 std::ios::out | std::ios::trunc);
     THROW_CHECK_FILE_OPEN(residual_skips_stream_,
                           options_.output_path / "residual_skips.jsonl");
+
+    const std::filesystem::path raw_binary_static_path =
+        RawBinaryStaticPath(options_);
+    CreateDirIfNotExists(raw_binary_static_path, /*recursive=*/true);
+    THROW_CHECK(ExistsDir(raw_binary_static_path))
+        << "Global positioning raw binary static path is not a directory: "
+        << raw_binary_static_path;
+    const std::filesystem::path raw_binary_iterations_path =
+        RawBinaryIterationsPath(options_);
+    CreateDirIfNotExists(raw_binary_iterations_path, /*recursive=*/true);
+    THROW_CHECK(ExistsDir(raw_binary_iterations_path))
+        << "Global positioning raw binary iterations path is not a directory: "
+        << raw_binary_iterations_path;
+    raw_binary_residual_ledger_stream_.open(
+        raw_binary_static_path / "residual_ledger.bin",
+        std::ios::binary | std::ios::out | std::ios::trunc);
+    THROW_CHECK_FILE_OPEN(raw_binary_residual_ledger_stream_,
+                          raw_binary_static_path / "residual_ledger.bin");
+    WriteRawBinaryResidualLedgerHeader();
   }
 
   if (IsParameterSnapshotsEnabled()) {
@@ -727,6 +1054,7 @@ void GlobalPositioningTraceRecorder::WriteResidualBlock(
   if (record.stage.empty()) {
     record.stage = "problem_build";
   }
+  WriteRawBinaryResidualBlock(record);
   WriteRecord(residual_blocks_stream_, std::move(record));
 }
 
@@ -782,6 +1110,7 @@ void GlobalPositioningTraceRecorder::WriteParameterSnapshot(
   if (snapshot.cams_in_rig.has_value()) {
     ValidateSnapshotArray("cams_in_rig", *snapshot.cams_in_rig);
   }
+  WriteRawBinaryParameterSnapshot(snapshot);
 
   const std::filesystem::path snapshot_path =
       options_.output_path / "snapshots";
@@ -904,6 +1233,7 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
          "little-endian.";
 
   const size_t total_scalar_residuals = ValidateResidualValues(residual_values);
+  WriteRawBinaryResidualValues(residual_values);
   const size_t num_residual_blocks = residual_values.residual_ids.size();
   const std::filesystem::path residual_values_path =
       options_.output_path / "residual_values";
@@ -970,7 +1300,7 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
         << "  \"raw_jacobian_offsets\": "
         << JsonNestedSizeArray(residual_values.raw_jacobian_offsets) << ",\n"
         << "  \"parameter_blocks\": "
-        << JsonParameterBlockDescriptors(residual_values.parameter_blocks)
+        << JsonNestedParameterBlockDescriptors(residual_values.parameter_blocks)
         << ",\n"
         << "  \"parameter_block_is_constant\": "
         << JsonNestedBoolArray(residual_values.parameter_block_is_constant)
@@ -1025,6 +1355,237 @@ void GlobalPositioningTraceRecorder::MarkFinished(std::string status) {
   WriteManifest(status);
 }
 
+GlobalPositioningRawBinaryTraceIterationArtifacts&
+GlobalPositioningTraceRecorder::RawBinaryIterationArtifacts(
+    const int iteration) {
+  for (GlobalPositioningRawBinaryTraceIterationArtifacts& artifacts :
+       raw_binary_iterations_) {
+    if (artifacts.iteration == iteration) {
+      return artifacts;
+    }
+  }
+  raw_binary_iterations_.push_back({iteration});
+  std::sort(raw_binary_iterations_.begin(),
+            raw_binary_iterations_.end(),
+            [](const GlobalPositioningRawBinaryTraceIterationArtifacts& a,
+               const GlobalPositioningRawBinaryTraceIterationArtifacts& b) {
+              return a.iteration < b.iteration;
+            });
+  for (GlobalPositioningRawBinaryTraceIterationArtifacts& artifacts :
+       raw_binary_iterations_) {
+    if (artifacts.iteration == iteration) {
+      return artifacts;
+    }
+  }
+  THROW_CHECK(false) << "Failed to register raw binary iteration.";
+  return raw_binary_iterations_.front();
+}
+
+void GlobalPositioningTraceRecorder::WriteRawBinaryResidualLedgerHeader() {
+  if (!raw_binary_residual_ledger_stream_.is_open()) {
+    return;
+  }
+  const std::filesystem::path path =
+      RawBinaryStaticPath(options_) / "residual_ledger.bin";
+  raw_binary_residual_ledger_stream_.seekp(0, std::ios::beg);
+  WriteRawBytes(
+      raw_binary_residual_ledger_stream_, kRawBinaryLedgerMagic, 8, path);
+  WriteRawLittleEndian<uint32_t>(
+      raw_binary_residual_ledger_stream_, kSchemaVersion, path);
+  WriteRawLittleEndian<uint64_t>(raw_binary_residual_ledger_stream_,
+                                 raw_binary_residual_ledger_count_,
+                                 path);
+  raw_binary_residual_ledger_stream_.seekp(0, std::ios::end);
+}
+
+void GlobalPositioningTraceRecorder::UpdateRawBinaryResidualLedgerHeader() {
+  if (!raw_binary_residual_ledger_stream_.is_open()) {
+    return;
+  }
+  WriteRawBinaryResidualLedgerHeader();
+  raw_binary_residual_ledger_stream_.flush();
+}
+
+void GlobalPositioningTraceRecorder::WriteRawBinaryResidualBlock(
+    const GlobalPositioningTraceRecord& record) {
+  if (!raw_binary_residual_ledger_stream_.is_open()) {
+    return;
+  }
+  const std::filesystem::path path =
+      RawBinaryStaticPath(options_) / "residual_ledger.bin";
+  raw_binary_residual_ledger_stream_.seekp(0, std::ios::end);
+  WriteRawString(raw_binary_residual_ledger_stream_,
+                 TraceAttrString(record.attrs, "residual_id"),
+                 path);
+  WriteRawString(raw_binary_residual_ledger_stream_,
+                 TraceAttrString(record.attrs, "residual_type"),
+                 path);
+  WriteRawString(raw_binary_residual_ledger_stream_,
+                 TraceAttrString(record.attrs, "loss_bucket"),
+                 path);
+  WriteRawLittleEndian<int64_t>(raw_binary_residual_ledger_stream_,
+                                TraceAttrOptionalId(record.attrs, "frame_id"),
+                                path);
+  WriteRawLittleEndian<int64_t>(raw_binary_residual_ledger_stream_,
+                                TraceAttrOptionalId(record.attrs, "image_id"),
+                                path);
+  WriteRawLittleEndian<int64_t>(raw_binary_residual_ledger_stream_,
+                                TraceAttrOptionalId(record.attrs, "point3D_id"),
+                                path);
+  WriteRawBool(raw_binary_residual_ledger_stream_,
+               TraceAttrBool(record.attrs, "is_lc_observation"),
+               path);
+  WriteRawString(
+      raw_binary_residual_ledger_stream_, JsonAttrs(record.attrs), path);
+  ++raw_binary_residual_ledger_count_;
+}
+
+void GlobalPositioningTraceRecorder::WriteRawBinaryParameterSnapshot(
+    const GlobalPositioningTraceParameterSnapshot& snapshot) {
+  if (!IsParameterSnapshotsEnabled() || !IsResidualLedgerEnabled()) {
+    return;
+  }
+  const std::filesystem::path iteration_path =
+      RawBinaryIterationPath(options_, snapshot.iteration);
+  CreateDirIfNotExists(iteration_path, /*recursive=*/true);
+  THROW_CHECK(ExistsDir(iteration_path))
+      << "Global positioning raw binary iteration path is not a directory: "
+      << iteration_path;
+
+  WriteRawSnapshotArray(iteration_path / "frame_centers.bin",
+                        "frame_centers",
+                        snapshot.frame_centers);
+  WriteRawSnapshotArray(
+      iteration_path / "point_xyz.bin", "point_xyz", snapshot.points3D);
+  WriteRawSnapshotArray(
+      iteration_path / "scales.bin", "scales", snapshot.scales);
+  GlobalPositioningRawBinaryTraceIterationArtifacts& artifacts =
+      RawBinaryIterationArtifacts(snapshot.iteration);
+  artifacts.has_frame_centers = true;
+  artifacts.has_point_xyz = true;
+  artifacts.has_scales = true;
+  if (snapshot.dmap_scales.has_value()) {
+    WriteRawSnapshotArray(iteration_path / "dmap_scales.bin",
+                          "dmap_scales",
+                          *snapshot.dmap_scales);
+    artifacts.has_dmap_scales = true;
+  }
+  if (snapshot.cams_in_rig.has_value()) {
+    WriteRawSnapshotArray(iteration_path / "cams_in_rig.bin",
+                          "cams_in_rig",
+                          *snapshot.cams_in_rig);
+    artifacts.has_cams_in_rig = true;
+  }
+}
+
+void GlobalPositioningTraceRecorder::WriteRawBinaryResidualValues(
+    const GlobalPositioningTraceResidualValues& residual_values) {
+  if (!IsResidualValuesEnabled() || !IsResidualLedgerEnabled()) {
+    return;
+  }
+  const size_t total_scalar_residuals = ValidateResidualValues(residual_values);
+  const size_t num_residual_blocks = residual_values.residual_ids.size();
+  const std::filesystem::path iteration_path =
+      RawBinaryIterationPath(options_, residual_values.iteration);
+  CreateDirIfNotExists(iteration_path, /*recursive=*/true);
+  THROW_CHECK(ExistsDir(iteration_path))
+      << "Global positioning raw binary iteration path is not a directory: "
+      << iteration_path;
+  const std::filesystem::path path = iteration_path / "residual_values.bin";
+  std::ofstream stream(path,
+                       std::ios::binary | std::ios::out | std::ios::trunc);
+  THROW_CHECK_FILE_OPEN(stream, path);
+  WriteRawBytes(stream, kRawBinaryResidualValuesMagic, 8, path);
+  WriteRawLittleEndian<uint32_t>(
+      stream,
+      residual_values.has_raw_jacobians ? uint32_t{2} : uint32_t{1},
+      path);
+  WriteRawLittleEndian<int64_t>(stream, residual_values.iteration, path);
+  WriteRawLittleEndian<uint64_t>(
+      stream, static_cast<uint64_t>(num_residual_blocks), path);
+  WriteRawLittleEndian<uint64_t>(
+      stream, static_cast<uint64_t>(total_scalar_residuals), path);
+  WriteRawBool(stream, true, path);
+  if (residual_values.has_raw_jacobians) {
+    WriteRawBool(stream, true, path);
+  }
+  for (size_t i = 0; i < num_residual_blocks; ++i) {
+    THROW_CHECK_LE(residual_values.residual_dims[i],
+                   std::numeric_limits<uint32_t>::max())
+        << "Raw binary residual dimensions are stored as uint32.";
+    WriteRawString(stream, residual_values.residual_ids[i], path);
+    WriteRawLittleEndian<uint32_t>(
+        stream, static_cast<uint32_t>(residual_values.residual_dims[i]), path);
+    WriteRawLittleEndian<uint64_t>(
+        stream,
+        static_cast<uint64_t>(residual_values.residual_offsets[i]),
+        path);
+    WriteRawBool(stream, residual_values.evaluation_success[i], path);
+  }
+  for (const double value : residual_values.raw_residuals) {
+    WriteRawLittleEndian<double>(stream, value, path);
+  }
+  for (const double value : residual_values.raw_costs) {
+    WriteRawLittleEndian<double>(stream, value, path);
+  }
+  for (const double value : residual_values.robust_costs) {
+    WriteRawLittleEndian<double>(stream, value, path);
+  }
+  for (const double value : residual_values.loss_rho_values) {
+    WriteRawLittleEndian<double>(stream, value, path);
+  }
+  if (residual_values.has_raw_jacobians) {
+    WriteRawLittleEndian<uint64_t>(
+        stream,
+        static_cast<uint64_t>(residual_values.raw_jacobians.size()),
+        path);
+    for (size_t residual_idx = 0; residual_idx < num_residual_blocks;
+         ++residual_idx) {
+      const size_t num_parameter_blocks =
+          residual_values.parameter_block_sizes[residual_idx].size();
+      THROW_CHECK_LE(num_parameter_blocks, std::numeric_limits<uint32_t>::max())
+          << "Raw binary parameter block counts are stored as uint32.";
+      WriteRawLittleEndian<uint32_t>(
+          stream, static_cast<uint32_t>(num_parameter_blocks), path);
+      for (size_t block_idx = 0; block_idx < num_parameter_blocks;
+           ++block_idx) {
+        THROW_CHECK_LE(
+            residual_values.parameter_block_sizes[residual_idx][block_idx],
+            std::numeric_limits<uint32_t>::max())
+            << "Raw binary parameter block sizes are stored as uint32.";
+        WriteRawParameterBlockDescriptor(
+            stream,
+            residual_values.parameter_blocks[residual_idx][block_idx],
+            path);
+        WriteRawLittleEndian<uint32_t>(
+            stream,
+            static_cast<uint32_t>(
+                residual_values.parameter_block_sizes[residual_idx][block_idx]),
+            path);
+        WriteRawLittleEndian<uint64_t>(
+            stream,
+            static_cast<uint64_t>(
+                residual_values.raw_jacobian_offsets[residual_idx][block_idx]),
+            path);
+        WriteRawBool(stream,
+                     residual_values
+                         .parameter_block_is_constant[residual_idx][block_idx],
+                     path);
+        for (const double value :
+             residual_values
+                 .parameter_block_lower_bounds[residual_idx][block_idx]) {
+          WriteRawLittleEndian<double>(stream, value, path);
+        }
+      }
+    }
+    for (const double value : residual_values.raw_jacobians) {
+      WriteRawLittleEndian<double>(stream, value, path);
+    }
+  }
+  RawBinaryIterationArtifacts(residual_values.iteration).has_residual_values =
+      true;
+}
+
 void GlobalPositioningTraceRecorder::WriteRecord(
     std::ofstream& stream, GlobalPositioningTraceRecord record) {
   stream << "{\"schema_version\":" << kSchemaVersion
@@ -1065,6 +1626,80 @@ void GlobalPositioningTraceRecorder::WriteManifest(const std::string& status) {
                   << "    \"max_snapshotted_points\": "
                   << options_.max_snapshotted_points << "\n"
                   << "  }\n"
+                  << "}\n";
+  manifest_stream.flush();
+  WriteRawBinaryManifest(status);
+}
+
+void GlobalPositioningTraceRecorder::WriteRawBinaryManifest(
+    const std::string& status) {
+  if (!IsResidualLedgerEnabled()) {
+    return;
+  }
+  UpdateRawBinaryResidualLedgerHeader();
+  const std::filesystem::path raw_binary_path = RawBinaryPath(options_);
+  CreateDirIfNotExists(raw_binary_path, /*recursive=*/true);
+  const std::filesystem::path manifest_path = raw_binary_path / "manifest.json";
+  std::ofstream manifest_stream(manifest_path, std::ios::out | std::ios::trunc);
+  THROW_CHECK_FILE_OPEN(manifest_stream, manifest_path);
+  manifest_stream
+      << "{\n"
+      << "  \"schema_version\": " << kSchemaVersion << ",\n"
+      << "  \"storage_format\": " << JsonEscape(kRawBinaryStorageFormat)
+      << ",\n"
+      << "  \"run_id\": " << JsonEscape(run_id_) << ",\n"
+      << "  \"run_label\": " << JsonEscape(options_.run_label) << ",\n"
+      << "  \"status\": " << JsonEscape(status) << ",\n"
+      << "  \"trace_level\": "
+      << JsonEscape(GlobalPositioningTraceLevelToString(options_.level))
+      << ",\n"
+      << "  \"byte_order\": \"little_endian\",\n"
+      << "  \"dtype\": \"float64\",\n"
+      << "  \"static\": {\n"
+      << "    \"residual_ledger\": " << JsonEscape("static/residual_ledger.bin")
+      << "\n"
+      << "  },\n"
+      << "  \"iterations\": [\n";
+  bool first = true;
+  for (const GlobalPositioningRawBinaryTraceIterationArtifacts& artifacts :
+       raw_binary_iterations_) {
+    if (!first) {
+      manifest_stream << ",\n";
+    }
+    first = false;
+    const std::string prefix = IterationPrefix(artifacts.iteration);
+    manifest_stream << "    {\n"
+                    << "      \"iteration\": " << artifacts.iteration << ",\n"
+                    << "      \"directory\": "
+                    << JsonEscape("iterations/" + prefix);
+    if (artifacts.has_frame_centers) {
+      manifest_stream << ",\n      \"frame_centers\": "
+                      << JsonEscape("frame_centers.bin");
+    }
+    if (artifacts.has_point_xyz) {
+      manifest_stream << ",\n      \"point_xyz\": "
+                      << JsonEscape("point_xyz.bin");
+    }
+    if (artifacts.has_scales) {
+      manifest_stream << ",\n      \"scales\": " << JsonEscape("scales.bin");
+    }
+    if (artifacts.has_dmap_scales) {
+      manifest_stream << ",\n      \"dmap_scales\": "
+                      << JsonEscape("dmap_scales.bin");
+    }
+    if (artifacts.has_cams_in_rig) {
+      manifest_stream << ",\n      \"cams_in_rig\": "
+                      << JsonEscape("cams_in_rig.bin");
+    }
+    if (artifacts.has_residual_values) {
+      manifest_stream << ",\n      \"residual_values\": "
+                      << JsonEscape("residual_values.bin");
+    }
+    manifest_stream << "\n"
+                    << "    }";
+  }
+  manifest_stream << "\n"
+                  << "  ]\n"
                   << "}\n";
   manifest_stream.flush();
 }

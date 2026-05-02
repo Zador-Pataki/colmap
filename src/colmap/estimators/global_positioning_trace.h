@@ -33,6 +33,37 @@ struct GlobalPositioningTraceOptions {
   int max_snapshotted_points = -1;
 };
 
+struct GlobalPositioningTraceParameterBlockDescriptor {
+  std::string role;
+  std::string kind;
+  uint64_t id = 0;
+  std::optional<size_t> size;
+};
+
+struct GlobalPositioningTraceLossConfig {
+  std::string bucket;
+  std::string type;
+  std::optional<double> scale;
+  std::optional<double> weight;
+  std::string source;
+  std::optional<double> observation_count_weight;
+};
+
+struct GlobalPositioningTraceFixedParameters {
+  std::optional<std::vector<double>> cam_from_point3D_dir;
+  std::optional<std::vector<double>> keypoint_covariance_world_row_major;
+  std::optional<std::vector<double>> cam_from_rig_dir;
+  std::optional<std::vector<double>> rig_from_world_rotation_wxyz;
+  std::optional<std::vector<double>> world_from_rig_rotation_wxyz;
+  std::optional<std::vector<double>> camera_rotation_wxyz;
+  std::optional<bool> metric_depth_use_log_scale;
+  std::optional<std::string> metric_depth_residual_type;
+  std::optional<bool> metric_depth_zero_residual_behind;
+  std::optional<double> metric_depth_log_linear_threshold;
+  std::optional<double> scale_prior_target;
+  std::optional<double> scale_prior_stddev;
+};
+
 struct GlobalPositioningTraceValue {
   enum class Type {
     kNull,
@@ -42,6 +73,9 @@ struct GlobalPositioningTraceValue {
     kDouble,
     kString,
     kStringArray,
+    kParameterBlockArray,
+    kLossConfig,
+    kFixedParameters,
   };
 
   static GlobalPositioningTraceValue Null();
@@ -52,6 +86,12 @@ struct GlobalPositioningTraceValue {
   static GlobalPositioningTraceValue String(std::string value);
   static GlobalPositioningTraceValue StringArray(
       std::vector<std::string> value);
+  static GlobalPositioningTraceValue ParameterBlockArray(
+      std::vector<GlobalPositioningTraceParameterBlockDescriptor> value);
+  static GlobalPositioningTraceValue LossConfig(
+      GlobalPositioningTraceLossConfig value);
+  static GlobalPositioningTraceValue FixedParameters(
+      GlobalPositioningTraceFixedParameters value);
 
   Type type = Type::kNull;
   bool bool_value = false;
@@ -60,6 +100,10 @@ struct GlobalPositioningTraceValue {
   double double_value = 0.0;
   std::string string_value;
   std::vector<std::string> string_array_value;
+  std::vector<GlobalPositioningTraceParameterBlockDescriptor>
+      parameter_block_array_value;
+  GlobalPositioningTraceLossConfig loss_config_value;
+  GlobalPositioningTraceFixedParameters fixed_parameters_value;
 };
 
 struct GlobalPositioningTraceRecord {
@@ -84,12 +128,6 @@ struct GlobalPositioningTraceParameterSnapshot {
   std::optional<GlobalPositioningTraceSnapshotArray> cams_in_rig;
 };
 
-struct GlobalPositioningTraceParameterBlockDescriptor {
-  std::string role;
-  std::string kind;
-  uint64_t id = 0;
-};
-
 struct GlobalPositioningTraceResidualValues {
   int iteration = 0;
   std::vector<std::string> residual_ids;
@@ -108,6 +146,16 @@ struct GlobalPositioningTraceResidualValues {
   std::vector<std::vector<bool>> parameter_block_is_constant;
   std::vector<std::vector<std::vector<double>>> parameter_block_lower_bounds;
   std::vector<double> raw_jacobians;
+};
+
+struct GlobalPositioningRawBinaryTraceIterationArtifacts {
+  int iteration = 0;
+  bool has_frame_centers = false;
+  bool has_point_xyz = false;
+  bool has_scales = false;
+  bool has_dmap_scales = false;
+  bool has_cams_in_rig = false;
+  bool has_residual_values = false;
 };
 
 class GlobalPositioningTraceRecorder {
@@ -136,16 +184,30 @@ class GlobalPositioningTraceRecorder {
  private:
   void WriteRecord(std::ofstream& stream, GlobalPositioningTraceRecord record);
   void WriteManifest(const std::string& status);
+  void WriteRawBinaryManifest(const std::string& status);
+  void WriteRawBinaryResidualLedgerHeader();
+  void UpdateRawBinaryResidualLedgerHeader();
+  void WriteRawBinaryResidualBlock(const GlobalPositioningTraceRecord& record);
+  void WriteRawBinaryParameterSnapshot(
+      const GlobalPositioningTraceParameterSnapshot& snapshot);
+  void WriteRawBinaryResidualValues(
+      const GlobalPositioningTraceResidualValues& residual_values);
+  GlobalPositioningRawBinaryTraceIterationArtifacts&
+  RawBinaryIterationArtifacts(int iteration);
 
   GlobalPositioningTraceOptions options_;
   std::string run_id_;
   int64_t created_at_unix_ns_ = 0;
   uint64_t sequence_ = 0;
   uint64_t residual_sequence_ = 0;
+  uint64_t raw_binary_residual_ledger_count_ = 0;
   std::ofstream events_stream_;
   std::ofstream iteration_metrics_stream_;
   std::ofstream residual_blocks_stream_;
   std::ofstream residual_skips_stream_;
+  std::ofstream raw_binary_residual_ledger_stream_;
+  std::vector<GlobalPositioningRawBinaryTraceIterationArtifacts>
+      raw_binary_iterations_;
 };
 
 }  // namespace colmap

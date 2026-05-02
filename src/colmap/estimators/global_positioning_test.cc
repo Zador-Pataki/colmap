@@ -47,6 +47,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <tuple>
 
 #include <ceres/loss_function.h>
 #include <gtest/gtest.h>
@@ -429,6 +430,97 @@ std::string ReadFileForTest(const std::filesystem::path& path) {
                      std::istreambuf_iterator<char>());
 }
 
+std::string ReadBinaryPrefixForTest(const std::filesystem::path& path,
+                                    const size_t size) {
+  std::ifstream file(path, std::ios::binary);
+  THROW_CHECK_FILE_OPEN(file, path);
+  std::string prefix(size, '\0');
+  file.read(prefix.data(), static_cast<std::streamsize>(size));
+  THROW_CHECK_EQ(static_cast<size_t>(file.gcount()), size)
+      << "Could not read binary prefix from " << path;
+  return prefix;
+}
+
+template <typename T>
+T ReadRawLittleEndianForTest(std::ifstream& file,
+                             const std::filesystem::path& path) {
+  const T value = ReadBinaryLittleEndian<T>(&file);
+  THROW_CHECK(file.good()) << "Could not read raw binary trace value from "
+                           << path;
+  return value;
+}
+
+std::string ReadRawStringForTest(std::ifstream& file,
+                                 const std::filesystem::path& path) {
+  const uint32_t size = ReadRawLittleEndianForTest<uint32_t>(file, path);
+  std::string value(size, '\0');
+  if (size > 0) {
+    file.read(value.data(), static_cast<std::streamsize>(size));
+    THROW_CHECK(file.good())
+        << "Could not read raw binary trace string from " << path;
+  }
+  return value;
+}
+
+uint64_t ReadRawLedgerRecordCountForTest(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  THROW_CHECK_FILE_OPEN(file, path);
+  EXPECT_EQ(ReadBinaryPrefixForTest(path, 8), "GPTRLGR1");
+  file.seekg(8, std::ios::beg);
+  EXPECT_EQ(ReadRawLittleEndianForTest<uint32_t>(file, path), 1);
+  return ReadRawLittleEndianForTest<uint64_t>(file, path);
+}
+
+std::pair<uint64_t, uint64_t> ReadRawArrayHeaderForTest(
+    const std::filesystem::path& path, const std::string& expected_name) {
+  std::ifstream file(path, std::ios::binary);
+  THROW_CHECK_FILE_OPEN(file, path);
+  EXPECT_EQ(ReadBinaryPrefixForTest(path, 8), "GPTRARR1");
+  file.seekg(8, std::ios::beg);
+  EXPECT_EQ(ReadRawLittleEndianForTest<uint32_t>(file, path), 1);
+  const uint64_t rows = ReadRawLittleEndianForTest<uint64_t>(file, path);
+  const uint64_t cols = ReadRawLittleEndianForTest<uint64_t>(file, path);
+  EXPECT_EQ(ReadRawStringForTest(file, path), expected_name);
+  return {rows, cols};
+}
+
+std::tuple<uint32_t, int64_t, uint64_t, uint64_t, bool>
+ReadRawResidualValuesHeaderForTest(const std::filesystem::path& path,
+                                   const bool expect_raw_jacobians) {
+  std::ifstream file(path, std::ios::binary);
+  THROW_CHECK_FILE_OPEN(file, path);
+  EXPECT_EQ(ReadBinaryPrefixForTest(path, 8), "GPTRRSV1");
+  file.seekg(8, std::ios::beg);
+  const uint32_t version = ReadRawLittleEndianForTest<uint32_t>(file, path);
+  EXPECT_TRUE(version == 1 || version == 2);
+  const int64_t iteration = ReadRawLittleEndianForTest<int64_t>(file, path);
+  const uint64_t num_residual_blocks =
+      ReadRawLittleEndianForTest<uint64_t>(file, path);
+  const uint64_t total_scalar_residuals =
+      ReadRawLittleEndianForTest<uint64_t>(file, path);
+  char has_loss_rho = 0;
+  file.read(&has_loss_rho, 1);
+  THROW_CHECK(file.good())
+      << "Could not read raw binary residual-values loss-rho flag from "
+      << path;
+  EXPECT_EQ(has_loss_rho, 1);
+  bool has_raw_jacobians = false;
+  if (version >= 2) {
+    char has_raw_jacobians_byte = 0;
+    file.read(&has_raw_jacobians_byte, 1);
+    THROW_CHECK(file.good())
+        << "Could not read raw binary residual-values Jacobian flag from "
+        << path;
+    has_raw_jacobians = has_raw_jacobians_byte != 0;
+  }
+  EXPECT_EQ(has_raw_jacobians, expect_raw_jacobians);
+  return {version,
+          iteration,
+          num_residual_blocks,
+          total_scalar_residuals,
+          has_raw_jacobians};
+}
+
 size_t CountJsonlRecordsForTest(const std::string& text) {
   size_t count = 0;
   std::istringstream stream(text);
@@ -459,6 +551,55 @@ bool ContainsJsonStringValueForTest(const std::string& text,
     pos += key_token.size();
   }
   return false;
+}
+
+std::optional<std::string> FindJsonlRecordWithStringValueForTest(
+    const std::string& text, const std::string& key, const std::string& value) {
+  std::istringstream stream(text);
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (ContainsJsonStringValueForTest(line, key, value)) {
+      return line;
+    }
+  }
+  return std::nullopt;
+}
+
+void ExpectEveryResidualBlockHasReplayLedgerFieldsForTest(
+    const std::string& residual_blocks) {
+  std::istringstream stream(residual_blocks);
+  std::string line;
+  size_t count = 0;
+  while (std::getline(stream, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    ++count;
+    EXPECT_NE(line.find("\"replay_schema_version\":1"), std::string::npos)
+        << line;
+    EXPECT_NE(line.find("\"parameter_blocks\":[{"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"role\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"kind\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"id\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"size\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"loss\":{\"bucket\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"type\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"scale\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"weight\":"), std::string::npos) << line;
+    EXPECT_NE(line.find("\"fixed_parameters_status\":\"serialized\""),
+              std::string::npos)
+        << line;
+    EXPECT_NE(line.find("\"fixed_parameters\":{"), std::string::npos) << line;
+    EXPECT_EQ(line.find("\"fixed_parameters_status\":"
+                        "\"deferred_not_serialized\""),
+              std::string::npos)
+        << line;
+    EXPECT_EQ(line.find("\"fixed_parameters_missing\":["), std::string::npos)
+        << line;
+    EXPECT_EQ(line.find("\"fixed_parameters_todo\":"), std::string::npos)
+        << line;
+  }
+  EXPECT_GT(count, 0u);
 }
 
 std::optional<int64_t> FindEventAttrIntForTest(const std::string& events,
@@ -1026,6 +1167,48 @@ TEST(GlobalPositioning, ParameterSnapshotsTraceWritesMetadataAndSidecars) {
   const uintmax_t scales_size = std::filesystem::file_size(scales_path);
   EXPECT_GT(scales_size, 0u);
   EXPECT_EQ(scales_size % sizeof(double), 0u);
+
+  const std::filesystem::path raw_binary_dir = trace_dir / "raw_binary";
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "manifest.json"));
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "static" / "residual_ledger.bin"));
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "iterations" / "iter_000000" /
+                         "frame_centers.bin"));
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "iterations" / "iter_000000" /
+                         "point_xyz.bin"));
+  ASSERT_TRUE(
+      ExistsFile(raw_binary_dir / "iterations" / "iter_000000" / "scales.bin"));
+  EXPECT_EQ(ReadRawLedgerRecordCountForTest(raw_binary_dir / "static" /
+                                            "residual_ledger.bin"),
+            CountJsonlRecordsForTest(
+                ReadFileForTest(trace_dir / "residual_blocks.jsonl")));
+  EXPECT_EQ(ReadRawArrayHeaderForTest(raw_binary_dir / "iterations" /
+                                          "iter_000000" / "frame_centers.bin",
+                                      "frame_centers"),
+            std::make_pair(static_cast<uint64_t>(positioner.NumFrameCenters()),
+                           uint64_t{3}));
+  EXPECT_EQ(ReadRawArrayHeaderForTest(
+                raw_binary_dir / "iterations" / "iter_000000" / "point_xyz.bin",
+                "point_xyz")
+                .second,
+            uint64_t{3});
+  EXPECT_GT(ReadRawArrayHeaderForTest(
+                raw_binary_dir / "iterations" / "iter_000000" / "scales.bin",
+                "scales")
+                .first,
+            uint64_t{0});
+
+  const std::string raw_manifest =
+      ReadFileForTest(raw_binary_dir / "manifest.json");
+  EXPECT_NE(raw_manifest.find("\"storage_format\": "
+                              "\"global_positioning_raw_binary_v1\""),
+            std::string::npos);
+  EXPECT_NE(raw_manifest.find("\"residual_ledger\": "
+                              "\"static/residual_ledger.bin\""),
+            std::string::npos);
+  EXPECT_NE(raw_manifest.find("\"frame_centers\": \"frame_centers.bin\""),
+            std::string::npos);
+  EXPECT_NE(raw_manifest.find("\"point_xyz\": \"point_xyz.bin\""),
+            std::string::npos);
 }
 
 TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
@@ -1040,7 +1223,7 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
   options.trace.level = GlobalPositioningTraceLevel::kResidualValues;
   options.trace.output_path = trace_dir;
   options.trace.snapshot_every_n_iterations = 1;
-  options.trace.max_snapshotted_points = 2;
+  options.trace.max_snapshotted_points = -1;
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
@@ -1164,8 +1347,30 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
   EXPECT_EQ(std::filesystem::file_size(robust_costs_path),
             static_cast<uintmax_t>(*num_residual_blocks) * sizeof(double));
   EXPECT_EQ(std::filesystem::file_size(loss_rho_values_path),
-            static_cast<uintmax_t>(*num_residual_blocks) * 3u *
-                sizeof(double));
+            static_cast<uintmax_t>(*num_residual_blocks) * 3u * sizeof(double));
+
+  const std::filesystem::path raw_binary_dir = trace_dir / "raw_binary";
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "manifest.json"));
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "static" / "residual_ledger.bin"));
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "iterations" / "iter_000000" /
+                         "residual_values.bin"));
+  EXPECT_EQ(ReadRawLedgerRecordCountForTest(raw_binary_dir / "static" /
+                                            "residual_ledger.bin"),
+            static_cast<uint64_t>(*num_residual_blocks));
+  EXPECT_EQ(
+      ReadRawResidualValuesHeaderForTest(
+          raw_binary_dir / "iterations" / "iter_000000" / "residual_values.bin",
+          /*expect_raw_jacobians=*/false),
+      std::make_tuple(uint32_t{1},
+                      int64_t{0},
+                      static_cast<uint64_t>(*num_residual_blocks),
+                      static_cast<uint64_t>(*total_scalar_residuals),
+                      false));
+  const std::string raw_manifest =
+      ReadFileForTest(raw_binary_dir / "manifest.json");
+  EXPECT_NE(raw_manifest.find("\"residual_values\": "
+                              "\"residual_values.bin\""),
+            std::string::npos);
 
   const std::vector<double> raw_residuals = ReadDoubleSidecarForTest(
       raw_residuals_path, static_cast<size_t>(*total_scalar_residuals));
@@ -1173,9 +1378,8 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
       raw_costs_path, static_cast<size_t>(*num_residual_blocks));
   const std::vector<double> robust_costs = ReadDoubleSidecarForTest(
       robust_costs_path, static_cast<size_t>(*num_residual_blocks));
-  const std::vector<double> loss_rho_values =
-      ReadDoubleSidecarForTest(loss_rho_values_path,
-                               static_cast<size_t>(*num_residual_blocks) * 3u);
+  const std::vector<double> loss_rho_values = ReadDoubleSidecarForTest(
+      loss_rho_values_path, static_cast<size_t>(*num_residual_blocks) * 3u);
 
   size_t expected_offset = 0;
   double robust_cost_sum = 0.0;
@@ -1230,7 +1434,7 @@ TEST(GlobalPositioning, ResidualJacobiansTraceWritesMetadataAndSidecars) {
   options.trace.level = GlobalPositioningTraceLevel::kResidualJacobians;
   options.trace.output_path = trace_dir;
   options.trace.snapshot_every_n_iterations = 1;
-  options.trace.max_snapshotted_points = 2;
+  options.trace.max_snapshotted_points = -1;
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
@@ -1291,11 +1495,15 @@ TEST(GlobalPositioning, ResidualJacobiansTraceWritesMetadataAndSidecars) {
 
   const std::optional<int64_t> num_residual_blocks =
       FindJsonIntForTest(metadata, "num_residual_blocks");
+  const std::optional<int64_t> total_scalar_residuals =
+      FindJsonIntForTest(metadata, "total_scalar_residuals");
   const std::optional<int64_t> total_jacobian_scalars =
       FindJsonIntForTest(metadata, "total_jacobian_scalars");
   ASSERT_TRUE(num_residual_blocks.has_value());
+  ASSERT_TRUE(total_scalar_residuals.has_value());
   ASSERT_TRUE(total_jacobian_scalars.has_value());
   ASSERT_GT(*num_residual_blocks, 0);
+  ASSERT_GT(*total_scalar_residuals, 0);
   ASSERT_GT(*total_jacobian_scalars, 0);
 
   std::vector<size_t> expected_parameter_block_sizes;
@@ -1322,6 +1530,18 @@ TEST(GlobalPositioning, ResidualJacobiansTraceWritesMetadataAndSidecars) {
             expected_raw_jacobian_offsets);
   EXPECT_EQ(std::filesystem::file_size(raw_jacobians_path),
             static_cast<uintmax_t>(*total_jacobian_scalars) * sizeof(double));
+
+  const std::filesystem::path raw_binary_residual_values_path =
+      trace_dir / "raw_binary" / "iterations" / "iter_000000" /
+      "residual_values.bin";
+  ASSERT_TRUE(ExistsFile(raw_binary_residual_values_path));
+  EXPECT_EQ(ReadRawResidualValuesHeaderForTest(raw_binary_residual_values_path,
+                                               /*expect_raw_jacobians=*/true),
+            std::make_tuple(uint32_t{2},
+                            int64_t{0},
+                            static_cast<uint64_t>(*num_residual_blocks),
+                            static_cast<uint64_t>(*total_scalar_residuals),
+                            true));
 
   const std::vector<bool> evaluation_success =
       FindJsonBoolArrayForTest(metadata, "evaluation_success");
@@ -1551,6 +1771,7 @@ TEST(GlobalPositioning, ResidualLedgerTraceWritesBlocksAndMatchesProblemBuilt) {
   ASSERT_TRUE(ExistsFile(residual_blocks_path));
 
   const std::string residual_blocks = ReadFileForTest(residual_blocks_path);
+  ExpectEveryResidualBlockHasReplayLedgerFieldsForTest(residual_blocks);
   EXPECT_TRUE(ContainsJsonStringValueForTest(
       residual_blocks, "residual_type", "bata_ref_frame"));
   EXPECT_TRUE(ContainsJsonStringValueForTest(
@@ -1564,6 +1785,69 @@ TEST(GlobalPositioning, ResidualLedgerTraceWritesBlocksAndMatchesProblemBuilt) {
   ASSERT_TRUE(expected_num_residual_blocks.has_value());
   EXPECT_EQ(CountJsonlRecordsForTest(residual_blocks),
             static_cast<size_t>(*expected_num_residual_blocks));
+}
+
+TEST(GlobalPositioning, ResidualLedgerTraceWritesReplayDescriptorsAndLoss) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+
+  const std::filesystem::path trace_dir =
+      CreateTestDir() / "gp_residual_ledger_replay_fields";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.trace.level = GlobalPositioningTraceLevel::kResidualLedger;
+  options.trace.output_path = trace_dir;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  const std::string residual_blocks =
+      ReadFileForTest(trace_dir / "residual_blocks.jsonl");
+  ExpectEveryResidualBlockHasReplayLedgerFieldsForTest(residual_blocks);
+
+  const std::optional<std::string> bata_ref_frame =
+      FindJsonlRecordWithStringValueForTest(
+          residual_blocks, "residual_type", "bata_ref_frame");
+  ASSERT_TRUE(bata_ref_frame.has_value());
+  EXPECT_NE(bata_ref_frame->find("\"role\":\"frame_center\""),
+            std::string::npos);
+  EXPECT_NE(bata_ref_frame->find("\"role\":\"point3D\""), std::string::npos);
+  EXPECT_NE(bata_ref_frame->find("\"role\":\"bata_scale\""), std::string::npos);
+  EXPECT_NE(bata_ref_frame->find("\"loss\":{\"bucket\":\"geometry_"),
+            std::string::npos);
+  EXPECT_NE(bata_ref_frame->find("\"cam_from_point3D_dir\""),
+            std::string::npos);
+
+  const std::optional<std::string> metric_depth =
+      FindJsonlRecordWithStringValueForTest(
+          residual_blocks, "residual_type", "metric_depth");
+  ASSERT_TRUE(metric_depth.has_value());
+  EXPECT_NE(metric_depth->find("\"role\":\"dmap_scale\""), std::string::npos);
+  EXPECT_NE(metric_depth->find("\"loss\":{\"bucket\":\"depth_"),
+            std::string::npos);
+  EXPECT_NE(metric_depth->find("\"camera_rotation_wxyz\""), std::string::npos);
+  EXPECT_NE(metric_depth->find("\"metric_depth_use_log_scale\""),
+            std::string::npos);
+  EXPECT_NE(metric_depth->find("\"metric_depth_residual_type\""),
+            std::string::npos);
+  EXPECT_NE(metric_depth->find("\"metric_depth_zero_residual_behind\""),
+            std::string::npos);
+  EXPECT_NE(metric_depth->find("\"metric_depth_log_linear_threshold\""),
+            std::string::npos);
+
+  const std::optional<std::string> scale_prior =
+      FindJsonlRecordWithStringValueForTest(
+          residual_blocks, "residual_type", "scale_prior");
+  ASSERT_TRUE(scale_prior.has_value());
+  EXPECT_NE(scale_prior->find("\"role\":\"dmap_scale\""), std::string::npos);
+  EXPECT_NE(scale_prior->find("\"loss\":{\"bucket\":\"scale_prior\""),
+            std::string::npos);
+  EXPECT_NE(scale_prior->find("\"observation_count_weight\":"),
+            std::string::npos);
+  EXPECT_NE(scale_prior->find("\"scale_prior_target\""), std::string::npos);
+  EXPECT_NE(scale_prior->find("\"scale_prior_stddev\""), std::string::npos);
 }
 
 TEST(GlobalPositioning, ResidualLedgerTraceCanForceBataConstantRigFamily) {
@@ -1585,8 +1869,13 @@ TEST(GlobalPositioning, ResidualLedgerTraceCanForceBataConstantRigFamily) {
 
   const std::string residual_blocks =
       ReadFileForTest(trace_dir / "residual_blocks.jsonl");
-  EXPECT_TRUE(ContainsJsonStringValueForTest(
-      residual_blocks, "residual_type", "bata_constant_rig"));
+  ExpectEveryResidualBlockHasReplayLedgerFieldsForTest(residual_blocks);
+  const std::optional<std::string> constant_rig =
+      FindJsonlRecordWithStringValueForTest(
+          residual_blocks, "residual_type", "bata_constant_rig");
+  ASSERT_TRUE(constant_rig.has_value());
+  EXPECT_NE(constant_rig->find("\"cam_from_point3D_dir\""), std::string::npos);
+  EXPECT_NE(constant_rig->find("\"cam_from_rig_dir\""), std::string::npos);
 }
 
 TEST(GlobalPositioning, ResidualLedgerTraceCanForceBataVariableRigFamily) {
@@ -1609,8 +1898,16 @@ TEST(GlobalPositioning, ResidualLedgerTraceCanForceBataVariableRigFamily) {
 
   const std::string residual_blocks =
       ReadFileForTest(trace_dir / "residual_blocks.jsonl");
-  EXPECT_TRUE(ContainsJsonStringValueForTest(
-      residual_blocks, "residual_type", "bata_variable_rig"));
+  ExpectEveryResidualBlockHasReplayLedgerFieldsForTest(residual_blocks);
+  const std::optional<std::string> variable_rig =
+      FindJsonlRecordWithStringValueForTest(
+          residual_blocks, "residual_type", "bata_variable_rig");
+  ASSERT_TRUE(variable_rig.has_value());
+  EXPECT_NE(variable_rig->find("\"cam_from_point3D_dir\""), std::string::npos);
+  EXPECT_NE(variable_rig->find("\"rig_from_world_rotation_wxyz\""),
+            std::string::npos);
+  EXPECT_NE(variable_rig->find("\"world_from_rig_rotation_wxyz\""),
+            std::string::npos);
 }
 
 TEST(GlobalPositioning, ResidualLedgerTraceWritesMissingDepthPriorSkip) {

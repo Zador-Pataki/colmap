@@ -43,6 +43,7 @@ COLMAP_ADD_LIBRARY(
         covariance.h covariance.cc
         generalized_pose.h generalized_pose.cc
         global_positioning.h global_positioning.cc
+        global_positioning_residual_evaluation.h global_positioning_residual_evaluation.cc
         global_positioning_trace.h global_positioning_trace.cc
         global_positioning_tracer.h global_positioning_tracer.cc
         gravity_refinement.h gravity_refinement.cc

@@ -33,6 +33,8 @@ struct GlobalPositioningResidualDescriptor {
   bool is_ref_in_frame = false;
   bool camera_has_prior_focal_length = false;
   std::string loss_bucket = "none";
+  std::optional<GlobalPositioningTraceLossConfig> loss;
+  std::optional<GlobalPositioningTraceFixedParameters> fixed_parameters;
   bool uses_keypoint_covariance = false;
   bool has_depth_prior = false;
   std::optional<double> depth_prior;

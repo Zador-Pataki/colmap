@@ -1,10 +1,10 @@
 #include "colmap/estimators/global_positioning_tracer.h"
 
+#include "colmap/estimators/global_positioning_residual_evaluation.h"
 #include "colmap/scene/reconstruction.h"
 #include "colmap/util/misc.h"
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace colmap {
@@ -33,6 +33,30 @@ std::optional<uint64_t> TraceSensorId(
     return std::nullopt;
   }
   return static_cast<uint64_t>(sensor_id->id);
+}
+
+std::vector<std::string> DeferredFixedParametersForReplay(
+    const GlobalPositioningResidualDescriptor& residual) {
+  if (residual.residual_type == "bata_ref_frame") {
+    std::vector<std::string> missing = {"cam_from_point3D_dir"};
+    if (residual.uses_keypoint_covariance) {
+      missing.push_back("keypoint_covariance_left_sqrt_info");
+    }
+    return missing;
+  }
+  if (residual.residual_type == "bata_constant_rig") {
+    return {"cam_from_point3D_dir", "cam_from_rig_dir"};
+  }
+  if (residual.residual_type == "bata_variable_rig") {
+    return {"cam_from_point3D_dir", "world_from_rig_rot"};
+  }
+  if (residual.residual_type == "metric_depth") {
+    return {"camera_rotation", "metric_depth_options"};
+  }
+  if (residual.residual_type == "scale_prior") {
+    return {"scale_prior_target", "scale_prior_stddev"};
+  }
+  return {"unclassified_fixed_parameters"};
 }
 
 void WriteParameterSnapshot(
@@ -131,210 +155,6 @@ void WriteParameterSnapshot(
   recorder->WriteParameterSnapshot(snapshot);
 }
 
-void WriteResidualValues(
-    GlobalPositioningTraceRecorder* recorder,
-    const ceres::Problem& problem,
-    const int iteration,
-    const std::vector<GlobalPositioningResidualReplayEntry>& replay_entries,
-    const bool write_raw_jacobians) {
-  if (recorder == nullptr) {
-    return;
-  }
-
-  GlobalPositioningTraceResidualValues residual_values;
-  residual_values.iteration = iteration;
-  residual_values.residual_ids.reserve(replay_entries.size());
-  residual_values.residual_dims.reserve(replay_entries.size());
-  residual_values.residual_offsets.reserve(replay_entries.size());
-  residual_values.evaluation_success.resize(replay_entries.size(), false);
-  residual_values.raw_costs.resize(replay_entries.size(),
-                                   std::numeric_limits<double>::quiet_NaN());
-  residual_values.robust_costs.resize(replay_entries.size(),
-                                      std::numeric_limits<double>::quiet_NaN());
-  residual_values.loss_rho_values.resize(
-      replay_entries.size() * 3, std::numeric_limits<double>::quiet_NaN());
-  residual_values.has_raw_jacobians = write_raw_jacobians;
-  if (write_raw_jacobians) {
-    residual_values.parameter_block_sizes.reserve(replay_entries.size());
-    residual_values.raw_jacobian_offsets.reserve(replay_entries.size());
-    residual_values.parameter_blocks.reserve(replay_entries.size());
-    residual_values.parameter_block_is_constant.reserve(replay_entries.size());
-    residual_values.parameter_block_lower_bounds.reserve(replay_entries.size());
-  }
-
-  size_t total_scalar_residuals = 0;
-  size_t total_jacobian_scalars = 0;
-  for (const GlobalPositioningResidualReplayEntry& entry : replay_entries) {
-    THROW_CHECK(!entry.residual_id.empty())
-        << "Residual replay entry has an empty residual id.";
-    THROW_CHECK(entry.cost_function != nullptr)
-        << "Residual replay entry " << entry.residual_id
-        << " has a null cost function.";
-    THROW_CHECK_EQ(entry.residual_dimension,
-                   static_cast<size_t>(entry.cost_function->num_residuals()))
-        << "Residual replay entry " << entry.residual_id
-        << " residual dimension does not match the Ceres cost function.";
-    const std::vector<int>& cost_function_parameter_block_sizes =
-        entry.cost_function->parameter_block_sizes();
-    THROW_CHECK_EQ(entry.parameter_block_sizes.size(),
-                   cost_function_parameter_block_sizes.size())
-        << "Residual replay entry " << entry.residual_id
-        << " parameter-block size count does not match the Ceres cost "
-           "function.";
-    THROW_CHECK_EQ(entry.parameter_blocks.size(),
-                   entry.parameter_block_sizes.size())
-        << "Residual replay entry " << entry.residual_id
-        << " parameter-block pointer count does not match the stored block "
-           "sizes.";
-    THROW_CHECK_EQ(entry.parameter_block_descriptors.size(),
-                   entry.parameter_block_sizes.size())
-        << "Residual replay entry " << entry.residual_id
-        << " parameter-block descriptor count does not match the stored block "
-           "sizes.";
-    for (size_t block_idx = 0; block_idx < entry.parameter_blocks.size();
-         ++block_idx) {
-      THROW_CHECK(entry.parameter_blocks[block_idx] != nullptr)
-          << "Residual replay entry " << entry.residual_id
-          << " has a null parameter block pointer at index " << block_idx
-          << ".";
-      THROW_CHECK_EQ(entry.parameter_block_sizes[block_idx],
-                     cost_function_parameter_block_sizes[block_idx])
-          << "Residual replay entry " << entry.residual_id
-          << " parameter block size at index " << block_idx
-          << " does not match the Ceres cost function.";
-      THROW_CHECK_GT(entry.parameter_block_sizes[block_idx], 0)
-          << "Residual replay entry " << entry.residual_id
-          << " parameter block size at index " << block_idx
-          << " must be positive.";
-      THROW_CHECK(!entry.parameter_block_descriptors[block_idx].role.empty())
-          << "Residual replay entry " << entry.residual_id
-          << " parameter block descriptor at index " << block_idx
-          << " has an empty role.";
-      THROW_CHECK(!entry.parameter_block_descriptors[block_idx].kind.empty())
-          << "Residual replay entry " << entry.residual_id
-          << " parameter block descriptor at index " << block_idx
-          << " has an empty kind.";
-    }
-
-    residual_values.residual_ids.push_back(entry.residual_id);
-    residual_values.residual_dims.push_back(entry.residual_dimension);
-    residual_values.residual_offsets.push_back(total_scalar_residuals);
-    total_scalar_residuals += entry.residual_dimension;
-    if (write_raw_jacobians) {
-      std::vector<size_t> parameter_block_sizes;
-      std::vector<size_t> raw_jacobian_offsets;
-      std::vector<bool> parameter_block_is_constant;
-      std::vector<std::vector<double>> parameter_block_lower_bounds;
-      parameter_block_sizes.reserve(entry.parameter_block_sizes.size());
-      raw_jacobian_offsets.reserve(entry.parameter_block_sizes.size());
-      parameter_block_is_constant.reserve(entry.parameter_block_sizes.size());
-      parameter_block_lower_bounds.reserve(entry.parameter_block_sizes.size());
-      for (size_t block_idx = 0; block_idx < entry.parameter_block_sizes.size();
-           ++block_idx) {
-        const int parameter_block_size = entry.parameter_block_sizes[block_idx];
-        parameter_block_sizes.push_back(
-            static_cast<size_t>(parameter_block_size));
-        raw_jacobian_offsets.push_back(total_jacobian_scalars);
-        parameter_block_is_constant.push_back(problem.IsParameterBlockConstant(
-            entry.parameter_blocks[block_idx]));
-        std::vector<double> lower_bounds;
-        lower_bounds.reserve(static_cast<size_t>(parameter_block_size));
-        for (int parameter_idx = 0; parameter_idx < parameter_block_size;
-             ++parameter_idx) {
-          lower_bounds.push_back(problem.GetParameterLowerBound(
-              entry.parameter_blocks[block_idx], parameter_idx));
-        }
-        parameter_block_lower_bounds.push_back(std::move(lower_bounds));
-        total_jacobian_scalars += entry.residual_dimension *
-                                  static_cast<size_t>(parameter_block_size);
-      }
-      residual_values.parameter_block_sizes.push_back(
-          std::move(parameter_block_sizes));
-      residual_values.raw_jacobian_offsets.push_back(
-          std::move(raw_jacobian_offsets));
-      residual_values.parameter_blocks.push_back(
-          entry.parameter_block_descriptors);
-      residual_values.parameter_block_is_constant.push_back(
-          std::move(parameter_block_is_constant));
-      residual_values.parameter_block_lower_bounds.push_back(
-          std::move(parameter_block_lower_bounds));
-    }
-  }
-  residual_values.raw_residuals.resize(
-      total_scalar_residuals, std::numeric_limits<double>::quiet_NaN());
-  if (write_raw_jacobians) {
-    residual_values.raw_jacobians.resize(
-        total_jacobian_scalars, std::numeric_limits<double>::quiet_NaN());
-  }
-
-  for (size_t entry_idx = 0; entry_idx < replay_entries.size(); ++entry_idx) {
-    const GlobalPositioningResidualReplayEntry& entry =
-        replay_entries[entry_idx];
-    std::vector<double> raw_jacobian_workspace;
-    std::vector<double*> raw_jacobian_blocks;
-    if (write_raw_jacobians) {
-      size_t workspace_offset = 0;
-      for (const int parameter_block_size : entry.parameter_block_sizes) {
-        workspace_offset += entry.residual_dimension *
-                            static_cast<size_t>(parameter_block_size);
-      }
-      raw_jacobian_workspace.assign(workspace_offset,
-                                    std::numeric_limits<double>::quiet_NaN());
-      raw_jacobian_blocks.reserve(entry.parameter_block_sizes.size());
-      workspace_offset = 0;
-      for (const int parameter_block_size : entry.parameter_block_sizes) {
-        raw_jacobian_blocks.push_back(raw_jacobian_workspace.data() +
-                                      workspace_offset);
-        workspace_offset += entry.residual_dimension *
-                            static_cast<size_t>(parameter_block_size);
-      }
-    }
-
-    double* raw_residuals = residual_values.raw_residuals.data() +
-                            residual_values.residual_offsets[entry_idx];
-    const bool evaluation_success = entry.cost_function->Evaluate(
-        entry.parameter_blocks.data(),
-        raw_residuals,
-        write_raw_jacobians ? raw_jacobian_blocks.data() : nullptr);
-    residual_values.evaluation_success[entry_idx] = evaluation_success;
-    if (!evaluation_success) {
-      continue;
-    }
-    if (write_raw_jacobians) {
-      for (size_t block_idx = 0; block_idx < entry.parameter_block_sizes.size();
-           ++block_idx) {
-        const size_t jacobian_size =
-            entry.residual_dimension *
-            static_cast<size_t>(entry.parameter_block_sizes[block_idx]);
-        std::copy_n(
-            raw_jacobian_blocks[block_idx],
-            jacobian_size,
-            residual_values.raw_jacobians.data() +
-                residual_values.raw_jacobian_offsets[entry_idx][block_idx]);
-      }
-    }
-
-    double squared_norm = 0.0;
-    for (size_t residual_idx = 0; residual_idx < entry.residual_dimension;
-         ++residual_idx) {
-      squared_norm += raw_residuals[residual_idx] * raw_residuals[residual_idx];
-    }
-
-    const double raw_cost = 0.5 * squared_norm;
-    residual_values.raw_costs[entry_idx] = raw_cost;
-    double rho[3] = {squared_norm, 1.0, 0.0};
-    if (entry.loss_function != nullptr) {
-      entry.loss_function->Evaluate(squared_norm, rho);
-    }
-    residual_values.loss_rho_values[3 * entry_idx] = rho[0];
-    residual_values.loss_rho_values[3 * entry_idx + 1] = rho[1];
-    residual_values.loss_rho_values[3 * entry_idx + 2] = rho[2];
-    residual_values.robust_costs[entry_idx] = 0.5 * rho[0];
-  }
-
-  recorder->WriteResidualValues(residual_values);
-}
-
 class GlobalPositioningTraceIterationCallback
     : public ceres::IterationCallback {
  public:
@@ -385,11 +205,11 @@ class GlobalPositioningTraceIterationCallback
                                max_snapshotted_points_);
       }
       if (write_residual_values_) {
-        WriteResidualValues(recorder_,
-                            *problem_,
-                            summary.iteration,
-                            *residual_replay_entries_,
-                            write_raw_jacobians_);
+        recorder_->WriteResidualValues(
+            EvaluateGlobalPositioningResiduals({*problem_,
+                                                summary.iteration,
+                                                *residual_replay_entries_,
+                                                write_raw_jacobians_}));
       }
     }
     return ceres::SOLVER_CONTINUE;
@@ -508,27 +328,59 @@ std::string GlobalPositioningTracer::RecordResidual(
   GlobalPositioningTraceRecord record =
       MakeResidualRecord(residual, "residual_added", "problem_build");
   record.attrs["residual_id"] = TraceValue::String(residual_id);
+  record.attrs["replay_schema_version"] = TraceValue::Int(1);
+  THROW_CHECK(cost_function != nullptr)
+      << "Residual ledger tracing requires every recorded residual to have a "
+         "cost function so parameter block descriptors can be serialized.";
+  const std::vector<int>& parameter_block_sizes =
+      cost_function->parameter_block_sizes();
+  THROW_CHECK_EQ(parameter_blocks.size(), parameter_block_sizes.size())
+      << "Residual ledger parameter-block count does not match the Ceres cost "
+         "function.";
+  THROW_CHECK_EQ(parameter_block_descriptors.size(),
+                 parameter_block_sizes.size())
+      << "Residual ledger parameter-block descriptor count does not match the "
+         "Ceres cost function.";
+  std::vector<GlobalPositioningTraceParameterBlockDescriptor>
+      ledger_parameter_block_descriptors = parameter_block_descriptors;
+  for (size_t block_idx = 0; block_idx < parameter_block_sizes.size();
+       ++block_idx) {
+    THROW_CHECK(parameter_blocks[block_idx] != nullptr)
+        << "Residual ledger parameter block pointer is null.";
+    THROW_CHECK(!ledger_parameter_block_descriptors[block_idx].role.empty())
+        << "Residual ledger parameter block role must be non-empty.";
+    THROW_CHECK(!ledger_parameter_block_descriptors[block_idx].kind.empty())
+        << "Residual ledger parameter block kind must be non-empty.";
+    THROW_CHECK_GT(parameter_block_sizes[block_idx], 0)
+        << "Residual ledger parameter block size must be positive.";
+    ledger_parameter_block_descriptors[block_idx].size =
+        static_cast<size_t>(parameter_block_sizes[block_idx]);
+  }
+  record.attrs["parameter_blocks"] = TraceValue::ParameterBlockArray(
+      std::move(ledger_parameter_block_descriptors));
+  THROW_CHECK(residual.loss.has_value())
+      << "Residual ledger tracing requires an explicit loss config for "
+         "residual type "
+      << residual.residual_type << " and loss bucket " << residual.loss_bucket
+      << ".";
+  record.attrs["loss"] = TraceValue::LossConfig(*residual.loss);
+  if (residual.fixed_parameters.has_value()) {
+    record.attrs["fixed_parameters_status"] = TraceValue::String("serialized");
+    record.attrs["fixed_parameters"] =
+        TraceValue::FixedParameters(*residual.fixed_parameters);
+  } else {
+    record.attrs["fixed_parameters_status"] =
+        TraceValue::String("deferred_not_serialized");
+    record.attrs["fixed_parameters_todo"] = TraceValue::String(
+        "GP_REPLAY_FIXED_PARAMETERS_" + residual.residual_type);
+    record.attrs["fixed_parameters_missing"] =
+        TraceValue::StringArray(DeferredFixedParametersForReplay(residual));
+  }
   recorder_->WriteResidualBlock(std::move(record));
   ++residual_bucket_counts_[residual.residual_type + "|" +
                             residual.loss_bucket];
 
   if (ResidualValuesEnabled()) {
-    THROW_CHECK(cost_function != nullptr)
-        << "Residual-values tracing requires every recorded residual to have a "
-           "cost function.";
-    const std::vector<int>& parameter_block_sizes =
-        cost_function->parameter_block_sizes();
-    THROW_CHECK_EQ(parameter_blocks.size(), parameter_block_sizes.size())
-        << "Residual replay parameter-block count does not match the Ceres "
-           "cost function.";
-    THROW_CHECK_EQ(parameter_block_descriptors.size(),
-                   parameter_block_sizes.size())
-        << "Residual replay parameter-block descriptor count does not match "
-           "the Ceres cost function.";
-    for (const double* parameter_block : parameter_blocks) {
-      THROW_CHECK(parameter_block != nullptr)
-          << "Residual replay parameter block pointer is null.";
-    }
     residual_replay_entries_.push_back(
         {residual_id,
          cost_function,

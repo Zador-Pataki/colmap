@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 #include <utility>
 
 namespace colmap {
@@ -24,6 +25,102 @@ Eigen::Vector3d RandVector3d(double low, double high) {
 GlobalPositioningTraceParameterBlockDescriptor TraceParameterBlock(
     std::string role, std::string kind, const uint64_t id) {
   return {std::move(role), std::move(kind), id};
+}
+
+std::vector<double> TraceVector3d(const Eigen::Vector3d& value) {
+  return {value.x(), value.y(), value.z()};
+}
+
+std::vector<double> TraceMatrix3dRowMajor(const Eigen::Matrix3d& value) {
+  std::vector<double> entries;
+  entries.reserve(9);
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      entries.push_back(value(row, col));
+    }
+  }
+  return entries;
+}
+
+std::vector<double> TraceQuaternionWxyz(const Eigen::Quaterniond& value) {
+  return {value.w(), value.x(), value.y(), value.z()};
+}
+
+std::string TraceLossFunctionType(const LossFunctionType type) {
+  switch (type) {
+    case LossFunctionType::TRIVIAL:
+      return "trivial";
+    case LossFunctionType::SOFT_L1:
+      return "soft_l1";
+    case LossFunctionType::CAUCHY:
+      return "cauchy";
+    case LossFunctionType::HUBER:
+      return "huber";
+  }
+  LOG(FATAL) << "Unhandled LossFunctionType: " << static_cast<int>(type);
+}
+
+GlobalPositioningTraceLossConfig TraceLossConfig(
+    const std::string& bucket,
+    const LossConfig& loss,
+    std::string source,
+    const double extra_weight = 1.0,
+    const std::optional<double> observation_count_weight = std::nullopt) {
+  GlobalPositioningTraceLossConfig trace_loss;
+  trace_loss.bucket = bucket;
+  trace_loss.type = TraceLossFunctionType(loss.type);
+  trace_loss.scale = loss.scale;
+  trace_loss.weight = loss.weight * extra_weight;
+  trace_loss.source = std::move(source);
+  trace_loss.observation_count_weight = observation_count_weight;
+  return trace_loss;
+}
+
+std::string TraceMetricDepthResidualType(
+    const MetricDepthResidualType residual_type) {
+  switch (residual_type) {
+    case MetricDepthResidualType::kLinear:
+      return "linear";
+    case MetricDepthResidualType::kLog:
+      return "log";
+    case MetricDepthResidualType::kLogLinear:
+      return "log_linear";
+  }
+  LOG(FATAL) << "Unhandled MetricDepthResidualType: "
+             << static_cast<int>(residual_type);
+}
+
+GlobalPositioningTraceFixedParameters TraceBataRefFrameFixedParameters(
+    const Eigen::Vector3d& cam_from_point3D_dir,
+    const std::optional<Eigen::Matrix3d>& keypoint_covariance_world) {
+  GlobalPositioningTraceFixedParameters fixed_parameters;
+  fixed_parameters.cam_from_point3D_dir = TraceVector3d(cam_from_point3D_dir);
+  if (keypoint_covariance_world.has_value()) {
+    fixed_parameters.keypoint_covariance_world_row_major =
+        TraceMatrix3dRowMajor(*keypoint_covariance_world);
+  }
+  return fixed_parameters;
+}
+
+GlobalPositioningTraceFixedParameters TraceBataConstantRigFixedParameters(
+    const Eigen::Vector3d& cam_from_point3D_dir,
+    const Eigen::Vector3d& cam_from_rig_dir) {
+  GlobalPositioningTraceFixedParameters fixed_parameters;
+  fixed_parameters.cam_from_point3D_dir = TraceVector3d(cam_from_point3D_dir);
+  fixed_parameters.cam_from_rig_dir = TraceVector3d(cam_from_rig_dir);
+  return fixed_parameters;
+}
+
+GlobalPositioningTraceFixedParameters TraceBataVariableRigFixedParameters(
+    const Eigen::Vector3d& cam_from_point3D_dir,
+    const Eigen::Quaterniond& rig_from_world_rotation) {
+  GlobalPositioningTraceFixedParameters fixed_parameters;
+  fixed_parameters.cam_from_point3D_dir = TraceVector3d(cam_from_point3D_dir);
+  fixed_parameters.rig_from_world_rotation_wxyz =
+      TraceQuaternionWxyz(rig_from_world_rotation);
+  fixed_parameters.world_from_rig_rotation_wxyz =
+      TraceQuaternionWxyz(rig_from_world_rotation.inverse());
+  return fixed_parameters;
 }
 
 MetricDepthOptions CreateMetricDepthOptions(
@@ -42,6 +139,32 @@ MetricDepthOptions CreateMetricDepthOptions(
     metric_depth_options.residual_type = MetricDepthResidualType::kLinear;
   }
   return metric_depth_options;
+}
+
+GlobalPositioningTraceFixedParameters TraceMetricDepthFixedParameters(
+    const Eigen::Quaterniond& camera_rotation,
+    const MetricDepthOptions& metric_depth_options) {
+  GlobalPositioningTraceFixedParameters fixed_parameters;
+  fixed_parameters.camera_rotation_wxyz = TraceQuaternionWxyz(camera_rotation);
+  fixed_parameters.metric_depth_use_log_scale =
+      metric_depth_options.use_log_scale;
+  fixed_parameters.metric_depth_residual_type =
+      TraceMetricDepthResidualType(metric_depth_options.residual_type);
+  fixed_parameters.metric_depth_zero_residual_behind =
+      metric_depth_options.zero_residual_behind;
+  fixed_parameters.metric_depth_log_linear_threshold =
+      metric_depth_options.log_linear_threshold;
+  return fixed_parameters;
+}
+
+GlobalPositioningTraceFixedParameters TraceScalePriorFixedParameters(
+    const bool use_log_scale_for_depth_map_scales,
+    const double scale_prior_stddev) {
+  GlobalPositioningTraceFixedParameters fixed_parameters;
+  fixed_parameters.scale_prior_target =
+      use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+  fixed_parameters.scale_prior_stddev = scale_prior_stddev;
+  return fixed_parameters;
 }
 
 // Per-observation depth outlier check. Returns true when the log-space
@@ -118,6 +241,75 @@ bool HasValidDepthPriorMetadata(const Image& image,
          image.depth_prior_validity[observation.point2D_idx] &&
          observation.point2D_idx < image.depth_priors.size() &&
          observation.point2D_idx < image.depth_prior_stddevs.size();
+}
+
+GlobalPositioningTraceLossConfig GeometryTraceLossConfig(
+    const GlobalPositionerOptions& options, const std::string& bucket) {
+  if (bucket == "geometry_uncalibrated_downweighted") {
+    return TraceLossConfig(bucket,
+                           options.loss,
+                           "GlobalPositionerOptions.loss+"
+                           "uncalibrated_loss_downweight",
+                           options.uncalibrated_loss_downweight);
+  }
+  if (bucket == "geometry_normal_trackstart") {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_geometry_trackstart,
+                           "GlobalPositionerOptions."
+                           "loss_normal_geometry_trackstart");
+  }
+  if (bucket == "geometry_normal_inlier") {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_geometry_inlier,
+                           "GlobalPositionerOptions."
+                           "loss_normal_geometry_inlier");
+  }
+  if (bucket == "geometry_normal_default" &&
+      options.use_metric_depth_constraint) {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_geometry,
+                           "GlobalPositionerOptions.loss_normal_geometry");
+  }
+  if (bucket == "geometry_lc") {
+    return TraceLossConfig(bucket,
+                           options.loss_lc_geometry,
+                           "GlobalPositionerOptions.loss_lc_geometry");
+  }
+  return TraceLossConfig(bucket, options.loss, "GlobalPositionerOptions.loss");
+}
+
+GlobalPositioningTraceLossConfig DepthTraceLossConfig(
+    const GlobalPositionerOptions& options, const std::string& bucket) {
+  if (bucket == "depth_runtime_outlier_soft_fallback") {
+    return TraceLossConfig(bucket,
+                           options.loss_soft_outlier_fallback,
+                           "GlobalPositionerOptions."
+                           "loss_soft_outlier_fallback");
+  }
+  if (bucket == "depth_lc") {
+    return TraceLossConfig(
+        bucket, options.loss_lc_depth, "GlobalPositionerOptions.loss_lc_depth");
+  }
+  if (bucket == "depth_normal_trackstart") {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_depth_trackstart,
+                           "GlobalPositionerOptions."
+                           "loss_normal_depth_trackstart");
+  }
+  if (bucket == "depth_normal_inlier") {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_depth_inlier,
+                           "GlobalPositionerOptions.loss_normal_depth_inlier");
+  }
+  if (bucket == "depth_normal_external_outlier") {
+    return TraceLossConfig(bucket,
+                           options.loss_normal_depth_outlier,
+                           "GlobalPositionerOptions."
+                           "loss_normal_depth_outlier");
+  }
+  return TraceLossConfig(bucket,
+                         options.loss_normal_depth,
+                         "GlobalPositionerOptions.loss_normal_depth");
 }
 
 }  // namespace
@@ -557,6 +749,15 @@ void GlobalPositioner::AddPointToCameraConstraints(
       residual.image_id = image_id;
       residual.dmap_scale_image_id = image_id;
       residual.loss_bucket = "scale_prior";
+      residual.loss = TraceLossConfig("scale_prior",
+                                      options_.loss_scale_prior,
+                                      "GlobalPositionerOptions."
+                                      "loss_scale_prior+observation_count",
+                                      obs_count,
+                                      obs_count);
+      residual.fixed_parameters = TraceScalePriorFixedParameters(
+          options_.use_log_scale_for_depth_map_scales,
+          options_.scale_prior_stddev);
       tracer_->RecordResidual(
           residual,
           scale_prior_cost,
@@ -756,6 +957,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     // cov_world = R^T diag(sigma^2) R.
     ceres::CostFunction* cost_function = nullptr;
     bool uses_keypoint_covariance = false;
+    std::optional<Eigen::Matrix3d> keypoint_covariance_world;
     if (observation.point2D_idx < image.angular_stddevs.size()) {
       const Eigen::Vector2d& angular_std =
           image.angular_stddevs[observation.point2D_idx];
@@ -774,6 +976,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           BATAPairwiseDirectionCostFunctor>::Create(cov_world,
                                                     cam_from_point3D_dir);
       uses_keypoint_covariance = cost_function != nullptr;
+      if (uses_keypoint_covariance) {
+        keypoint_covariance_world = cov_world;
+      }
     }
     if (cost_function == nullptr) {
       cost_function =
@@ -789,7 +994,10 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     GlobalPositioningResidualDescriptor residual = observation_record;
     residual.residual_type = "bata_ref_frame";
     residual.loss_bucket = geometry_loss_bucket;
+    residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
     residual.uses_keypoint_covariance = uses_keypoint_covariance;
+    residual.fixed_parameters = TraceBataRefFrameFixedParameters(
+        cam_from_point3D_dir, keypoint_covariance_world);
     tracer_->RecordResidual(
         residual,
         cost_function,
@@ -833,6 +1041,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       GlobalPositioningResidualDescriptor residual = observation_record;
       residual.residual_type = "bata_constant_rig";
       residual.loss_bucket = geometry_loss_bucket;
+      residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
+      residual.fixed_parameters = TraceBataConstantRigFixedParameters(
+          cam_from_point3D_dir, cam_from_rig_dir);
       tracer_->RecordResidual(
           residual,
           cost_function,
@@ -850,10 +1061,11 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
         cams_in_rig_[sensor_id] = Eigen::Vector3d::Zero();
       }
 
+      const Eigen::Quaterniond rig_from_world_rotation =
+          image.FramePtr()->RigFromWorld().rotation();
       ceres::CostFunction* cost_function =
-          RigBATAPairwiseDirectionCostFunctor::Create(
-              cam_from_point3D_dir,
-              image.FramePtr()->RigFromWorld().rotation());
+          RigBATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir,
+                                                      rig_from_world_rotation);
 
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
@@ -865,6 +1077,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       GlobalPositioningResidualDescriptor residual = observation_record;
       residual.residual_type = "bata_variable_rig";
       residual.loss_bucket = geometry_loss_bucket;
+      residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
+      residual.fixed_parameters = TraceBataVariableRigFixedParameters(
+          cam_from_point3D_dir, rig_from_world_rotation);
       tracer_->RecordResidual(
           residual,
           cost_function,
@@ -961,11 +1176,13 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   }
   dmap_scale_observation_counts_[observation.image_id]++;
 
+  const MetricDepthOptions metric_depth_options =
+      CreateMetricDepthOptions(options_);
   ceres::CostFunction* metric_depth_cost =
       MetricDepthError::Create(image.CamFromWorld().rotation(),
                                depth_prior,
                                depth_sigma,
-                               CreateMetricDepthOptions(options_));
+                               metric_depth_options);
 
   if (metric_depth_cost == nullptr) {
     tracer_->RecordSkip(residual, "metric_depth_cost_create_failed");
@@ -1033,6 +1250,9 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
   residual.loss_bucket = depth_loss_bucket;
+  residual.loss = DepthTraceLossConfig(options_, depth_loss_bucket);
+  residual.fixed_parameters = TraceMetricDepthFixedParameters(
+      image.CamFromWorld().rotation(), metric_depth_options);
   tracer_->RecordResidual(
       residual,
       metric_depth_cost,
