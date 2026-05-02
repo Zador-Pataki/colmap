@@ -150,6 +150,11 @@ bool IsParameterSnapshotsLevel(const GlobalPositioningTraceLevel level) {
          static_cast<int>(GlobalPositioningTraceLevel::kParameterSnapshots);
 }
 
+bool IsResidualValuesLevel(const GlobalPositioningTraceLevel level) {
+  return static_cast<int>(level) >=
+         static_cast<int>(GlobalPositioningTraceLevel::kResidualValues);
+}
+
 std::string IterationPrefix(const int iteration) {
   std::ostringstream stream;
   stream << "iter_" << std::setw(6) << std::setfill('0') << iteration;
@@ -190,6 +195,32 @@ std::string JsonSizeArray(const std::vector<size_t>& values) {
   return stream.str();
 }
 
+std::string JsonStringArray(const std::vector<std::string>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << JsonEscape(values[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JsonBoolArray(const std::vector<bool>& values) {
+  std::ostringstream stream;
+  stream << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << (values[i] ? "true" : "false");
+  }
+  stream << "]";
+  return stream.str();
+}
+
 void ValidateSnapshotArray(const std::string& name,
                            const GlobalPositioningTraceSnapshotArray& array) {
   THROW_CHECK(!array.shape.empty())
@@ -214,6 +245,18 @@ void WriteSnapshotSidecar(const std::filesystem::path& path,
       << "Failed while writing global positioning snapshot sidecar: " << path;
 }
 
+void WriteDoubleSidecar(const std::filesystem::path& path,
+                        const std::vector<double>& values) {
+  std::ofstream sidecar_stream(
+      path, std::ios::binary | std::ios::out | std::ios::trunc);
+  THROW_CHECK_FILE_OPEN(sidecar_stream, path);
+  for (const double value : values) {
+    WriteBinaryLittleEndian<double>(&sidecar_stream, value);
+  }
+  THROW_CHECK(sidecar_stream.good())
+      << "Failed while writing global positioning trace sidecar: " << path;
+}
+
 void WriteSnapshotArtifactMetadata(
     std::ostream& stream,
     const std::string& name,
@@ -226,6 +269,49 @@ void WriteSnapshotArtifactMetadata(
          << "      \"ids\": " << JsonUInt64Array(array.ids) << ",\n"
          << "      \"shape\": " << JsonSizeArray(array.shape) << "\n"
          << "    }";
+}
+
+void WriteResidualValueArtifactMetadata(std::ostream& stream,
+                                        const std::string& name,
+                                        const std::string& filename,
+                                        const size_t element_count) {
+  stream << "    " << JsonEscape(name) << ": {\n"
+         << "      \"file\": " << JsonEscape(filename) << ",\n"
+         << "      \"dtype\": \"float64\",\n"
+         << "      \"byte_order\": \"little_endian\",\n"
+         << "      \"shape\": [" << element_count << "]\n"
+         << "    }";
+}
+
+size_t ValidateResidualValues(
+    const GlobalPositioningTraceResidualValues& residual_values) {
+  THROW_CHECK_GE(residual_values.iteration, 0)
+      << "Global positioning residual values iteration must be non-negative.";
+  const size_t num_residual_blocks = residual_values.residual_ids.size();
+  THROW_CHECK_EQ(residual_values.residual_dims.size(), num_residual_blocks)
+      << "Residual value residual_dims count must match residual_ids count.";
+  THROW_CHECK_EQ(residual_values.residual_offsets.size(), num_residual_blocks)
+      << "Residual value residual_offsets count must match residual_ids count.";
+  THROW_CHECK_EQ(residual_values.evaluation_success.size(), num_residual_blocks)
+      << "Residual value evaluation_success count must match residual_ids "
+         "count.";
+  THROW_CHECK_EQ(residual_values.raw_costs.size(), num_residual_blocks)
+      << "Residual value raw_costs count must match residual_ids count.";
+  THROW_CHECK_EQ(residual_values.robust_costs.size(), num_residual_blocks)
+      << "Residual value robust_costs count must match residual_ids count.";
+
+  size_t total_scalar_residuals = 0;
+  for (size_t i = 0; i < num_residual_blocks; ++i) {
+    THROW_CHECK(!residual_values.residual_ids[i].empty())
+        << "Residual value residual_ids entries must be non-empty.";
+    THROW_CHECK_EQ(residual_values.residual_offsets[i], total_scalar_residuals)
+        << "Residual value residual_offsets must be contiguous cumulative "
+           "offsets.";
+    total_scalar_residuals += residual_values.residual_dims[i];
+  }
+  THROW_CHECK_EQ(residual_values.raw_residuals.size(), total_scalar_residuals)
+      << "Residual value raw_residuals count must match sum(residual_dims).";
+  return total_scalar_residuals;
 }
 
 void RemoveTraceArtifactIfExists(const std::filesystem::path& path) {
@@ -330,6 +416,7 @@ GlobalPositioningTraceRecorder::GlobalPositioningTraceRecorder(
   RemoveTraceArtifactIfExists(options_.output_path / "residual_blocks.jsonl");
   RemoveTraceArtifactIfExists(options_.output_path / "residual_skips.jsonl");
   RemoveTraceArtifactIfExists(options_.output_path / "snapshots");
+  RemoveTraceArtifactIfExists(options_.output_path / "residual_values");
 
   run_id_ = MakeRunId(created_at_unix_ns_, options_.run_label);
 
@@ -367,6 +454,20 @@ GlobalPositioningTraceRecorder::GlobalPositioningTraceRecorder(
         << snapshot_path;
   }
 
+  if (IsResidualValuesEnabled()) {
+    const std::filesystem::path residual_values_path =
+        options_.output_path / "residual_values";
+    THROW_CHECK(!ExistsFile(residual_values_path))
+        << "Global positioning residual values path points to a file: "
+        << residual_values_path;
+    if (!ExistsDir(residual_values_path)) {
+      CreateDirIfNotExists(residual_values_path, /*recursive=*/true);
+    }
+    THROW_CHECK(ExistsDir(residual_values_path))
+        << "Global positioning residual values path is not a directory: "
+        << residual_values_path;
+  }
+
   WriteManifest("running");
 }
 
@@ -376,6 +477,10 @@ bool GlobalPositioningTraceRecorder::IsResidualLedgerEnabled() const {
 
 bool GlobalPositioningTraceRecorder::IsParameterSnapshotsEnabled() const {
   return IsParameterSnapshotsLevel(options_.level);
+}
+
+bool GlobalPositioningTraceRecorder::IsResidualValuesEnabled() const {
+  return IsResidualValuesLevel(options_.level);
 }
 
 std::string GlobalPositioningTraceRecorder::AllocateResidualId() {
@@ -582,6 +687,81 @@ void GlobalPositioningTraceRecorder::WriteParameterSnapshot(
                                   *snapshot.cams_in_rig,
                                   *cams_in_rig_filename);
   }
+  metadata_stream << "\n"
+                  << "  }\n"
+                  << "}\n";
+  metadata_stream.flush();
+}
+
+void GlobalPositioningTraceRecorder::WriteResidualValues(
+    const GlobalPositioningTraceResidualValues& residual_values) {
+  if (!IsResidualValuesEnabled()) {
+    return;
+  }
+
+  THROW_CHECK_EQ(sizeof(double), 8)
+      << "Global positioning residual value sidecars require 64-bit doubles.";
+  THROW_CHECK(std::numeric_limits<double>::is_iec559)
+      << "Global positioning residual value sidecars require IEEE-754 doubles.";
+  THROW_CHECK(IsLittleEndian())
+      << "Global positioning residual value binaries are defined as "
+         "little-endian.";
+
+  const size_t total_scalar_residuals = ValidateResidualValues(residual_values);
+  const size_t num_residual_blocks = residual_values.residual_ids.size();
+  const std::filesystem::path residual_values_path =
+      options_.output_path / "residual_values";
+  THROW_CHECK(ExistsDir(residual_values_path))
+      << "Global positioning residual values path is not a directory: "
+      << residual_values_path;
+
+  const std::string prefix = IterationPrefix(residual_values.iteration);
+  const std::filesystem::path metadata_path =
+      residual_values_path / (prefix + ".json");
+  const std::string raw_residuals_filename = prefix + "_raw_residuals_f64.bin";
+  const std::string raw_costs_filename = prefix + "_raw_costs_f64.bin";
+  const std::string robust_costs_filename = prefix + "_robust_costs_f64.bin";
+
+  WriteDoubleSidecar(residual_values_path / raw_residuals_filename,
+                     residual_values.raw_residuals);
+  WriteDoubleSidecar(residual_values_path / raw_costs_filename,
+                     residual_values.raw_costs);
+  WriteDoubleSidecar(residual_values_path / robust_costs_filename,
+                     residual_values.robust_costs);
+
+  std::ofstream metadata_stream(metadata_path, std::ios::out | std::ios::trunc);
+  THROW_CHECK_FILE_OPEN(metadata_stream, metadata_path);
+  metadata_stream << "{\n"
+                  << "  \"schema_version\": " << kSchemaVersion << ",\n"
+                  << "  \"run_id\": " << JsonEscape(run_id_) << ",\n"
+                  << "  \"iteration\": " << residual_values.iteration << ",\n"
+                  << "  \"dtype\": \"float64\",\n"
+                  << "  \"byte_order\": \"little_endian\",\n"
+                  << "  \"num_residual_blocks\": " << num_residual_blocks
+                  << ",\n"
+                  << "  \"total_scalar_residuals\": " << total_scalar_residuals
+                  << ",\n"
+                  << "  \"residual_ids\": "
+                  << JsonStringArray(residual_values.residual_ids) << ",\n"
+                  << "  \"residual_dims\": "
+                  << JsonSizeArray(residual_values.residual_dims) << ",\n"
+                  << "  \"residual_offsets\": "
+                  << JsonSizeArray(residual_values.residual_offsets) << ",\n"
+                  << "  \"evaluation_success\": "
+                  << JsonBoolArray(residual_values.evaluation_success) << ",\n"
+                  << "  \"artifacts\": {\n";
+  WriteResidualValueArtifactMetadata(metadata_stream,
+                                     "raw_residuals",
+                                     raw_residuals_filename,
+                                     total_scalar_residuals);
+  metadata_stream << ",\n";
+  WriteResidualValueArtifactMetadata(
+      metadata_stream, "raw_costs", raw_costs_filename, num_residual_blocks);
+  metadata_stream << ",\n";
+  WriteResidualValueArtifactMetadata(metadata_stream,
+                                     "robust_costs",
+                                     robust_costs_filename,
+                                     num_residual_blocks);
   metadata_stream << "\n"
                   << "  }\n"
                   << "}\n";

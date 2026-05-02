@@ -123,6 +123,14 @@ struct GlobalPositionerOptions {
   }
 };
 
+struct GlobalPositioningResidualReplayEntry {
+  std::string residual_id;
+  const ceres::CostFunction* cost_function = nullptr;
+  const ceres::LossFunction* loss_function = nullptr;
+  size_t residual_dimension = 0;
+  std::vector<const double*> parameter_blocks;
+};
+
 class GlobalPositioner {
  public:
   explicit GlobalPositioner(const GlobalPositionerOptions& options);
@@ -261,12 +269,17 @@ class GlobalPositioner {
 
   bool ShouldTraceResidualLedger() const;
   bool ShouldTraceParameterSnapshots() const;
+  bool ShouldTraceResidualValues() const;
   void ResetResidualLedger();
   void RecordScaleObservation(size_t scale_index,
                               point3D_t point3D_id,
                               const TrackElement& observation,
                               bool is_lc_observation);
-  void RecordResidualBlock(const ResidualLedgerEntry& entry);
+  std::string RecordResidualBlock(const ResidualLedgerEntry& entry);
+  void RecordReplayResidual(const std::string& residual_id,
+                            const ceres::CostFunction* cost_function,
+                            const ceres::LossFunction* loss_function,
+                            std::vector<const double*> parameter_blocks);
   void RecordResidualSkip(const ResidualLedgerEntry& entry,
                           const std::string& skip_reason);
   void RecordResidualBucketSummaries();
@@ -274,6 +287,7 @@ class GlobalPositioner {
   GlobalPositioningTraceRecorder* trace_recorder_ = nullptr;
   std::map<std::string, uint64_t> residual_bucket_counts_;
   std::vector<ScaleObservationMetadata> scale_observations_;
+  std::vector<GlobalPositioningResidualReplayEntry> residual_replay_entries_;
 };
 
 // Solve global positioning using point-to-camera constraints.

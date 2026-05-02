@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <utility>
 
 namespace colmap {
@@ -104,6 +105,12 @@ bool IsParameterSnapshotTraceEnabled(
     const GlobalPositioningTraceOptions& options) {
   return static_cast<int>(options.level) >=
          static_cast<int>(GlobalPositioningTraceLevel::kParameterSnapshots);
+}
+
+bool IsResidualValuesTraceEnabled(
+    const GlobalPositioningTraceOptions& options) {
+  return static_cast<int>(options.level) >=
+         static_cast<int>(GlobalPositioningTraceLevel::kResidualValues);
 }
 
 using TraceAttrs = std::map<std::string, GlobalPositioningTraceValue>;
@@ -266,6 +273,71 @@ void WriteParameterSnapshot(
   recorder->WriteParameterSnapshot(snapshot);
 }
 
+void WriteResidualValues(
+    GlobalPositioningTraceRecorder* recorder,
+    const int iteration,
+    const std::vector<GlobalPositioningResidualReplayEntry>& replay_entries) {
+  if (recorder == nullptr) {
+    return;
+  }
+
+  GlobalPositioningTraceResidualValues residual_values;
+  residual_values.iteration = iteration;
+  residual_values.residual_ids.reserve(replay_entries.size());
+  residual_values.residual_dims.reserve(replay_entries.size());
+  residual_values.residual_offsets.reserve(replay_entries.size());
+  residual_values.evaluation_success.resize(replay_entries.size(), false);
+  residual_values.raw_costs.resize(replay_entries.size(),
+                                   std::numeric_limits<double>::quiet_NaN());
+  residual_values.robust_costs.resize(replay_entries.size(),
+                                      std::numeric_limits<double>::quiet_NaN());
+
+  size_t total_scalar_residuals = 0;
+  for (const GlobalPositioningResidualReplayEntry& entry : replay_entries) {
+    residual_values.residual_ids.push_back(entry.residual_id);
+    residual_values.residual_dims.push_back(entry.residual_dimension);
+    residual_values.residual_offsets.push_back(total_scalar_residuals);
+    total_scalar_residuals += entry.residual_dimension;
+  }
+  residual_values.raw_residuals.resize(
+      total_scalar_residuals, std::numeric_limits<double>::quiet_NaN());
+
+  for (size_t entry_idx = 0; entry_idx < replay_entries.size(); ++entry_idx) {
+    const GlobalPositioningResidualReplayEntry& entry =
+        replay_entries[entry_idx];
+    if (entry.cost_function == nullptr) {
+      continue;
+    }
+
+    double* raw_residuals = residual_values.raw_residuals.data() +
+                            residual_values.residual_offsets[entry_idx];
+    const bool evaluation_success = entry.cost_function->Evaluate(
+        entry.parameter_blocks.data(), raw_residuals, nullptr);
+    residual_values.evaluation_success[entry_idx] = evaluation_success;
+    if (!evaluation_success) {
+      continue;
+    }
+
+    double squared_norm = 0.0;
+    for (size_t residual_idx = 0; residual_idx < entry.residual_dimension;
+         ++residual_idx) {
+      squared_norm += raw_residuals[residual_idx] * raw_residuals[residual_idx];
+    }
+
+    const double raw_cost = 0.5 * squared_norm;
+    residual_values.raw_costs[entry_idx] = raw_cost;
+    if (entry.loss_function != nullptr) {
+      double rho[3];
+      entry.loss_function->Evaluate(squared_norm, rho);
+      residual_values.robust_costs[entry_idx] = 0.5 * rho[0];
+    } else {
+      residual_values.robust_costs[entry_idx] = raw_cost;
+    }
+  }
+
+  recorder->WriteResidualValues(residual_values);
+}
+
 class GlobalPositioningTraceIterationCallback
     : public ceres::IterationCallback {
  public:
@@ -276,34 +348,45 @@ class GlobalPositioningTraceIterationCallback
       const std::vector<double>* scales,
       const std::map<image_t, double>* dmap_scales,
       const std::unordered_map<sensor_t, Eigen::Vector3d>* cams_in_rig,
+      const std::vector<GlobalPositioningResidualReplayEntry>*
+          residual_replay_entries,
       const int snapshot_every_n_iterations,
       const int max_snapshotted_points,
-      const bool write_parameter_snapshots)
+      const bool write_parameter_snapshots,
+      const bool write_residual_values)
       : recorder_(recorder),
         reconstruction_(reconstruction),
         frame_centers_(frame_centers),
         scales_(scales),
         dmap_scales_(dmap_scales),
         cams_in_rig_(cams_in_rig),
+        residual_replay_entries_(residual_replay_entries),
         snapshot_every_n_iterations_(snapshot_every_n_iterations),
         max_snapshotted_points_(max_snapshotted_points),
-        write_parameter_snapshots_(write_parameter_snapshots) {}
+        write_parameter_snapshots_(write_parameter_snapshots),
+        write_residual_values_(write_residual_values) {}
 
   ceres::CallbackReturnType operator()(
       const ceres::IterationSummary& summary) override {
     if (recorder_ != nullptr) {
       recorder_->WriteIteration(summary);
     }
-    if (write_parameter_snapshots_ &&
+    if ((write_parameter_snapshots_ || write_residual_values_) &&
         summary.iteration % snapshot_every_n_iterations_ == 0) {
-      WriteParameterSnapshot(recorder_,
-                             summary.iteration,
-                             *reconstruction_,
-                             *frame_centers_,
-                             *scales_,
-                             *dmap_scales_,
-                             *cams_in_rig_,
-                             max_snapshotted_points_);
+      if (write_parameter_snapshots_) {
+        WriteParameterSnapshot(recorder_,
+                               summary.iteration,
+                               *reconstruction_,
+                               *frame_centers_,
+                               *scales_,
+                               *dmap_scales_,
+                               *cams_in_rig_,
+                               max_snapshotted_points_);
+      }
+      if (write_residual_values_) {
+        WriteResidualValues(
+            recorder_, summary.iteration, *residual_replay_entries_);
+      }
     }
     return ceres::SOLVER_CONTINUE;
   }
@@ -315,9 +398,12 @@ class GlobalPositioningTraceIterationCallback
   const std::vector<double>* scales_ = nullptr;
   const std::map<image_t, double>* dmap_scales_ = nullptr;
   const std::unordered_map<sensor_t, Eigen::Vector3d>* cams_in_rig_ = nullptr;
+  const std::vector<GlobalPositioningResidualReplayEntry>*
+      residual_replay_entries_ = nullptr;
   int snapshot_every_n_iterations_ = 1;
   int max_snapshotted_points_ = -1;
   bool write_parameter_snapshots_ = false;
+  bool write_residual_values_ = false;
 };
 
 class GlobalPositioningTraceStatusGuard {
@@ -501,10 +587,11 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
 
     ceres::Solver::Options solver_options = options_.solver_options;
     const bool trace_parameter_snapshots = ShouldTraceParameterSnapshots();
-    if (trace_parameter_snapshots) {
+    const bool trace_residual_values = ShouldTraceResidualValues();
+    if (trace_parameter_snapshots || trace_residual_values) {
       THROW_CHECK_GT(options_.trace.snapshot_every_n_iterations, 0)
           << "Global positioning trace snapshot_every_n_iterations must be "
-             "positive when parameter snapshots are enabled.";
+             "positive when sampled trace artifacts are enabled.";
       solver_options.update_state_every_iteration = true;
     }
     std::unique_ptr<GlobalPositioningTraceIterationCallback> trace_callback;
@@ -517,9 +604,11 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
               &scales_,
               &dmap_scales_,
               &cams_in_rig_,
+              &residual_replay_entries_,
               options_.trace.snapshot_every_n_iterations,
               options_.trace.max_snapshotted_points,
-              trace_parameter_snapshots);
+              trace_parameter_snapshots,
+              trace_residual_values);
       solver_options.callbacks.push_back(trace_callback.get());
     }
 
@@ -610,9 +699,15 @@ bool GlobalPositioner::ShouldTraceParameterSnapshots() const {
          IsParameterSnapshotTraceEnabled(options_.trace);
 }
 
+bool GlobalPositioner::ShouldTraceResidualValues() const {
+  return trace_recorder_ != nullptr &&
+         IsResidualValuesTraceEnabled(options_.trace);
+}
+
 void GlobalPositioner::ResetResidualLedger() {
   residual_bucket_counts_.clear();
   scale_observations_.clear();
+  residual_replay_entries_.clear();
 }
 
 void GlobalPositioner::RecordScaleObservation(const size_t scale_index,
@@ -633,17 +728,18 @@ void GlobalPositioner::RecordScaleObservation(const size_t scale_index,
   };
 }
 
-void GlobalPositioner::RecordResidualBlock(const ResidualLedgerEntry& entry) {
+std::string GlobalPositioner::RecordResidualBlock(
+    const ResidualLedgerEntry& entry) {
   if (!ShouldTraceResidualLedger()) {
-    return;
+    return "";
   }
 
+  std::string residual_id = trace_recorder_->AllocateResidualId();
   GlobalPositioningTraceRecord record;
   record.event_type = "residual_added";
   record.stage = "problem_build";
   record.attrs = {
-      {"residual_id",
-       TraceValue::String(trace_recorder_->AllocateResidualId())},
+      {"residual_id", TraceValue::String(residual_id)},
       {"residual_type", TraceValue::String(entry.residual_type)},
       {"point3D_id", TraceOptionalId(entry.point3D_id)},
       {"image_id", TraceOptionalId(entry.image_id)},
@@ -666,6 +762,25 @@ void GlobalPositioner::RecordResidualBlock(const ResidualLedgerEntry& entry) {
   };
   trace_recorder_->WriteResidualBlock(std::move(record));
   ++residual_bucket_counts_[entry.residual_type + "|" + entry.loss_bucket];
+  return residual_id;
+}
+
+void GlobalPositioner::RecordReplayResidual(
+    const std::string& residual_id,
+    const ceres::CostFunction* cost_function,
+    const ceres::LossFunction* loss_function,
+    std::vector<const double*> parameter_blocks) {
+  if (!ShouldTraceResidualValues() || residual_id.empty() ||
+      cost_function == nullptr) {
+    return;
+  }
+
+  residual_replay_entries_.push_back(
+      {residual_id,
+       cost_function,
+       loss_function,
+       static_cast<size_t>(cost_function->num_residuals()),
+       std::move(parameter_blocks)});
 }
 
 void GlobalPositioner::RecordResidualSkip(const ResidualLedgerEntry& entry,
@@ -919,7 +1034,9 @@ void GlobalPositioner::AddPointToCameraConstraints(
       residual.image_id = image_id;
       residual.dmap_scale_image_id = image_id;
       residual.loss_bucket = "scale_prior";
-      RecordResidualBlock(residual);
+      const std::string residual_id = RecordResidualBlock(residual);
+      RecordReplayResidual(
+          residual_id, scale_prior_cost, obs_count_scaled_loss, {&scale});
     }
   }
   RecordResidualBucketSummaries();
@@ -1147,7 +1264,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     residual.residual_type = "bata_ref_frame";
     residual.loss_bucket = geometry_loss_bucket;
     residual.uses_keypoint_covariance = uses_keypoint_covariance;
-    RecordResidualBlock(residual);
+    const std::string residual_id = RecordResidualBlock(residual);
+    RecordReplayResidual(
+        residual_id,
+        cost_function,
+        loss_function,
+        {frame_centers_[image.FrameId()].data(), point3D.xyz.data(), &scale});
 
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint) {
@@ -1183,7 +1305,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       ResidualLedgerEntry residual = observation_record;
       residual.residual_type = "bata_constant_rig";
       residual.loss_bucket = geometry_loss_bucket;
-      RecordResidualBlock(residual);
+      const std::string residual_id = RecordResidualBlock(residual);
+      RecordReplayResidual(
+          residual_id,
+          cost_function,
+          loss_function,
+          {point3D.xyz.data(), frame_centers_[image.FrameId()].data(), &scale});
     } else {
       // If the cam_from_rig contains nan values, it needs to be re-estimated.
       // Initialize cams_in_rig_ if not already done.
@@ -1208,7 +1335,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       ResidualLedgerEntry residual = observation_record;
       residual.residual_type = "bata_variable_rig";
       residual.loss_bucket = geometry_loss_bucket;
-      RecordResidualBlock(residual);
+      const std::string residual_id = RecordResidualBlock(residual);
+      RecordReplayResidual(residual_id,
+                           cost_function,
+                           loss_function,
+                           {point3D.xyz.data(),
+                            frame_centers_[image.FrameId()].data(),
+                            cams_in_rig_[sensor_id].data(),
+                            &scale});
     }
     if (!options_.use_metric_depth_constraint) {
       ResidualLedgerEntry skip = observation_record;
@@ -1365,7 +1499,13 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
   residual.loss_bucket = depth_loss_bucket;
-  RecordResidualBlock(residual);
+  const std::string residual_id = RecordResidualBlock(residual);
+  RecordReplayResidual(residual_id,
+                       metric_depth_cost,
+                       depth_loss,
+                       {frame_centers_[image.FrameId()].data(),
+                        point3D.xyz.data(),
+                        &dmap_scales_[observation.image_id]});
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(

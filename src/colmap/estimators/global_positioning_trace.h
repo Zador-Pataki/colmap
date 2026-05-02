@@ -83,6 +83,17 @@ struct GlobalPositioningTraceParameterSnapshot {
   std::optional<GlobalPositioningTraceSnapshotArray> cams_in_rig;
 };
 
+struct GlobalPositioningTraceResidualValues {
+  int iteration = 0;
+  std::vector<std::string> residual_ids;
+  std::vector<size_t> residual_dims;
+  std::vector<size_t> residual_offsets;
+  std::vector<bool> evaluation_success;
+  std::vector<double> raw_residuals;
+  std::vector<double> raw_costs;
+  std::vector<double> robust_costs;
+};
+
 class GlobalPositioningTraceRecorder {
  public:
   explicit GlobalPositioningTraceRecorder(
@@ -91,6 +102,7 @@ class GlobalPositioningTraceRecorder {
   const std::string& RunId() const { return run_id_; }
   bool IsResidualLedgerEnabled() const;
   bool IsParameterSnapshotsEnabled() const;
+  bool IsResidualValuesEnabled() const;
   std::string AllocateResidualId();
 
   void WriteEvent(GlobalPositioningTraceRecord record);
@@ -100,6 +112,8 @@ class GlobalPositioningTraceRecorder {
   void WriteResidualBucketSummary(GlobalPositioningTraceRecord record);
   void WriteParameterSnapshot(
       const GlobalPositioningTraceParameterSnapshot& snapshot);
+  void WriteResidualValues(
+      const GlobalPositioningTraceResidualValues& residual_values);
   void MarkFinished(std::string status);
 
  private:
