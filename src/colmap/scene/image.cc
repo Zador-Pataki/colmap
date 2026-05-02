@@ -84,12 +84,13 @@ Image& Image::operator=(const Image& other) {
     depth_priors = other.depth_priors;
     depth_prior_stddevs = other.depth_prior_stddevs;
     depth_prior_validity = other.depth_prior_validity;
+    // Public data members.
+    features = other.features;
+    features_undist = other.features_undist;
+    angular_stddevs = other.angular_stddevs;
     is_inlier = other.is_inlier;
     is_depth_outlier = other.is_depth_outlier;
     is_track_anchor = other.is_track_anchor;
-    angular_stddevs = other.angular_stddevs;
-    features = other.features;
-    features_undist = other.features_undist;
   }
   return *this;
 }
