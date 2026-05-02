@@ -70,9 +70,16 @@ __all__ = import_module_symbols(
 )
 
 from .global_positioning_trace import (  # noqa: E402,F401,I001
-    GlobalPositioningParameterSnapshot as GlobalPositioningParameterSnapshot,
-    GlobalPositioningSnapshotArray as GlobalPositioningSnapshotArray,
-    GlobalPositioningTrace as GlobalPositioningTrace,
+    GlobalPositioningParameterSnapshot,
+    GlobalPositioningReplayEvaluation,
+    GlobalPositioningReplayJacobianBlock,
+    GlobalPositioningReplayResidualBlock,
+    GlobalPositioningResidualLedgerBlock,
+    GlobalPositioningResidualLedgerLoss,
+    GlobalPositioningResidualLedgerParameterBlock,
+    GlobalPositioningSnapshotArray,
+    GlobalPositioningTrace,
+    GlobalPositioningTraceReplay,
 )
 
 __all__.extend(
@@ -80,8 +87,15 @@ __all__.extend(
         "__version__",
         "__ceres_version__",
         "GlobalPositioningParameterSnapshot",
+        "GlobalPositioningReplayEvaluation",
+        "GlobalPositioningReplayJacobianBlock",
+        "GlobalPositioningReplayResidualBlock",
+        "GlobalPositioningResidualLedgerBlock",
+        "GlobalPositioningResidualLedgerLoss",
+        "GlobalPositioningResidualLedgerParameterBlock",
         "GlobalPositioningSnapshotArray",
         "GlobalPositioningTrace",
+        "GlobalPositioningTraceReplay",
     ]
 )
 
