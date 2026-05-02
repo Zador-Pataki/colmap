@@ -83,6 +83,11 @@ size_t NumRegularObservationsForMinViewGate(const Track& track) {
   return track.Length();
 }
 
+bool IsLossConfigOverride(const LossConfig& loss_config) {
+  return loss_config.type != LossFunctionType::TRIVIAL ||
+         loss_config.scale != 1.0 || loss_config.weight != 1.0;
+}
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -255,7 +260,10 @@ void GlobalPositioner::AddPointToCameraConstraints(
   cached_loss_normal_geometry_ =
       options_.loss_normal_geometry.CreateLossFunction();
   cached_loss_normal_depth_ = options_.loss_normal_depth.CreateLossFunction();
-  cached_loss_lc_geometry_ = options_.loss_lc_geometry.CreateLossFunction();
+  cached_loss_lc_geometry_ =
+      IsLossConfigOverride(options_.loss_lc_geometry)
+          ? options_.loss_lc_geometry.CreateLossFunction()
+          : nullptr;
   cached_loss_lc_depth_ = options_.loss_lc_depth.CreateLossFunction();
   cached_loss_normal_geometry_inlier_ =
       options_.loss_normal_geometry_inlier.CreateLossFunction();

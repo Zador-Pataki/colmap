@@ -135,8 +135,7 @@ void BindGlobalPositioner(py::module& m) {
               "Cube size for random init of camera centers / points (linear).");
 
   // Full-branch metric-depth and LC extensions. ``LossConfig`` carries
-  // (type=LossFunctionType enum, scale, weight). Defaults give unweighted
-  // TrivialLoss — equivalent to no override.
+  // (type=LossFunctionType enum, scale, weight).
   PyGlobalPositionerOptions
       .def_readwrite("use_metric_depth_constraint",
                      &GlobalPositionerOptions::use_metric_depth_constraint)
