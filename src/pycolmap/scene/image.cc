@@ -44,7 +44,7 @@ void DefDoubleVectorProperty(PyClass& cls,
 template <typename PyClass>
 void DefBoolVectorProperty(PyClass& cls,
                            const char* name,
-                           std::vector<bool> Image::* member) {
+                           std::vector<bool> Image::*member) {
   cls.def_property(
       name,
       [member](const Image& self) -> Eigen::Array<bool, Eigen::Dynamic, 1> {

@@ -180,7 +180,10 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   cams_in_rig_.clear();
   per_image_scale_losses_.clear();
 
-  // Reserve to avoid pointer-invalidating reallocs.
+  // Reserve scales_ for both regular observations and lc_elements.
+  // Underestimating triggers ``vector::push_back`` reallocation mid-build,
+  // which invalidates the ``&scale`` data pointers that earlier residual
+  // blocks already stored.
   scales_.clear();
   size_t total_observations = 0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
@@ -229,8 +232,7 @@ void GlobalPositioner::InitializeRandomPositions(
     }
     if (options_.generate_random_positions && options_.optimize_positions &&
         !options_.use_init) {
-      frame_centers_[frame_id] =
-          options_.random_init_scale * RandVector3d(-1, 1);
+      frame_centers_[frame_id] = options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -352,9 +354,9 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
-  const bool random_initialization = options_.optimize_points &&
-                                     options_.generate_random_points &&
-                                     !options_.use_init;
+  const bool random_initialization =
+      options_.optimize_points && options_.generate_random_points &&
+      !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
