@@ -451,5 +451,6 @@ void BindBundleAdjuster(py::module& m) {
         "logloss"_a = false,
         "fix_shift"_a = false,
         "fix_scale"_a = false,
-        py::keep_alive<1, 8>());
+        py::keep_alive<1, 8>(),
+        py::keep_alive<1, 9>());
 }
