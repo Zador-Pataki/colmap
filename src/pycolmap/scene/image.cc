@@ -13,8 +13,10 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 
 #include <pybind11/eigen.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -22,6 +24,51 @@
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
+
+namespace {
+
+// std::vector<bool> is bit-packed, so expose an owned NumPy array instead of
+// trying to map its storage directly.
+py::array_t<bool> BoolVectorToArray(const std::vector<bool>& values) {
+  py::array_t<bool> array(values.size());
+  auto view = array.mutable_unchecked<1>();
+  for (py::ssize_t i = 0; i < view.shape(0); ++i) {
+    view(i) = values[static_cast<size_t>(i)];
+  }
+  return array;
+}
+
+void AssignBoolVector(
+    std::vector<bool>& target,
+    const py::array_t<bool, py::array::c_style | py::array::forcecast>& values) {
+  if (values.ndim() != 1) {
+    throw std::runtime_error("Expected a 1D bool array.");
+  }
+  const auto view = values.unchecked<1>();
+  target.assign(static_cast<size_t>(view.shape(0)), false);
+  for (py::ssize_t i = 0; i < view.shape(0); ++i) {
+    target[static_cast<size_t>(i)] = view(i);
+  }
+}
+
+template <typename PyClass>
+void DefBoolVectorProperty(PyClass& cls,
+                           const char* name,
+                           std::vector<bool> Image::*member) {
+  cls.def_property(
+      name,
+      [member](const Image& self) {
+        return BoolVectorToArray(self.*member);
+      },
+      [member](
+          Image& self,
+          const py::array_t<bool, py::array::c_style | py::array::forcecast>&
+              values) {
+        AssignBoolVector(self.*member, values);
+      });
+}
+
+}  // namespace
 
 template <typename T>
 std::shared_ptr<Image> MakeImage(const std::string& name,
@@ -96,8 +143,7 @@ void BindSceneImage(py::module& m) {
       .def("cam_from_world",
            &Image::CamFromWorld,
            "The pose of the image, defined as the transformation from world to "
-           "camera space. This method is read-only and support non-trivial "
-           "frame (rig).")
+           "camera space. Read-only; supports non-trivial frame (rig).")
       .def_property_readonly(
           "has_pose", &Image::HasPose, "Whether the image has a valid pose.")
       .def_property(
@@ -129,6 +175,11 @@ void BindSceneImage(py::module& m) {
       .def("has_pixel_covariances",
            &Image::HasPixelCovariances,
            "Check if pixel covariances are set and match points2D count.")
+      .def_readwrite("angular_stddevs", &Image::angular_stddevs)
+      // FORK-REMOVAL TODO — `features` / `features_undist` are fork-only
+      // fields. See `.claude/notes/glomap_audit/fork_removal_todo.md`.
+      .def_readwrite("features", &Image::features)
+      .def_readwrite("features_undist", &Image::features_undist)
       .def(
           "set_point3D_for_point2D",
           &Image::SetPoint3DForPoint2D,
@@ -209,6 +260,8 @@ void BindSceneImage(py::module& m) {
             return points2D;
           },
           "Get the 2D points that observe a 3D point.");
+  DefBoolVectorProperty(PyImage, "is_inlier", &Image::is_inlier);
+  DefBoolVectorProperty(PyImage, "is_track_anchor", &Image::is_track_anchor);
   MakeDataclass(PyImage);
 
   py::bind_map<ImageMap>(m, "ImageMap");

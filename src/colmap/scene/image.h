@@ -154,6 +154,21 @@ class Image {
   inline bool operator==(const Image& other) const;
   inline bool operator!=(const Image& other) const;
 
+  // Per-feature inlier flag for GP loss routing.
+  std::vector<bool> is_inlier;
+  // Per-feature track-anchor flag for GP loss routing.
+  std::vector<bool> is_track_anchor;
+  // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.
+  std::vector<Eigen::Vector2d> angular_stddevs;
+
+  // FORK-REMOVAL TODO: features / features_undist are fork-only.
+  // See .claude/notes/glomap_audit/fork_removal_todo.md.
+
+  // Raw 2D keypoints (xy), separate from points2D_.
+  std::vector<Eigen::Vector2d> features;
+  // Undistorted 3D rays per feature.
+  std::vector<Eigen::Vector3d> features_undist;
+
  private:
   // The name of the image, i.e. the relative path.
   std::string name_;

@@ -4,6 +4,7 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 

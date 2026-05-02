@@ -1,8 +1,10 @@
 #pragma once
 
+#include "colmap/estimators/ceres_loss.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <memory>
 #include <string>
 
 #include <ceres/ceres.h>
@@ -34,12 +36,22 @@ struct GlobalPositionerOptions {
   // If >= 0, uses deterministic seeding with the given value.
   int random_seed = -1;
 
-  // Scaling factor for the loss function
-  double loss_function_scale = 0.1;
+  // Robust loss for the BATA direction residual.
+  LossConfig loss = {LossFunctionType::HUBER, 0.1, 1.0};
 
   // Whether to use custom parameter block ordering for Schur-based solvers.
   // Disable for deterministic behavior when using a fixed random seed.
   bool use_parameter_block_ordering = true;
+
+  // Apply 0.5x ScaledLoss to BATA residuals from cameras without an EXIF
+  // focal-length prior.
+  bool apply_uncalibrated_loss_downweight = true;
+
+  // Skip random initialization and reuse existing positions/points.
+  bool use_init = false;
+
+  // Cube half-extent for random initialization of positions and points.
+  double random_init_scale = 100.0;
 
   // The options for the solver
   ceres::Solver::Options solver_options;
@@ -50,8 +62,9 @@ struct GlobalPositionerOptions {
     solver_options.function_tolerance = 1e-5;
   }
 
-  std::shared_ptr<ceres::LossFunction> CreateLossFunction() {
-    return std::make_shared<ceres::HuberLoss>(loss_function_scale);
+  std::shared_ptr<ceres::LossFunction> CreateLossFunction() const {
+    return std::shared_ptr<ceres::LossFunction>(
+        loss.CreateLossFunction().release());
   }
 };
 

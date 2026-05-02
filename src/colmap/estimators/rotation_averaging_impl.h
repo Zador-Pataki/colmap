@@ -6,6 +6,8 @@
 #include <variant>
 
 #include <Eigen/Sparse>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
 

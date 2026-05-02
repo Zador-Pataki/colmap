@@ -124,8 +124,9 @@ void GlobalPositioner::InitializeRandomPositions(
     if (constrained_positions.find(frame_id) == constrained_positions.end()) {
       continue;
     }
-    if (options_.generate_random_positions && options_.optimize_positions) {
-      frame_centers_[frame_id] = 100.0 * RandVector3d(-1, 1);
+    if (options_.generate_random_positions && options_.optimize_positions &&
+        !options_.use_init) {
+      frame_centers_[frame_id] = options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -141,8 +142,12 @@ void GlobalPositioner::AddPointToCameraConstraints(
              "estimation problem.";
 
   // Down-weight uncalibrated cameras.
-  loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
-      loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  if (options_.apply_uncalibrated_loss_downweight) {
+    loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
+        loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  } else {
+    loss_function_ptcam_uncalibrated_ = loss_function_;
+  }
   loss_function_ptcam_calibrated_ = loss_function_;
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
@@ -158,13 +163,14 @@ void GlobalPositioner::AddPointToCameraConstraints(
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
   const bool random_initialization =
-      options_.optimize_points && options_.generate_random_points;
+      options_.optimize_points && options_.generate_random_points &&
+      !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
   // Only set the points to be random if they are needed to be optimized
   if (random_initialization) {
-    point3D.xyz = 100.0 * RandVector3d(-1, 1);
+    point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
 
   // For each view in the track add the point to camera correspondences.

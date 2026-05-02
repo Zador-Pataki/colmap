@@ -8,6 +8,8 @@
 #include <limits>
 
 #include <Eigen/CholmodSupport>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
 namespace {
@@ -447,11 +449,6 @@ void RotationAveragingProblem::BuildConstraintMatrix(
 }
 
 void RotationAveragingProblem::ComputeResiduals() {
-  // Set PRNG seed for deterministic jitter injection.
-  if (options_.random_seed >= 0) {
-    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
-  }
-
   for (const auto& [pair_id, constraint] : pair_constraints_) {
     const frame_t frame_id1 = image_id_to_frame_id_.at(constraint.image_id1);
     const frame_t frame_id2 = image_id_to_frame_id_.at(constraint.image_id2);
@@ -633,6 +630,14 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
 }
 
 bool RotationAveragingSolver::Solve(RotationAveragingProblem& problem) {
+  // Seed the global PRNG once per solve. ComputeResiduals' boundary
+  // jitter consumer (RandomUniformReal) advances naturally across
+  // iterations from this seed; resetting per-iteration would replay
+  // the identical jitter sequence and break IRLS convergence.
+  if (options_.random_seed >= 0) {
+    SetPRNGSeed(static_cast<unsigned>(options_.random_seed));
+  }
+
   if (options_.max_num_l1_iterations > 0) {
     VLOG(2) << "Solving L1 regression problem";
     if (!SolveL1Regression(problem)) {
@@ -794,6 +799,13 @@ bool RotationAveragingSolver::SolveIRLS(RotationAveragingProblem& problem) {
     // Solve the least squares problem.
     step.setZero();
     step = llt.solve(at_weight * problem.Residuals());
+    // Mirror the L1 path's NaN guard (line 755). Without this, a singular
+    // pose-graph silently corrupts cams_from_world via UpdateState and
+    // SolveIRLS returns true with garbage residuals next iteration.
+    if (step.array().isNaN().any()) {
+      LOG(ERROR) << "IRLS step is NaN at iteration " << iteration;
+      return false;
+    }
     problem.UpdateState(step);
 
     const double avg_step = problem.AverageStepSize(step);
