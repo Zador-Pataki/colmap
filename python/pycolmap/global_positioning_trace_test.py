@@ -32,7 +32,9 @@ def _artifact(filename: str, ids, shape) -> dict:
     }
 
 
-def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
+def _make_trace(
+    tmp_path: Path, *, with_jacobians: bool, with_loss_rho: bool = False
+) -> Path:
     trace_dir = tmp_path / (
         "trace_jacobians" if with_jacobians else "trace_values"
     )
@@ -129,6 +131,14 @@ def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
             "byte_order": "little_endian",
             "shape": [9],
         }
+    if with_loss_rho:
+        metadata["loss_rho_layout"] = "residual_block_major/rho0_rho1_rho2"
+        metadata["artifacts"]["loss_rho_values"] = {
+            "file": "iter_000000_loss_rho_values_f64.bin",
+            "dtype": "float64",
+            "byte_order": "little_endian",
+            "shape": [2, 3],
+        }
 
     _write_json(residual_values_dir / "iter_000000.json", metadata)
     _write_f64(
@@ -141,6 +151,11 @@ def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
     _write_f64(
         residual_values_dir / "iter_000000_robust_costs_f64.bin", [2.25, 4.25]
     )
+    if with_loss_rho:
+        _write_f64(
+            residual_values_dir / "iter_000000_loss_rho_values_f64.bin",
+            [[4.5, 0.25, -0.125], [8.5, 1.0, 0.0]],
+        )
     if with_jacobians:
         _write_f64(
             residual_values_dir / "iter_000000_raw_jacobians_f64.bin",
@@ -246,6 +261,7 @@ def test_global_positioning_trace_loads_residual_values(tmp_path: Path) -> None:
     assert isinstance(residual_values.raw_residuals, np.memmap)
     assert residual_values.has_raw_jacobians is False
     assert residual_values.raw_jacobians is None
+    assert residual_values.has_loss_rho_values is False
 
     residual = residual_values.residual("r0")
     np.testing.assert_allclose(residual.raw_residuals, [1.0, 2.0])
@@ -253,6 +269,106 @@ def test_global_positioning_trace_loads_residual_values(tmp_path: Path) -> None:
     assert residual.robust_cost == 2.25
     assert residual.parameter_blocks == ()
     assert residual.jacobian_blocks == ()
+    with pytest.raises(ValueError, match="loss_rho_values artifact"):
+        _ = residual_values.loss_rho_values
+    with pytest.raises(ValueError, match="loss_rho_values artifact"):
+        _ = residual.loss_rho
+
+
+def test_global_positioning_trace_loads_loss_rho_values(
+    tmp_path: Path,
+) -> None:
+    trace = pycolmap.GlobalPositioningTrace.load(
+        _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
+    )
+
+    residual_values = trace.residual_values()
+    assert residual_values.has_loss_rho_values is True
+    assert isinstance(residual_values.loss_rho_values, np.memmap)
+    np.testing.assert_allclose(
+        residual_values.loss_rho_values,
+        [[4.5, 0.25, -0.125], [8.5, 1.0, 0.0]],
+    )
+
+    residual = residual_values.residual("r0")
+    np.testing.assert_allclose(residual.loss_rho, [4.5, 0.25, -0.125])
+    assert residual.loss_rho0 == 4.5
+    assert residual.loss_rho1 == 0.25
+    assert residual.loss_rho2 == -0.125
+    assert residual.loss_derivative_scale == 0.25
+
+
+def test_global_positioning_trace_rejects_bad_loss_rho_shape(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["artifacts"]["loss_rho_values"]["shape"] = [2, 2]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="loss_rho_values.*shape"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_bad_loss_rho_layout(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["loss_rho_layout"] = "wrong"
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="loss_rho_layout"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_validates_loss_rho_costs_on_access(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
+    _write_f64(
+        trace_dir / "residual_values" / "iter_000000_robust_costs_f64.bin",
+        [999.0, 4.25],
+    )
+
+    residual_values = pycolmap.GlobalPositioningTrace.load(
+        trace_dir
+    ).residual_values(0)
+    with pytest.raises(ValueError, match=r"0\.5 \* loss_rho_values"):
+        _ = residual_values.loss_rho_values
+
+
+def test_global_positioning_trace_allows_failed_loss_rho_nan_rows(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["evaluation_success"] = [False, True]
+    _write_json(metadata_path, metadata)
+    _write_f64(
+        trace_dir / "residual_values" / "iter_000000_robust_costs_f64.bin",
+        [float("nan"), 4.25],
+    )
+    _write_f64(
+        trace_dir / "residual_values" / "iter_000000_loss_rho_values_f64.bin",
+        [[float("nan"), float("nan"), float("nan")], [8.5, 1.0, 0.0]],
+    )
+
+    residual_values = pycolmap.GlobalPositioningTrace.load(
+        trace_dir
+    ).residual_values(0)
+
+    assert residual_values.has_loss_rho_values is True
+    np.testing.assert_allclose(
+        residual_values.loss_rho_values[1],
+        [8.5, 1.0, 0.0],
+    )
+    assert np.isnan(residual_values.loss_rho_values[0, 0])
 
 
 def test_global_positioning_trace_loads_raw_jacobians(tmp_path: Path) -> None:

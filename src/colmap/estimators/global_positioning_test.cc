@@ -1058,12 +1058,15 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
       residual_values_dir / "iter_000000_raw_costs_f64.bin";
   const std::filesystem::path robust_costs_path =
       residual_values_dir / "iter_000000_robust_costs_f64.bin";
+  const std::filesystem::path loss_rho_values_path =
+      residual_values_dir / "iter_000000_loss_rho_values_f64.bin";
   const std::filesystem::path raw_jacobians_path =
       residual_values_dir / "iter_000000_raw_jacobians_f64.bin";
   ASSERT_TRUE(ExistsFile(metadata_path));
   ASSERT_TRUE(ExistsFile(raw_residuals_path));
   ASSERT_TRUE(ExistsFile(raw_costs_path));
   ASSERT_TRUE(ExistsFile(robust_costs_path));
+  ASSERT_TRUE(ExistsFile(loss_rho_values_path));
   ASSERT_FALSE(ExistsFile(raw_jacobians_path));
 
   const std::string manifest = ReadFileForTest(trace_dir / "manifest.json");
@@ -1078,6 +1081,7 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
                           "\"residual_dims\"",
                           "\"residual_offsets\"",
                           "\"evaluation_success\"",
+                          "\"loss_rho_layout\"",
                           "\"artifacts\""}) {
     EXPECT_NE(metadata.find(key), std::string::npos)
         << "Missing residual-values metadata key: " << key;
@@ -1086,6 +1090,12 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
             std::string::npos);
   EXPECT_NE(metadata.find("iter_000000_raw_costs_f64.bin"), std::string::npos);
   EXPECT_NE(metadata.find("iter_000000_robust_costs_f64.bin"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("iter_000000_loss_rho_values_f64.bin"),
+            std::string::npos);
+  EXPECT_NE(metadata.find("\"loss_rho_values\": {"), std::string::npos);
+  EXPECT_NE(metadata.find("\"shape\": ["), std::string::npos);
+  EXPECT_NE(metadata.find("\"residual_block_major/rho0_rho1_rho2\""),
             std::string::npos);
   EXPECT_NE(metadata.find("\"has_raw_jacobians\": false"), std::string::npos);
   EXPECT_EQ(metadata.find("\"raw_jacobians\": {"), std::string::npos);
@@ -1153,6 +1163,9 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
             static_cast<uintmax_t>(*num_residual_blocks) * sizeof(double));
   EXPECT_EQ(std::filesystem::file_size(robust_costs_path),
             static_cast<uintmax_t>(*num_residual_blocks) * sizeof(double));
+  EXPECT_EQ(std::filesystem::file_size(loss_rho_values_path),
+            static_cast<uintmax_t>(*num_residual_blocks) * 3u *
+                sizeof(double));
 
   const std::vector<double> raw_residuals = ReadDoubleSidecarForTest(
       raw_residuals_path, static_cast<size_t>(*total_scalar_residuals));
@@ -1160,6 +1173,9 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
       raw_costs_path, static_cast<size_t>(*num_residual_blocks));
   const std::vector<double> robust_costs = ReadDoubleSidecarForTest(
       robust_costs_path, static_cast<size_t>(*num_residual_blocks));
+  const std::vector<double> loss_rho_values =
+      ReadDoubleSidecarForTest(loss_rho_values_path,
+                               static_cast<size_t>(*num_residual_blocks) * 3u);
 
   size_t expected_offset = 0;
   double robust_cost_sum = 0.0;
@@ -1175,7 +1191,12 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
     }
     ASSERT_TRUE(std::isfinite(raw_costs[i]));
     ASSERT_TRUE(std::isfinite(robust_costs[i]));
+    ASSERT_TRUE(std::isfinite(loss_rho_values[3 * i]));
+    ASSERT_TRUE(std::isfinite(loss_rho_values[3 * i + 1]));
+    ASSERT_TRUE(std::isfinite(loss_rho_values[3 * i + 2]));
     EXPECT_NEAR(raw_costs[i], 0.5 * squared_norm, 1e-12)
+        << metadata_residual_ids[i];
+    EXPECT_NEAR(robust_costs[i], 0.5 * loss_rho_values[3 * i], 1e-12)
         << metadata_residual_ids[i];
 
     robust_cost_sum += robust_costs[i];

@@ -438,6 +438,26 @@ class GlobalPositioningResidualBlock:
         return float(self._residual_values.robust_costs[self.index])
 
     @property
+    def loss_rho(self) -> np.ndarray:
+        return self._residual_values.loss_rho_values[self.index]
+
+    @property
+    def loss_rho0(self) -> float:
+        return float(self.loss_rho[0])
+
+    @property
+    def loss_rho1(self) -> float:
+        return float(self.loss_rho[1])
+
+    @property
+    def loss_rho2(self) -> float:
+        return float(self.loss_rho[2])
+
+    @property
+    def loss_derivative_scale(self) -> float:
+        return self.loss_rho1
+
+    @property
     def parameter_blocks(self) -> tuple[GlobalPositioningParameterBlock, ...]:
         if not self._residual_values.has_raw_jacobians:
             return ()
@@ -585,6 +605,16 @@ class GlobalPositioningResidualValues:
         self._raw_residuals_artifact = raw_residuals_artifact
         self._raw_costs_artifact = raw_costs_artifact
         self._robust_costs_artifact = robust_costs_artifact
+        self._loss_rho_values_artifact = _resolve_float64_artifact(
+            self.metadata_path,
+            self.metadata,
+            "loss_rho_values",
+            expected_shape=(self.num_residual_blocks, 3),
+            required=False,
+        )
+        self.has_loss_rho_values = self._loss_rho_values_artifact is not None
+        if self.has_loss_rho_values:
+            self._validate_loss_rho_contract()
 
         self.total_jacobian_scalars = 0
         self.parameter_blocks: list[list[GlobalPositioningParameterBlock]] = []
@@ -659,7 +689,61 @@ class GlobalPositioningResidualValues:
         self._raw_residuals: np.ndarray | None = None
         self._raw_costs: np.ndarray | None = None
         self._robust_costs: np.ndarray | None = None
+        self._loss_rho_values: np.ndarray | None = None
+        self._loss_rho_costs_validated = False
         self._raw_jacobians: np.ndarray | None = None
+
+    def _validate_loss_rho_contract(self) -> None:
+        loss_rho_layout = _require_str(
+            _require_key(
+                self.metadata, "loss_rho_layout", str(self.metadata_path)
+            ),
+            "loss_rho_layout",
+        )
+        if loss_rho_layout != "residual_block_major/rho0_rho1_rho2":
+            raise ValueError(
+                "loss_rho_layout must be "
+                "'residual_block_major/rho0_rho1_rho2'"
+            )
+
+    def _validate_loss_rho_costs(self) -> None:
+        if self._loss_rho_costs_validated:
+            return
+        loss_rho_values = self._require_loss_rho_values()
+        success_mask = np.asarray(self.evaluation_success, dtype=bool)
+        if np.any(success_mask):
+            robust_costs = np.asarray(self.robust_costs)
+            expected_robust_costs = 0.5 * loss_rho_values[:, 0]
+            matches = np.isclose(
+                robust_costs,
+                expected_robust_costs,
+                rtol=1e-10,
+                atol=1e-12,
+                equal_nan=False,
+            )
+            mismatch_mask = success_mask & ~matches
+            if np.any(mismatch_mask):
+                mismatch_idx = int(np.flatnonzero(mismatch_mask)[0])
+                raise ValueError(
+                    "robust_costs must equal 0.5 * loss_rho_values[:, 0] "
+                    "for successful residual evaluations; mismatch at "
+                    f"residual {mismatch_idx} "
+                    f"({self.residual_ids[mismatch_idx]!r})"
+                )
+        self._loss_rho_costs_validated = True
+
+    def _require_loss_rho_values(self) -> np.ndarray:
+        if self._loss_rho_values_artifact is None:
+            raise ValueError(
+                "loss_rho_values artifact is not present in this trace; "
+                "robust loss rho diagnostics require a newer trace"
+            )
+        if self._loss_rho_values is None:
+            self._loss_rho_values = _memmap_float64(
+                self._loss_rho_values_artifact.path,
+                self._loss_rho_values_artifact.shape,
+            )
+        return self._loss_rho_values
 
     def _validate_jacobian_contract(self) -> None:
         raw_jacobian_layout = _require_str(
@@ -882,6 +966,12 @@ class GlobalPositioningResidualValues:
                 self._robust_costs_artifact.shape,
             )
         return self._robust_costs
+
+    @property
+    def loss_rho_values(self) -> np.ndarray:
+        loss_rho_values = self._require_loss_rho_values()
+        self._validate_loss_rho_costs()
+        return loss_rho_values
 
     @property
     def raw_jacobians(self) -> np.ndarray | None:

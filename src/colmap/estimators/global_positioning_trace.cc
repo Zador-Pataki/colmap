@@ -372,13 +372,21 @@ void WriteSnapshotArtifactMetadata(
 void WriteResidualValueArtifactMetadata(std::ostream& stream,
                                         const std::string& name,
                                         const std::string& filename,
-                                        const size_t element_count) {
+                                        const std::vector<size_t>& shape) {
   stream << "    " << JsonEscape(name) << ": {\n"
          << "      \"file\": " << JsonEscape(filename) << ",\n"
          << "      \"dtype\": \"float64\",\n"
          << "      \"byte_order\": \"little_endian\",\n"
-         << "      \"shape\": [" << element_count << "]\n"
+         << "      \"shape\": " << JsonSizeArray(shape) << "\n"
          << "    }";
+}
+
+void WriteResidualValueArtifactMetadata(std::ostream& stream,
+                                        const std::string& name,
+                                        const std::string& filename,
+                                        const size_t element_count) {
+  WriteResidualValueArtifactMetadata(
+      stream, name, filename, std::vector<size_t>{element_count});
 }
 
 size_t ValidateResidualValues(
@@ -397,6 +405,10 @@ size_t ValidateResidualValues(
       << "Residual value raw_costs count must match residual_ids count.";
   THROW_CHECK_EQ(residual_values.robust_costs.size(), num_residual_blocks)
       << "Residual value robust_costs count must match residual_ids count.";
+  THROW_CHECK_EQ(residual_values.loss_rho_values.size(),
+                 num_residual_blocks * 3)
+      << "Residual value loss_rho_values count must be three per residual "
+         "block.";
 
   size_t total_scalar_residuals = 0;
   for (size_t i = 0; i < num_residual_blocks; ++i) {
@@ -905,6 +917,8 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
   const std::string raw_residuals_filename = prefix + "_raw_residuals_f64.bin";
   const std::string raw_costs_filename = prefix + "_raw_costs_f64.bin";
   const std::string robust_costs_filename = prefix + "_robust_costs_f64.bin";
+  const std::string loss_rho_values_filename =
+      prefix + "_loss_rho_values_f64.bin";
   const std::string raw_jacobians_filename = prefix + "_raw_jacobians_f64.bin";
 
   WriteDoubleSidecar(residual_values_path / raw_residuals_filename,
@@ -913,6 +927,8 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                      residual_values.raw_costs);
   WriteDoubleSidecar(residual_values_path / robust_costs_filename,
                      residual_values.robust_costs);
+  WriteDoubleSidecar(residual_values_path / loss_rho_values_filename,
+                     residual_values.loss_rho_values);
   if (residual_values.has_raw_jacobians) {
     WriteDoubleSidecar(residual_values_path / raw_jacobians_filename,
                        residual_values.raw_jacobians);
@@ -944,7 +960,9 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                   << "  \"residual_offsets\": "
                   << JsonSizeArray(residual_values.residual_offsets) << ",\n"
                   << "  \"evaluation_success\": "
-                  << JsonBoolArray(residual_values.evaluation_success) << ",\n";
+                  << JsonBoolArray(residual_values.evaluation_success) << ",\n"
+                  << "  \"loss_rho_layout\": "
+                  << JsonEscape("residual_block_major/rho0_rho1_rho2") << ",\n";
   if (residual_values.has_raw_jacobians) {
     metadata_stream
         << "  \"parameter_block_sizes\": "
@@ -985,6 +1003,11 @@ void GlobalPositioningTraceRecorder::WriteResidualValues(
                                      "robust_costs",
                                      robust_costs_filename,
                                      num_residual_blocks);
+  metadata_stream << ",\n";
+  WriteResidualValueArtifactMetadata(metadata_stream,
+                                     "loss_rho_values",
+                                     loss_rho_values_filename,
+                                     {num_residual_blocks, 3});
   if (residual_values.has_raw_jacobians) {
     metadata_stream << ",\n";
     WriteResidualValueArtifactMetadata(metadata_stream,

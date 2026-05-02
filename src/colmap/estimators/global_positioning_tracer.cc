@@ -151,6 +151,8 @@ void WriteResidualValues(
                                    std::numeric_limits<double>::quiet_NaN());
   residual_values.robust_costs.resize(replay_entries.size(),
                                       std::numeric_limits<double>::quiet_NaN());
+  residual_values.loss_rho_values.resize(
+      replay_entries.size() * 3, std::numeric_limits<double>::quiet_NaN());
   residual_values.has_raw_jacobians = write_raw_jacobians;
   if (write_raw_jacobians) {
     residual_values.parameter_block_sizes.reserve(replay_entries.size());
@@ -320,13 +322,14 @@ void WriteResidualValues(
 
     const double raw_cost = 0.5 * squared_norm;
     residual_values.raw_costs[entry_idx] = raw_cost;
+    double rho[3] = {squared_norm, 1.0, 0.0};
     if (entry.loss_function != nullptr) {
-      double rho[3];
       entry.loss_function->Evaluate(squared_norm, rho);
-      residual_values.robust_costs[entry_idx] = 0.5 * rho[0];
-    } else {
-      residual_values.robust_costs[entry_idx] = raw_cost;
     }
+    residual_values.loss_rho_values[3 * entry_idx] = rho[0];
+    residual_values.loss_rho_values[3 * entry_idx + 1] = rho[1];
+    residual_values.loss_rho_values[3 * entry_idx + 2] = rho[2];
+    residual_values.robust_costs[entry_idx] = 0.5 * rho[0];
   }
 
   recorder->WriteResidualValues(residual_values);

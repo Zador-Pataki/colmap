@@ -99,6 +99,7 @@ struct GlobalPositioningTraceResidualValues {
   std::vector<double> raw_residuals;
   std::vector<double> raw_costs;
   std::vector<double> robust_costs;
+  std::vector<double> loss_rho_values;
   bool has_raw_jacobians = false;
   std::vector<std::vector<size_t>> parameter_block_sizes;
   std::vector<std::vector<size_t>> raw_jacobian_offsets;
