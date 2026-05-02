@@ -4,8 +4,10 @@
 #include "colmap/geometry/rigid3.h"
 #include "colmap/scene/camera.h"
 #include "colmap/scene/correspondence_graph.h"
+#include "colmap/scene/frame.h"
 #include "colmap/scene/image.h"
 #include "colmap/scene/reconstruction.h"
+#include "colmap/scene/rig.h"
 #include "colmap/scene/two_view_geometry.h"
 #include "colmap/sensor/models.h"
 #include "colmap/util/types.h"
@@ -57,7 +59,7 @@ TwoViewSetup MakeTwoView(const std::vector<Eigen::Vector3d>& cam1_points,
   img2.SetFrameId(2);
 
   for (const auto& p1 : cam1_points) {
-    Eigen::Vector3d p2 = cam2_from_cam1 * p1;
+    const Eigen::Vector3d p2 = cam2_from_cam1 * p1;
     img1.features_undist.push_back(p1.normalized());
     img2.features_undist.push_back(p2.normalized());
     img1.features.emplace_back(p1.x() / p1.z(), p1.y() / p1.z());
@@ -91,11 +93,11 @@ TwoViewSetup MakeTwoView(const std::vector<Eigen::Vector3d>& cam1_points,
   image_pair.two_view_geometry.cam2_from_cam1 = cam2_from_cam1;
   image_pair.two_view_geometry.E = EssentialMatrixFromPose(cam2_from_cam1);
 
-  const int n = static_cast<int>(cam1_points.size());
-  Eigen::MatrixXi matches(n, 2);
-  for (int k = 0; k < n; ++k) {
-    matches(k, 0) = k;
-    matches(k, 1) = k;
+  const int num_points = static_cast<int>(cam1_points.size());
+  Eigen::MatrixXi matches(num_points, 2);
+  for (int idx = 0; idx < num_points; ++idx) {
+    matches(idx, 0) = idx;
+    matches(idx, 1) = idx;
   }
   image_pair.matches = std::move(matches);
 
@@ -124,22 +126,22 @@ InlierThresholdOptions DefaultOptions() {
 }
 
 TEST(ImagePairInlierCount, AllInliersPassFourGates) {
-  std::vector<Eigen::Vector3d> pts = {
+  const std::vector<Eigen::Vector3d> points = {
       {0.0, 0.0, 5.0},
       {0.0, 0.5, 5.0},
       {0.0, -0.5, 5.0},
       {-0.3, 0.4, 5.0},
       {-0.4, -0.3, 5.0},
   };
-  auto setup = MakeTwoView(pts, DefaultPose());
+  auto setup = MakeTwoView(points, DefaultPose());
   ImagePairsInlierCount(
       setup.corr_graph, setup.reconstruction, DefaultOptions(), true);
   const auto& pair = GetPair(setup);
-  EXPECT_EQ(pair.inliers.size(), pts.size());
+  EXPECT_EQ(pair.inliers.size(), points.size());
 }
 
 TEST(ImagePairInlierCount, EpipolarGateDrops) {
-  std::vector<Eigen::Vector3d> pts = {
+  const std::vector<Eigen::Vector3d> points = {
       {0.0, 0.0, 5.0},
       {0.0, 0.5, 5.0},
       {0.0, -0.5, 5.0},
@@ -147,33 +149,33 @@ TEST(ImagePairInlierCount, EpipolarGateDrops) {
       {-0.4, -0.3, 5.0},
       {0.2, 0.2, 5.0},
   };
-  auto setup = MakeTwoView(pts, DefaultPose());
+  auto setup = MakeTwoView(points, DefaultPose());
 
-  auto& img2 = setup.reconstruction.Image(setup.image_id2);
-  for (int k : {0, 2, 4}) {
-    img2.features_undist[k] += Eigen::Vector3d(0.0, 0.5, 0.0);
-    img2.features_undist[k].normalize();
+  auto& image2 = setup.reconstruction.Image(setup.image_id2);
+  for (const int idx : {0, 2, 4}) {
+    image2.features_undist[idx] += Eigen::Vector3d(0.0, 0.5, 0.0);
+    image2.features_undist[idx].normalize();
   }
   ImagePairsInlierCount(
       setup.corr_graph, setup.reconstruction, DefaultOptions(), true);
   const auto& pair = GetPair(setup);
   EXPECT_EQ(pair.inliers.size(), 3u);
-  for (int k : pair.inliers) {
-    EXPECT_TRUE(k == 1 || k == 3 || k == 5) << "k=" << k;
+  for (const int idx : pair.inliers) {
+    EXPECT_TRUE(idx == 1 || idx == 3 || idx == 5) << "idx=" << idx;
   }
 }
 
 TEST(ImagePairInlierCount, CheiralityGateDrops) {
-  std::vector<Eigen::Vector3d> pts = {
+  const std::vector<Eigen::Vector3d> points = {
       {0.0, 0.0, 5.0},
       {0.0, 0.5, 5.0},
   };
-  auto setup = MakeTwoView(pts, DefaultPose());
+  auto setup = MakeTwoView(points, DefaultPose());
 
-  auto& img1 = setup.reconstruction.Image(setup.image_id1);
-  auto& img2 = setup.reconstruction.Image(setup.image_id2);
-  img1.features_undist[0] = -img1.features_undist[0];
-  img2.features_undist[0] = -img2.features_undist[0];
+  auto& image1 = setup.reconstruction.Image(setup.image_id1);
+  auto& image2 = setup.reconstruction.Image(setup.image_id2);
+  image1.features_undist[0] = -image1.features_undist[0];
+  image2.features_undist[0] = -image2.features_undist[0];
 
   ImagePairsInlierCount(
       setup.corr_graph, setup.reconstruction, DefaultOptions(), true);
@@ -183,11 +185,11 @@ TEST(ImagePairInlierCount, CheiralityGateDrops) {
 }
 
 TEST(ImagePairInlierCount, EpipoleGateDrops) {
-  std::vector<Eigen::Vector3d> pts = {
+  const std::vector<Eigen::Vector3d> points = {
       {100.0, 0.0, 1.0},
       {0.0, 0.5, 5.0},
   };
-  auto setup = MakeTwoView(pts, DefaultPose());
+  auto setup = MakeTwoView(points, DefaultPose());
 
   InlierThresholdOptions options = DefaultOptions();
   options.min_angle_from_epipole = 30.0;

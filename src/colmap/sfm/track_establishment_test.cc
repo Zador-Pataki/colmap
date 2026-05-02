@@ -180,11 +180,10 @@ TEST(TrackEstablishment, EmptyInputReturnsEmpty) {
 }
 
 // ============================================================================
-// FindTracksForProblem (problem-track filter + 2-view depth gate)
+// FindTracksForProblem (greedy subsample + 2-view depth gate)
 // ============================================================================
 
-// Build an Image with N features and (optionally) all-valid depth
-// priors. Each prior is set to (idx + 1) so they are strictly > 1e-6.
+// Build an Image with N features.
 Image MakeImage(image_t image_id,
                 int num_features,
                 bool with_valid_depths = true) {
@@ -222,9 +221,6 @@ Point3D MakePoint3DFromElementsAndLC(
   return p;
 }
 
-// Project an ``images`` test fixture into the three dict inputs consumed by
-// FilterTracksForProblem: registered_image_ids, depth_priors, and
-// depth_prior_validity.
 struct ProblemFilterInputs {
   std::unordered_set<image_t> registered_image_ids;
   std::unordered_map<image_t, std::vector<double>> depth_priors;
@@ -243,8 +239,8 @@ ProblemFilterInputs MakeProblemFilterInputs(
 }
 
 // LengthFilter: with ``min_num_views_per_track=10`` every track here is too
-// short, so FilterTracksForProblem returns empty. Loosening to 2 surfaces
-// every input track.
+// short, so FilterTracksForProblem returns empty. Loosening to 2 surfaces every
+// input track.
 //
 // Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, LengthFilter) {
@@ -336,21 +332,15 @@ TEST(FindTracksForProblem, MaxLengthFilter) {
   EXPECT_TRUE(selected.empty());
 }
 
-// TwoViewDepthGate_Drop: a length-2 track where image 1's feature 0 has no
-// valid depth prior is dropped by the 2-view depth gate.
-//
-// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   std::unordered_map<image_t, Image> images;
-  // Image 1: feature 0 has *invalid* depth prior; feature 1+ are valid.
   Image img1 = MakeImage(1, 3);
   img1.depth_prior_validity[0] = false;
   img1.depth_priors[0] = 0.0;
   images.emplace(1, std::move(img1));
-  images.emplace(2, MakeImage(2, 3));  // all valid
+  images.emplace(2, MakeImage(2, 3));
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
-  // Length-2 track on (1, 2) using feature 0 of each image -> invalid.
   tracks_full.emplace(0, MakePoint3DFromElements({{1, 0}, {2, 0}}));
 
   const auto inputs = MakeProblemFilterInputs(images);
@@ -367,16 +357,9 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Drop) {
   EXPECT_TRUE(selected.empty());
 }
 
-// TwoViewDepthGate_Keep: both endpoints have valid depth -> track kept.
-// Also covers the depth-near-zero edge: feature 1 has prior == 1e-6 (gate
-// uses ``<= 1e-6`` so the feature 1 track must drop while feature 0 stays).
-//
-// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeImage(1, 3);
-  // Feature 0: valid, prior=1.0  -> survives
-  // Feature 1: valid flag true, prior=1e-6 -> caught by ``<= 1e-6`` -> drops
   img1.depth_priors[1] = 1e-6;
   images.emplace(1, std::move(img1));
   images.emplace(2, MakeImage(2, 3));
@@ -400,11 +383,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_Keep) {
   EXPECT_EQ(selected.count(1), 0u);
 }
 
-// LC-only two-observation tracks have one regular element and one LC element.
-// LC observations may augment admitted tracks but must not satisfy the
-// post-domain regular-observation lower-bound check.
-//
-// Drives FilterTracksForProblem.
 TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
   std::unordered_map<image_t, Image> images;
   images.emplace(1, MakeImage(1, 3));
@@ -430,8 +408,6 @@ TEST(FindTracksForProblem, LcElementsDoNotSatisfyPostDomainMinViews) {
   EXPECT_TRUE(selected.empty());
 }
 
-// A one-regular + one-LC two-view candidate does not satisfy the post-domain
-// regular-observation lower-bound check.
 TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeImage(1, 3);
@@ -460,9 +436,6 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidRegularLcCandidate) {
   EXPECT_TRUE(selected.empty());
 }
 
-// Invalid depth on an LC endpoint still matters once the regular track is
-// already admitted. The LC endpoint shares one of the two distinct images so
-// the 2-view depth gate checks it.
 TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
   std::unordered_map<image_t, Image> images;
   Image img1 = MakeImage(1, 3);
@@ -502,11 +475,10 @@ TEST(FindTracksForProblem, TwoViewDepthGate_DropsInvalidLcEndpoint) {
 // ``ImagePair.are_lc`` to attach LC observations as ``Track::lc_elements``.
 // The post-condition tracks dict is what we assert on.
 
-// Variant of ``AddImagePair`` for LC tests. Adds non-LC inlier matches via
-// AddTwoViewGeometry (so ExtractMatchesBetweenImages finds them), then sets
-// the ImagePair's matches/inliers/are_lc fields for
-// AppendLoopClosureObservations. ``lc_match_indices`` are row indices into
-// ``matches`` flagged as LC.
+// Variant of ``AddImagePair`` that also populates ``are_lc``. Each
+// ``lc_match_indices`` entry is a row index into ``matches`` (NOT an index
+// into ``inliers``); matching the indexing convention used inside
+// ``AppendLoopClosureObservations``.
 void AddImagePairWithLC(CorrespondenceGraph& corr_graph,
                         image_t image_id1,
                         image_t image_id2,

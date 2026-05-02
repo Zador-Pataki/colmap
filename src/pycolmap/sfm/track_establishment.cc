@@ -49,10 +49,6 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     images.emplace(py::cast<image_t>(item.first), py::cast<Image>(item.second));
   }
 
-  // Build keypoints map from ``Image::features``. The Reconstruction-based
-  // helper reads ``image.Points2D()`` instead; this dict-based entry point
-  // operates without a Reconstruction so it consumes the per-image
-  // ``features`` vector directly.
   std::unordered_map<image_t, std::vector<Eigen::Vector2d>>
       image_id_to_keypoints;
   image_id_to_keypoints.reserve(images.size());
@@ -69,8 +65,6 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
     TrackEstablishmentOptions to = options;
     MatchPredicate ignore_match;
     if (lc_second_pass) {
-      // When the LC pass is enabled, the caller owns subsampling, so the
-      // helper-side greedy gate is bypassed here.
       to.required_tracks_per_view = std::numeric_limits<int>::max();
       CorrespondenceGraph& lc_cg = lc_correspondence_graph
                                        ? *lc_correspondence_graph
@@ -84,8 +78,6 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                                           to,
                                           ignore_match);
     if (lc_second_pass) {
-      // LC observations come from the separate LC correspondence graph which
-      // retains the matches/inliers/are_lc ImagePair fields.
       CorrespondenceGraph& lc_cg = lc_correspondence_graph
                                        ? *lc_correspondence_graph
                                        : correspondence_graph;
@@ -175,21 +167,18 @@ void BindTrackEstablishment(py::module& m) {
         "lc_second_pass"_a = false,
         "lc_correspondence_graph"_a = nullptr,
         "Build tracks from a CorrespondenceGraph + dict-of-images via "
-        "the union-find helper. The ``correspondence_graph`` should "
-        "contain only inlier correspondences (populated via "
-        "``add_two_view_geometry``). When ``lc_second_pass=True``, "
+        "the union-find helper. When ``lc_second_pass=True``, "
         "AppendLoopClosureObservations runs after to populate "
         "``Track::lc_elements`` from inliers flagged "
         "``ImagePair::are_lc==true`` in ``lc_correspondence_graph`` "
-        "(falls back to ``correspondence_graph`` if not provided). "
-        "The helper-side greedy selection is bypassed in LC mode.");
+        "(falls back to ``correspondence_graph`` if not provided).");
 
   m.def("find_tracks_for_problem",
         &RunFindTracksForProblem,
         "images"_a,
         "tracks_full"_a,
         "options"_a,
-        "Filter ``tracks_full`` to tracks eligible for the GP problem. Reads "
+        "Filter ``tracks_full`` for the optimization problem. Reads "
         "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
         "registered image ids from the keys of the filtered ``images`` dict.");
 }
