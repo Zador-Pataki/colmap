@@ -51,6 +51,15 @@ void AssignBoolVector(
   }
 }
 
+Eigen::VectorXd DoubleVectorToEigen(const std::vector<double>& values) {
+  return Eigen::Map<const Eigen::VectorXd>(values.data(), values.size());
+}
+
+void AssignDoubleVector(std::vector<double>& target,
+                        const Eigen::VectorXd& values) {
+  target.assign(values.data(), values.data() + values.size());
+}
+
 template <typename PyClass>
 void DefDoubleVectorProperty(PyClass& cls,
                              const char* name,
@@ -58,12 +67,10 @@ void DefDoubleVectorProperty(PyClass& cls,
   cls.def_property(
       name,
       [member](const Image& self) -> Eigen::VectorXd {
-        const auto& vec = self.*member;
-        return Eigen::Map<const Eigen::VectorXd>(vec.data(), vec.size());
+        return DoubleVectorToEigen(self.*member);
       },
       [member](Image& self, const Eigen::VectorXd& v) {
-        auto& vec = self.*member;
-        vec.assign(v.data(), v.data() + v.size());
+        AssignDoubleVector(self.*member, v);
       });
 }
 
