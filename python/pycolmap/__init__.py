@@ -69,11 +69,21 @@ __all__ = import_module_symbols(
     globals(), _core, exclude={"cost_functions", "pyceres"}
 )
 
-from .global_positioning_trace import (  # noqa: E402,F401
+from .global_positioning_trace import (  # noqa: E402,F401,I001
+    GlobalPositioningParameterSnapshot as GlobalPositioningParameterSnapshot,
+    GlobalPositioningSnapshotArray as GlobalPositioningSnapshotArray,
     GlobalPositioningTrace as GlobalPositioningTrace,
 )
 
-__all__.extend(["__version__", "__ceres_version__", "GlobalPositioningTrace"])
+__all__.extend(
+    [
+        "__version__",
+        "__ceres_version__",
+        "GlobalPositioningParameterSnapshot",
+        "GlobalPositioningSnapshotArray",
+        "GlobalPositioningTrace",
+    ]
+)
 
 __version__ = _core.__version__ + "-zador"
 __ceres_version__ = _core.__ceres_version__

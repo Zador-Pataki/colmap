@@ -141,30 +141,143 @@ def _require_nested_float_blocks(
     return nested_values
 
 
-def _artifact_path(
+def _require_shape(value: Any, label: str) -> tuple[int, ...]:
+    shape = tuple(_require_int_list(value, label))
+    if not shape:
+        raise ValueError(f"{label}: expected non-empty shape")
+    for idx, dim in enumerate(shape):
+        if dim < 0:
+            raise ValueError(f"{label}[{idx}]: expected non-negative dim")
+    return shape
+
+
+def _shape_element_count(shape: tuple[int, ...]) -> int:
+    count = 1
+    for dim in shape:
+        count *= dim
+    return count
+
+
+def _validate_trace_metadata(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+    *,
+    expected_iteration: int | None = None,
+    expected_run_id: str | None = None,
+) -> int:
+    schema_version = _require_int(
+        _require_key(metadata, "schema_version", str(metadata_path)),
+        f"{metadata_path}: schema_version",
+    )
+    if schema_version != 1:
+        raise ValueError(
+            f"{metadata_path}: unsupported schema_version {schema_version}"
+        )
+
+    run_id = _require_str(
+        _require_key(metadata, "run_id", str(metadata_path)),
+        f"{metadata_path}: run_id",
+    )
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise ValueError(
+            f"{metadata_path}: run_id {run_id!r}, expected {expected_run_id!r}"
+        )
+
+    iteration = _require_int(
+        _require_key(metadata, "iteration", str(metadata_path)),
+        f"{metadata_path}: iteration",
+    )
+    if iteration < 0:
+        raise ValueError(f"{metadata_path}: iteration must be non-negative")
+    if expected_iteration is not None and iteration != expected_iteration:
+        raise ValueError(
+            f"{metadata_path}: iteration {iteration}, "
+            f"expected {expected_iteration}"
+        )
+
+    dtype = _require_str(
+        _require_key(metadata, "dtype", str(metadata_path)),
+        f"{metadata_path}: dtype",
+    )
+    byte_order = _require_str(
+        _require_key(metadata, "byte_order", str(metadata_path)),
+        f"{metadata_path}: byte_order",
+    )
+    if dtype != "float64":
+        raise ValueError(f"{metadata_path}: dtype must be float64")
+    if byte_order != "little_endian":
+        raise ValueError(f"{metadata_path}: byte_order must be little_endian")
+    return iteration
+
+
+@dataclass(frozen=True)
+class _ResolvedFloat64Artifact:
+    path: Path
+    ids: tuple[int, ...] | None
+    shape: tuple[int, ...]
+    element_count: int
+
+
+def _artifact_metadata(
     metadata_path: Path,
     metadata: dict[str, Any],
     name: str,
-    expected_count: int,
-) -> Path:
+    *,
+    required: bool = True,
+) -> dict[str, Any] | None:
     artifacts = _require_key(metadata, "artifacts", str(metadata_path))
     if not isinstance(artifacts, dict):
         raise TypeError(f"{metadata_path}: artifacts must be a JSON object")
+    if not required and name not in artifacts:
+        return None
     artifact = _require_key(artifacts, name, f"{metadata_path}: artifacts")
     if not isinstance(artifact, dict):
         raise TypeError(
             f"{metadata_path}: artifacts.{name} must be a JSON object"
         )
+    return artifact
+
+
+def _resolve_float64_artifact(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+    name: str,
+    *,
+    expected_shape: tuple[int, ...] | None = None,
+    expected_ids: tuple[int, ...] | None = None,
+    required: bool = True,
+) -> _ResolvedFloat64Artifact | None:
+    artifact = _artifact_metadata(
+        metadata_path, metadata, name, required=required
+    )
+    if artifact is None:
+        return None
 
     filename = _require_str(
         _require_key(artifact, "file", f"{metadata_path}: artifacts.{name}"),
-        "file",
+        f"{metadata_path}: artifacts.{name}.file",
     )
-    dtype = _require_key(
-        artifact, "dtype", f"{metadata_path}: artifacts.{name}"
+    relative_path = Path(filename)
+    if (
+        relative_path.is_absolute()
+        or relative_path.name != filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+    ):
+        raise ValueError(
+            f"{metadata_path}: artifacts.{name}.file must be a bare relative "
+            "filename"
+        )
+    dtype = _require_str(
+        _require_key(artifact, "dtype", f"{metadata_path}: artifacts.{name}"),
+        f"{metadata_path}: artifacts.{name}.dtype",
     )
-    byte_order = _require_key(
-        artifact, "byte_order", f"{metadata_path}: artifacts.{name}"
+    byte_order = _require_str(
+        _require_key(
+            artifact, "byte_order", f"{metadata_path}: artifacts.{name}"
+        ),
+        f"{metadata_path}: artifacts.{name}.byte_order",
     )
     if dtype != "float64":
         raise ValueError(
@@ -175,34 +288,79 @@ def _artifact_path(
             f"{metadata_path}: artifacts.{name}.byte_order must be "
             "little_endian"
         )
-    shape = _require_key(
-        artifact, "shape", f"{metadata_path}: artifacts.{name}"
+    shape = _require_shape(
+        _require_key(artifact, "shape", f"{metadata_path}: artifacts.{name}"),
+        f"{metadata_path}: artifacts.{name}.shape",
     )
-    if not isinstance(shape, list) or len(shape) != 1:
-        raise TypeError(
-            f"{metadata_path}: artifacts.{name}.shape must be [count]"
-        )
-    shape_count = _require_int(
-        shape[0], f"{metadata_path}: artifacts.{name}.shape[0]"
-    )
-    if shape_count != expected_count:
+    if expected_shape is not None and shape != expected_shape:
         raise ValueError(
-            f"{metadata_path}: artifacts.{name}.shape[0] is {shape_count}, "
-            f"expected {expected_count}"
+            f"{metadata_path}: artifacts.{name}.shape is {shape}, "
+            f"expected {expected_shape}"
         )
 
+    ids = None
+    if expected_ids is not None or "ids" in artifact:
+        ids = tuple(
+            _require_int_list(
+                _require_key(
+                    artifact, "ids", f"{metadata_path}: artifacts.{name}"
+                ),
+                f"{metadata_path}: artifacts.{name}.ids",
+            )
+        )
+        if expected_ids is not None and ids != expected_ids:
+            raise ValueError(
+                f"{metadata_path}: artifacts.{name}.ids does not match "
+                "top-level IDs"
+            )
+        if shape[0] != len(ids):
+            raise ValueError(
+                f"{metadata_path}: artifacts.{name}.shape has {shape[0]} "
+                f"rows, expected {len(ids)} artifact IDs"
+            )
+
+    element_count = _shape_element_count(shape)
     path = metadata_path.parent / filename
-    expected_size = expected_count * 8
+    expected_size = element_count * 8
     actual_size = path.stat().st_size
     if actual_size != expected_size:
         raise ValueError(
             f"{path}: byte size {actual_size}, expected {expected_size}"
         )
-    return path
+    return _ResolvedFloat64Artifact(path, ids, shape, element_count)
 
 
-def _memmap_float64(path: Path, count: int) -> np.memmap:
-    return np.memmap(path, dtype="<f8", mode="r", shape=(count,))
+def _memmap_float64(path: Path, shape: tuple[int, ...]) -> np.ndarray:
+    if _shape_element_count(shape) == 0:
+        return np.empty(shape, dtype=np.float64)
+    return np.memmap(path, dtype="<f8", mode="r", shape=shape)
+
+
+def _discover_iteration_metadata(directory: Path) -> dict[int, Path]:
+    metadata_by_iteration: dict[int, Path] = {}
+    if not directory.is_dir():
+        return metadata_by_iteration
+
+    for metadata_path in sorted(directory.glob("iter_*.json")):
+        metadata = _load_json(metadata_path)
+        iteration = _require_int(
+            _require_key(metadata, "iteration", str(metadata_path)),
+            f"{metadata_path}: iteration",
+        )
+        expected_name = f"iter_{iteration:06d}.json"
+        if metadata_path.name != expected_name:
+            raise ValueError(
+                f"{metadata_path}: filename does not match metadata "
+                f"iteration; expected {expected_name}"
+            )
+        if iteration in metadata_by_iteration:
+            previous = metadata_by_iteration[iteration]
+            raise ValueError(
+                f"Duplicate trace iteration {iteration}: "
+                f"{previous} and {metadata_path}"
+            )
+        metadata_by_iteration[iteration] = metadata_path
+    return metadata_by_iteration
 
 
 @dataclass(frozen=True)
@@ -221,6 +379,25 @@ class GlobalPositioningJacobianBlock:
     offset: int
     residual_dim: int
     values: np.ndarray
+
+
+@dataclass(frozen=True)
+class GlobalPositioningSnapshotArray:
+    ids: tuple[int, ...]
+    shape: tuple[int, ...]
+    values: np.ndarray
+
+
+@dataclass(frozen=True)
+class GlobalPositioningParameterSnapshot:
+    metadata_path: Path
+    metadata: dict[str, Any]
+    iteration: int
+    frame_centers: GlobalPositioningSnapshotArray
+    points3D: GlobalPositioningSnapshotArray
+    scales: GlobalPositioningSnapshotArray
+    dmap_scales: GlobalPositioningSnapshotArray | None = None
+    cams_in_rig: GlobalPositioningSnapshotArray | None = None
 
 
 class GlobalPositioningResidualBlock:
@@ -312,12 +489,21 @@ class GlobalPositioningResidualBlock:
 
 
 class GlobalPositioningResidualValues:
-    def __init__(self, metadata_path: Path):
+    def __init__(
+        self,
+        metadata_path: Path,
+        *,
+        expected_iteration: int | None = None,
+        expected_run_id: str | None = None,
+        expected_residual_ids: tuple[str, ...] | None = None,
+    ):
         self.metadata_path = Path(metadata_path)
         self.metadata = _load_json(self.metadata_path)
-        self.iteration = _require_int(
-            _require_key(self.metadata, "iteration", str(self.metadata_path)),
-            "iteration",
+        self.iteration = _validate_trace_metadata(
+            self.metadata_path,
+            self.metadata,
+            expected_iteration=expected_iteration,
+            expected_run_id=expected_run_id,
         )
         self.num_residual_blocks = _require_int(
             _require_key(
@@ -355,6 +541,15 @@ class GlobalPositioningResidualValues:
             ),
             "evaluation_success",
         )
+        self._validate_residual_structure()
+        if (
+            expected_residual_ids is not None
+            and tuple(self.residual_ids) != expected_residual_ids
+        ):
+            raise ValueError(
+                "residual_values.residual_ids does not match "
+                "residual_blocks.jsonl order"
+            )
         self.has_raw_jacobians = _require_bool(
             _require_key(
                 self.metadata, "has_raw_jacobians", str(self.metadata_path)
@@ -366,29 +561,35 @@ class GlobalPositioningResidualValues:
             for idx, residual_id in enumerate(self.residual_ids)
         }
 
-        self._raw_residuals_path = _artifact_path(
+        raw_residuals_artifact = _resolve_float64_artifact(
             self.metadata_path,
             self.metadata,
             "raw_residuals",
-            self.total_scalar_residuals,
+            expected_shape=(self.total_scalar_residuals,),
         )
-        self._raw_costs_path = _artifact_path(
+        raw_costs_artifact = _resolve_float64_artifact(
             self.metadata_path,
             self.metadata,
             "raw_costs",
-            self.num_residual_blocks,
+            expected_shape=(self.num_residual_blocks,),
         )
-        self._robust_costs_path = _artifact_path(
+        robust_costs_artifact = _resolve_float64_artifact(
             self.metadata_path,
             self.metadata,
             "robust_costs",
-            self.num_residual_blocks,
+            expected_shape=(self.num_residual_blocks,),
         )
+        assert raw_residuals_artifact is not None
+        assert raw_costs_artifact is not None
+        assert robust_costs_artifact is not None
+        self._raw_residuals_artifact = raw_residuals_artifact
+        self._raw_costs_artifact = raw_costs_artifact
+        self._robust_costs_artifact = robust_costs_artifact
 
         self.total_jacobian_scalars = 0
         self.parameter_blocks: list[list[GlobalPositioningParameterBlock]] = []
         self.raw_jacobian_offsets: list[list[int]] = []
-        self._raw_jacobians_path: Path | None = None
+        self._raw_jacobians_artifact: _ResolvedFloat64Artifact | None = None
         if self.has_raw_jacobians:
             self.total_jacobian_scalars = _require_int(
                 _require_key(
@@ -433,23 +634,181 @@ class GlobalPositioningResidualValues:
                 ),
                 "parameter_block_lower_bounds",
             )
+            self._validate_jacobian_contract()
             self.parameter_blocks = self._parse_parameter_blocks(
                 parameter_block_descriptors,
                 parameter_block_sizes,
                 parameter_block_is_constant,
                 parameter_block_lower_bounds,
             )
-            self._raw_jacobians_path = _artifact_path(
+            self._validate_jacobian_structure(
+                parameter_block_sizes,
+                self.raw_jacobian_offsets,
+                parameter_block_is_constant,
+                parameter_block_lower_bounds,
+                parameter_block_descriptors,
+            )
+            self._raw_jacobians_artifact = _resolve_float64_artifact(
                 self.metadata_path,
                 self.metadata,
                 "raw_jacobians",
-                self.total_jacobian_scalars,
+                expected_shape=(self.total_jacobian_scalars,),
+            )
+            assert self._raw_jacobians_artifact is not None
+
+        self._raw_residuals: np.ndarray | None = None
+        self._raw_costs: np.ndarray | None = None
+        self._robust_costs: np.ndarray | None = None
+        self._raw_jacobians: np.ndarray | None = None
+
+    def _validate_jacobian_contract(self) -> None:
+        raw_jacobian_layout = _require_str(
+            _require_key(
+                self.metadata,
+                "raw_jacobian_layout",
+                str(self.metadata_path),
+            ),
+            "raw_jacobian_layout",
+        )
+        if (
+            raw_jacobian_layout
+            != "residual_block_major/parameter_block_major/row_major"
+        ):
+            raise ValueError(
+                "raw_jacobian_layout must be "
+                "'residual_block_major/parameter_block_major/row_major'"
+            )
+        jacobian_domain = _require_str(
+            _require_key(
+                self.metadata, "jacobian_domain", str(self.metadata_path)
+            ),
+            "jacobian_domain",
+        )
+        if jacobian_domain != "raw_cost_function_ambient_parameters":
+            raise ValueError(
+                "jacobian_domain must be 'raw_cost_function_ambient_parameters'"
+            )
+        for field_name in [
+            "loss_applied_to_jacobians",
+            "manifold_applied_to_jacobians",
+            "constant_parameter_blocks_included",
+        ]:
+            _require_bool(
+                _require_key(
+                    self.metadata, field_name, str(self.metadata_path)
+                ),
+                field_name,
+            )
+        if self.metadata["loss_applied_to_jacobians"]:
+            raise ValueError("loss_applied_to_jacobians must be false")
+        if self.metadata["manifold_applied_to_jacobians"]:
+            raise ValueError("manifold_applied_to_jacobians must be false")
+        if not self.metadata["constant_parameter_blocks_included"]:
+            raise ValueError("constant_parameter_blocks_included must be true")
+
+    def _validate_residual_structure(self) -> None:
+        if self.num_residual_blocks < 0:
+            raise ValueError("num_residual_blocks must be non-negative")
+        if self.total_scalar_residuals < 0:
+            raise ValueError("total_scalar_residuals must be non-negative")
+        for name, values in [
+            ("residual_ids", self.residual_ids),
+            ("residual_dims", self.residual_dims),
+            ("residual_offsets", self.residual_offsets),
+            ("evaluation_success", self.evaluation_success),
+        ]:
+            if len(values) != self.num_residual_blocks:
+                raise ValueError(
+                    f"{name}: length {len(values)}, "
+                    f"expected {self.num_residual_blocks}"
+                )
+        if len(set(self.residual_ids)) != len(self.residual_ids):
+            raise ValueError("residual_ids must be unique")
+
+        expected_offset = 0
+        for residual_idx, (residual_dim, residual_offset) in enumerate(
+            zip(self.residual_dims, self.residual_offsets, strict=True)
+        ):
+            if residual_dim < 0:
+                raise ValueError(
+                    f"residual_dims[{residual_idx}] must be non-negative"
+                )
+            if residual_offset != expected_offset:
+                raise ValueError(
+                    f"residual_offsets[{residual_idx}] is {residual_offset}, "
+                    f"expected {expected_offset}"
+                )
+            expected_offset += residual_dim
+        if expected_offset != self.total_scalar_residuals:
+            raise ValueError(
+                f"sum(residual_dims) is {expected_offset}, "
+                f"expected total_scalar_residuals {self.total_scalar_residuals}"
             )
 
-        self._raw_residuals: np.memmap | None = None
-        self._raw_costs: np.memmap | None = None
-        self._robust_costs: np.memmap | None = None
-        self._raw_jacobians: np.memmap | None = None
+    def _validate_jacobian_structure(
+        self,
+        sizes: list[list[int]],
+        offsets: list[list[int]],
+        is_constant: list[list[bool]],
+        lower_bounds: list[list[list[float]]],
+        descriptors: Any,
+    ) -> None:
+        if self.total_jacobian_scalars < 0:
+            raise ValueError("total_jacobian_scalars must be non-negative")
+        if not isinstance(descriptors, list):
+            raise TypeError("parameter_blocks: expected list")
+        for name, values in [
+            ("parameter_block_sizes", sizes),
+            ("raw_jacobian_offsets", offsets),
+            ("parameter_block_is_constant", is_constant),
+            ("parameter_block_lower_bounds", lower_bounds),
+            ("parameter_blocks", descriptors),
+        ]:
+            if len(values) != self.num_residual_blocks:
+                raise ValueError(
+                    f"{name}: outer length {len(values)}, "
+                    f"expected {self.num_residual_blocks}"
+                )
+
+        expected_offset = 0
+        for residual_idx in range(self.num_residual_blocks):
+            block_count = len(sizes[residual_idx])
+            for name, values in [
+                ("raw_jacobian_offsets", offsets),
+                ("parameter_block_is_constant", is_constant),
+                ("parameter_block_lower_bounds", lower_bounds),
+                ("parameter_blocks", descriptors),
+            ]:
+                if len(values[residual_idx]) != block_count:
+                    raise ValueError(
+                        f"{name}[{residual_idx}]: length "
+                        f"{len(values[residual_idx])}, expected {block_count}"
+                    )
+            for block_idx, block_size in enumerate(sizes[residual_idx]):
+                if block_size <= 0:
+                    raise ValueError(
+                        f"parameter_block_sizes[{residual_idx}][{block_idx}] "
+                        "must be positive"
+                    )
+                if len(lower_bounds[residual_idx][block_idx]) != block_size:
+                    raise ValueError(
+                        f"parameter_block_lower_bounds[{residual_idx}]"
+                        f"[{block_idx}]: length "
+                        f"{len(lower_bounds[residual_idx][block_idx])}, "
+                        f"expected {block_size}"
+                    )
+                residual_offset = offsets[residual_idx][block_idx]
+                if residual_offset != expected_offset:
+                    raise ValueError(
+                        f"raw_jacobian_offsets[{residual_idx}][{block_idx}] "
+                        f"is {residual_offset}, expected {expected_offset}"
+                    )
+                expected_offset += self.residual_dims[residual_idx] * block_size
+        if expected_offset != self.total_jacobian_scalars:
+            raise ValueError(
+                f"raw Jacobian scalar count is {expected_offset}, "
+                f"expected total_jacobian_scalars {self.total_jacobian_scalars}"
+            )
 
     @staticmethod
     def _parse_parameter_blocks(
@@ -498,36 +857,40 @@ class GlobalPositioningResidualValues:
         return blocks
 
     @property
-    def raw_residuals(self) -> np.memmap:
+    def raw_residuals(self) -> np.ndarray:
         if self._raw_residuals is None:
             self._raw_residuals = _memmap_float64(
-                self._raw_residuals_path, self.total_scalar_residuals
+                self._raw_residuals_artifact.path,
+                self._raw_residuals_artifact.shape,
             )
         return self._raw_residuals
 
     @property
-    def raw_costs(self) -> np.memmap:
+    def raw_costs(self) -> np.ndarray:
         if self._raw_costs is None:
             self._raw_costs = _memmap_float64(
-                self._raw_costs_path, self.num_residual_blocks
+                self._raw_costs_artifact.path,
+                self._raw_costs_artifact.shape,
             )
         return self._raw_costs
 
     @property
-    def robust_costs(self) -> np.memmap:
+    def robust_costs(self) -> np.ndarray:
         if self._robust_costs is None:
             self._robust_costs = _memmap_float64(
-                self._robust_costs_path, self.num_residual_blocks
+                self._robust_costs_artifact.path,
+                self._robust_costs_artifact.shape,
             )
         return self._robust_costs
 
     @property
-    def raw_jacobians(self) -> np.memmap | None:
-        if self._raw_jacobians_path is None:
+    def raw_jacobians(self) -> np.ndarray | None:
+        if self._raw_jacobians_artifact is None:
             return None
         if self._raw_jacobians is None:
             self._raw_jacobians = _memmap_float64(
-                self._raw_jacobians_path, self.total_jacobian_scalars
+                self._raw_jacobians_artifact.path,
+                self._raw_jacobians_artifact.shape,
             )
         return self._raw_jacobians
 
@@ -539,6 +902,218 @@ class GlobalPositioningResidualValues:
         return GlobalPositioningResidualBlock(self, residual)
 
 
+def _require_top_level_ids_and_shape(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+    ids_key: str,
+    shape_key: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    ids = tuple(
+        _require_int_list(
+            _require_key(metadata, ids_key, str(metadata_path)),
+            f"{metadata_path}: {ids_key}",
+        )
+    )
+    shape = _require_shape(
+        _require_key(metadata, shape_key, str(metadata_path)),
+        f"{metadata_path}: {shape_key}",
+    )
+    if shape[0] != len(ids):
+        raise ValueError(
+            f"{metadata_path}: {shape_key} has {shape[0]} rows, "
+            f"expected {len(ids)} {ids_key}"
+        )
+    return ids, shape
+
+
+def _optional_top_level_ids_and_shape(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+    ids_key: str,
+    shape_key: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+    if ids_key not in metadata and shape_key not in metadata:
+        return None
+    return _require_top_level_ids_and_shape(
+        metadata_path, metadata, ids_key, shape_key
+    )
+
+
+def _normalize_max_points(max_points: int | None) -> int | None:
+    if max_points is None or max_points == -1:
+        return None
+    if not isinstance(max_points, int) or isinstance(max_points, bool):
+        raise TypeError(
+            f"max_points: expected int, None, or -1; "
+            f"got {type(max_points).__name__}"
+        )
+    if max_points < -1:
+        raise ValueError(f"max_points must be >= -1 or None, got {max_points}")
+    return max_points
+
+
+def _load_snapshot_array(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+    name: str,
+    *,
+    expected_ids: tuple[int, ...] | None = None,
+    expected_shape: tuple[int, ...] | None = None,
+    max_rows: int | None = None,
+    required: bool = True,
+) -> GlobalPositioningSnapshotArray | None:
+    artifact = _resolve_float64_artifact(
+        metadata_path,
+        metadata,
+        name,
+        expected_shape=expected_shape,
+        expected_ids=expected_ids,
+        required=required,
+    )
+    if artifact is None:
+        return None
+
+    values = _memmap_float64(artifact.path, artifact.shape)
+    ids = artifact.ids if artifact.ids is not None else ()
+    shape = artifact.shape
+    if max_rows is not None:
+        row_count = min(max_rows, shape[0])
+        values = values[:row_count]
+        ids = ids[:row_count]
+        shape = (row_count, *shape[1:])
+
+    return GlobalPositioningSnapshotArray(ids=ids, shape=shape, values=values)
+
+
+def _empty_snapshot_array() -> GlobalPositioningSnapshotArray:
+    return GlobalPositioningSnapshotArray(
+        ids=(),
+        shape=(0,),
+        values=np.empty((0,), dtype=np.float64),
+    )
+
+
+class GlobalPositioningParameterSnapshotLoader:
+    def __init__(
+        self,
+        metadata_path: Path,
+        *,
+        expected_iteration: int | None = None,
+        expected_run_id: str | None = None,
+        max_points: int | None = None,
+    ):
+        self.metadata_path = Path(metadata_path)
+        self.metadata = _load_json(self.metadata_path)
+        self.iteration = _validate_trace_metadata(
+            self.metadata_path,
+            self.metadata,
+            expected_iteration=expected_iteration,
+            expected_run_id=expected_run_id,
+        )
+        self.max_points = _normalize_max_points(max_points)
+
+    def load(self) -> GlobalPositioningParameterSnapshot:
+        frame_ids, frame_centers_shape = _require_top_level_ids_and_shape(
+            self.metadata_path,
+            self.metadata,
+            "frame_ids",
+            "frame_centers_world_shape",
+        )
+        point3D_ids, points3D_shape = _require_top_level_ids_and_shape(
+            self.metadata_path,
+            self.metadata,
+            "point3D_ids",
+            "points3D_world_shape",
+        )
+        scales_expected = _optional_top_level_ids_and_shape(
+            self.metadata_path,
+            self.metadata,
+            "bata_scale_ids",
+            "bata_scales_shape",
+        )
+
+        dmap_expected = _optional_top_level_ids_and_shape(
+            self.metadata_path,
+            self.metadata,
+            "dmap_image_ids",
+            "dmap_scales_stored_shape",
+        )
+        artifacts = _require_key(
+            self.metadata, "artifacts", str(self.metadata_path)
+        )
+        if not isinstance(artifacts, dict):
+            raise TypeError(
+                f"{self.metadata_path}: artifacts must be a JSON object"
+            )
+        if dmap_expected is not None and "dmap_scales" not in artifacts:
+            dmap_ids, dmap_shape = dmap_expected
+            if dmap_ids or _shape_element_count(dmap_shape) != 0:
+                raise KeyError(
+                    f"{self.metadata_path}: artifacts missing optional "
+                    "dmap_scales despite non-empty top-level dmap metadata"
+                )
+
+        frame_centers = _load_snapshot_array(
+            self.metadata_path,
+            self.metadata,
+            "frame_centers",
+            expected_ids=frame_ids,
+            expected_shape=frame_centers_shape,
+        )
+        points3D = _load_snapshot_array(
+            self.metadata_path,
+            self.metadata,
+            "points3D",
+            expected_ids=point3D_ids,
+            expected_shape=points3D_shape,
+            max_rows=self.max_points,
+        )
+        scales = _empty_snapshot_array()
+        if scales_expected is not None:
+            scale_ids, scales_shape = scales_expected
+            loaded_scales = _load_snapshot_array(
+                self.metadata_path,
+                self.metadata,
+                "scales",
+                expected_ids=scale_ids,
+                expected_shape=scales_shape,
+            )
+            assert loaded_scales is not None
+            scales = loaded_scales
+        assert frame_centers is not None
+        assert points3D is not None
+
+        dmap_scales = None
+        if "dmap_scales" in artifacts:
+            dmap_ids, dmap_shape = dmap_expected or (None, None)
+            dmap_scales = _load_snapshot_array(
+                self.metadata_path,
+                self.metadata,
+                "dmap_scales",
+                expected_ids=dmap_ids,
+                expected_shape=dmap_shape,
+                required=False,
+            )
+
+        cams_in_rig = _load_snapshot_array(
+            self.metadata_path,
+            self.metadata,
+            "cams_in_rig",
+            required=False,
+        )
+
+        return GlobalPositioningParameterSnapshot(
+            metadata_path=self.metadata_path,
+            metadata=self.metadata,
+            iteration=self.iteration,
+            frame_centers=frame_centers,
+            points3D=points3D,
+            scales=scales,
+            dmap_scales=dmap_scales,
+            cams_in_rig=cams_in_rig,
+        )
+
+
 class GlobalPositioningTrace:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -547,18 +1122,12 @@ class GlobalPositioningTrace:
             "residual_blocks.jsonl"
         )
         self.residual_skips = self._read_optional_jsonl("residual_skips.jsonl")
-        self._residual_values_by_iteration: dict[int, Path] = {}
-        residual_values_dir = self.path / "residual_values"
-        if residual_values_dir.is_dir():
-            for metadata_path in sorted(
-                residual_values_dir.glob("iter_*.json")
-            ):
-                metadata = _load_json(metadata_path)
-                iteration = _require_int(
-                    _require_key(metadata, "iteration", str(metadata_path)),
-                    "iteration",
-                )
-                self._residual_values_by_iteration[iteration] = metadata_path
+        self._residual_values_by_iteration = _discover_iteration_metadata(
+            self.path / "residual_values"
+        )
+        self._snapshots_by_iteration = _discover_iteration_metadata(
+            self.path / "snapshots"
+        )
 
     @classmethod
     def load(cls, path: str | Path) -> GlobalPositioningTrace:
@@ -569,6 +1138,33 @@ class GlobalPositioningTrace:
         if not path.exists():
             return []
         return _iter_jsonl(path)
+
+    def _ledger_residual_ids(self) -> tuple[str, ...] | None:
+        if not self.residual_blocks:
+            return None
+        residual_ids = []
+        for idx, record in enumerate(self.residual_blocks):
+            attrs = _require_key(record, "attrs", f"residual_blocks[{idx}]")
+            if not isinstance(attrs, dict):
+                raise TypeError(
+                    f"residual_blocks[{idx}].attrs must be an object"
+                )
+            residual_ids.append(
+                _require_str(
+                    _require_key(
+                        attrs, "residual_id", f"residual_blocks[{idx}].attrs"
+                    ),
+                    f"residual_blocks[{idx}].attrs.residual_id",
+                )
+            )
+        return tuple(residual_ids)
+
+    def _manifest_run_id(self) -> str | None:
+        if "run_id" not in self.manifest:
+            return None
+        return _require_str(
+            self.manifest["run_id"], str(self.path / "manifest.json")
+        )
 
     @property
     def status(self) -> str:
@@ -592,6 +1188,10 @@ class GlobalPositioningTrace:
     def residual_value_iterations(self) -> tuple[int, ...]:
         return tuple(sorted(self._residual_values_by_iteration))
 
+    @property
+    def snapshot_iterations(self) -> tuple[int, ...]:
+        return tuple(sorted(self._snapshots_by_iteration))
+
     def residual_values(
         self, iteration: int | None = None
     ) -> GlobalPositioningResidualValues:
@@ -608,5 +1208,22 @@ class GlobalPositioningTrace:
                 f"Trace has no residual values for iteration {iteration}"
             )
         return GlobalPositioningResidualValues(
-            self._residual_values_by_iteration[iteration]
+            self._residual_values_by_iteration[iteration],
+            expected_iteration=iteration,
+            expected_run_id=self._manifest_run_id(),
+            expected_residual_ids=self._ledger_residual_ids(),
         )
+
+    def snapshot(
+        self, iteration: int, max_points: int | None = None
+    ) -> GlobalPositioningParameterSnapshot:
+        if iteration not in self._snapshots_by_iteration:
+            raise KeyError(
+                f"Trace has no parameter snapshot for iteration {iteration}"
+            )
+        return GlobalPositioningParameterSnapshotLoader(
+            self._snapshots_by_iteration[iteration],
+            expected_iteration=iteration,
+            expected_run_id=self._manifest_run_id(),
+            max_points=max_points,
+        ).load()

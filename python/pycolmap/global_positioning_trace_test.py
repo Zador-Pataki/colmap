@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import pycolmap
 
@@ -21,6 +22,16 @@ def _write_f64(path: Path, values) -> None:
     np.asarray(values, dtype="<f8").tofile(path)
 
 
+def _artifact(filename: str, ids, shape) -> dict:
+    return {
+        "file": filename,
+        "dtype": "float64",
+        "byte_order": "little_endian",
+        "ids": list(ids),
+        "shape": list(shape),
+    }
+
+
 def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
     trace_dir = tmp_path / (
         "trace_jacobians" if with_jacobians else "trace_values"
@@ -34,9 +45,9 @@ def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
             "schema_version": 1,
             "run_id": "run",
             "status": "finished",
-            "trace_level": "residual_jacobians"
-            if with_jacobians
-            else "residual_values",
+            "trace_level": (
+                "residual_jacobians" if with_jacobians else "residual_values"
+            ),
         },
     )
     _write_jsonl(
@@ -138,6 +149,90 @@ def _make_trace(tmp_path: Path, *, with_jacobians: bool) -> Path:
     return trace_dir
 
 
+def _make_snapshot_trace(
+    tmp_path: Path, *, include_optional: bool = True
+) -> Path:
+    trace_dir = tmp_path / "trace_snapshots"
+    snapshots_dir = trace_dir / "snapshots"
+    snapshots_dir.mkdir(parents=True)
+    _write_json(
+        trace_dir / "manifest.json",
+        {
+            "schema_version": 1,
+            "run_id": "run",
+            "status": "finished",
+            "trace_level": "parameter_snapshots",
+        },
+    )
+
+    iteration = 3
+    prefix = f"iter_{iteration:06d}"
+    frame_centers = np.array(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64
+    )
+    points3D = np.arange(15, dtype=np.float64).reshape(5, 3)
+    scales = np.array([0.5, 1.5], dtype=np.float64)
+    dmap_scales = np.array([2.5, 3.5], dtype=np.float64)
+    cams_in_rig = np.array([[0.1, 0.2, 0.3]], dtype=np.float64)
+
+    frame_ids = [10, 20]
+    point3D_ids = [100, 101, 102, 103, 104]
+    scale_ids = [30, 40]
+    dmap_ids = [50, 60]
+    cam_ids = [70]
+
+    _write_f64(snapshots_dir / f"{prefix}_frame_centers_f64.bin", frame_centers)
+    _write_f64(snapshots_dir / f"{prefix}_points3D_f64.bin", points3D)
+    _write_f64(snapshots_dir / f"{prefix}_scales_f64.bin", scales)
+
+    artifacts = {
+        "frame_centers": _artifact(
+            f"{prefix}_frame_centers_f64.bin", frame_ids, frame_centers.shape
+        ),
+        "points3D": _artifact(
+            f"{prefix}_points3D_f64.bin", point3D_ids, points3D.shape
+        ),
+        "scales": _artifact(
+            f"{prefix}_scales_f64.bin", scale_ids, scales.shape
+        ),
+    }
+    dmap_shape = [0]
+    if include_optional:
+        _write_f64(snapshots_dir / f"{prefix}_dmap_scales_f64.bin", dmap_scales)
+        _write_f64(snapshots_dir / f"{prefix}_cams_in_rig_f64.bin", cams_in_rig)
+        artifacts["dmap_scales"] = _artifact(
+            f"{prefix}_dmap_scales_f64.bin", dmap_ids, dmap_scales.shape
+        )
+        artifacts["cams_in_rig"] = _artifact(
+            f"{prefix}_cams_in_rig_f64.bin", cam_ids, cams_in_rig.shape
+        )
+        dmap_shape = list(dmap_scales.shape)
+    else:
+        dmap_ids = []
+
+    _write_json(
+        snapshots_dir / f"{prefix}.json",
+        {
+            "schema_version": 1,
+            "run_id": "run",
+            "iteration": iteration,
+            "dtype": "float64",
+            "byte_order": "little_endian",
+            "frame_ids": frame_ids,
+            "frame_centers_world_shape": list(frame_centers.shape),
+            "point3D_ids": point3D_ids,
+            "points3D_world_shape": list(points3D.shape),
+            "bata_residual_ids": [],
+            "bata_scale_ids": scale_ids,
+            "bata_scales_shape": list(scales.shape),
+            "dmap_image_ids": dmap_ids,
+            "dmap_scales_stored_shape": dmap_shape,
+            "artifacts": artifacts,
+        },
+    )
+    return trace_dir
+
+
 def test_global_positioning_trace_loads_residual_values(tmp_path: Path) -> None:
     trace = pycolmap.GlobalPositioningTrace.load(
         _make_trace(tmp_path, with_jacobians=False)
@@ -197,3 +292,252 @@ def test_global_positioning_trace_rejects_bad_sidecar_size(
     trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
     with np.testing.assert_raises(ValueError):
         trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_bad_residual_metadata(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["residual_ids"] = ["same", "same"]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="residual_ids must be unique"):
+        trace.residual_values(0)
+
+    trace_dir = _make_trace(tmp_path / "offsets", with_jacobians=False)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["residual_offsets"] = [0, 0]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="residual_offsets"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_residual_ledger_mismatch(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["residual_ids"] = ["r1", "r0"]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="residual_blocks.jsonl order"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_bad_jacobian_metadata(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["raw_jacobian_offsets"] = [[0, 5], [8]]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="raw_jacobian_offsets"):
+        trace.residual_values(0)
+
+    trace_dir = _make_trace(tmp_path / "bounds", with_jacobians=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["parameter_block_lower_bounds"][0][0] = [-1.0, -1.0]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="parameter_block_lower_bounds"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_bad_jacobian_contract(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["raw_jacobian_layout"] = "wrong"
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="raw_jacobian_layout"):
+        trace.residual_values(0)
+
+    trace_dir = _make_trace(tmp_path / "domain", with_jacobians=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["jacobian_domain"] = "wrong"
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="jacobian_domain"):
+        trace.residual_values(0)
+
+    trace_dir = _make_trace(tmp_path / "loss", with_jacobians=True)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["loss_applied_to_jacobians"] = True
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="loss_applied_to_jacobians"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_rejects_residual_filename_iteration_mismatch(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["iteration"] = 1
+    _write_json(metadata_path, metadata)
+
+    with pytest.raises(
+        ValueError, match="filename does not match metadata iteration"
+    ):
+        pycolmap.GlobalPositioningTrace.load(trace_dir)
+
+
+def test_global_positioning_trace_rejects_residual_path_traversal(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_trace(tmp_path, with_jacobians=False)
+    metadata_path = trace_dir / "residual_values" / "iter_000000.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["artifacts"]["raw_residuals"]["file"] = "../escape.bin"
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="bare relative filename"):
+        trace.residual_values(0)
+
+
+def test_global_positioning_trace_loads_snapshot_with_all_artifacts(
+    tmp_path: Path,
+) -> None:
+    trace = pycolmap.GlobalPositioningTrace.load(
+        _make_snapshot_trace(tmp_path, include_optional=True)
+    )
+
+    assert trace.snapshot_iterations == (3,)
+    snapshot = trace.snapshot(3)
+
+    assert snapshot.iteration == 3
+    assert snapshot.frame_centers.ids == (10, 20)
+    assert snapshot.frame_centers.shape == (2, 3)
+    np.testing.assert_allclose(
+        snapshot.frame_centers.values,
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+    )
+    assert isinstance(snapshot.points3D.values, np.memmap)
+    assert snapshot.points3D.ids == (100, 101, 102, 103, 104)
+    np.testing.assert_allclose(
+        snapshot.points3D.values,
+        np.arange(15, dtype=np.float64).reshape(5, 3),
+    )
+    assert snapshot.scales.ids == (30, 40)
+    np.testing.assert_allclose(snapshot.scales.values, [0.5, 1.5])
+
+    assert snapshot.dmap_scales is not None
+    assert snapshot.dmap_scales.ids == (50, 60)
+    np.testing.assert_allclose(snapshot.dmap_scales.values, [2.5, 3.5])
+    assert snapshot.cams_in_rig is not None
+    assert snapshot.cams_in_rig.ids == (70,)
+    np.testing.assert_allclose(snapshot.cams_in_rig.values, [[0.1, 0.2, 0.3]])
+    assert isinstance(snapshot, pycolmap.GlobalPositioningParameterSnapshot)
+    assert isinstance(
+        snapshot.points3D, pycolmap.GlobalPositioningSnapshotArray
+    )
+
+
+def test_global_positioning_trace_snapshot_optional_artifacts_missing(
+    tmp_path: Path,
+) -> None:
+    trace = pycolmap.GlobalPositioningTrace.load(
+        _make_snapshot_trace(tmp_path, include_optional=False)
+    )
+
+    snapshot = trace.snapshot(3)
+
+    assert snapshot.dmap_scales is None
+    assert snapshot.cams_in_rig is None
+    np.testing.assert_allclose(snapshot.scales.values, [0.5, 1.5])
+
+
+def test_global_positioning_trace_snapshot_accepts_legacy_missing_scales(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_snapshot_trace(tmp_path, include_optional=False)
+    metadata_path = trace_dir / "snapshots" / "iter_000003.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    del metadata["bata_scale_ids"]
+    del metadata["bata_scales_shape"]
+    del metadata["artifacts"]["scales"]
+    _write_json(metadata_path, metadata)
+
+    snapshot = pycolmap.GlobalPositioningTrace.load(trace_dir).snapshot(3)
+
+    assert snapshot.scales.ids == ()
+    assert snapshot.scales.shape == (0,)
+    np.testing.assert_allclose(snapshot.scales.values, [])
+
+
+def test_global_positioning_trace_snapshot_max_points(tmp_path: Path) -> None:
+    trace = pycolmap.GlobalPositioningTrace.load(
+        _make_snapshot_trace(tmp_path, include_optional=True)
+    )
+
+    snapshot = trace.snapshot(3, max_points=2)
+
+    assert snapshot.points3D.ids == (100, 101)
+    assert snapshot.points3D.shape == (2, 3)
+    assert isinstance(snapshot.points3D.values, np.memmap)
+    np.testing.assert_allclose(
+        snapshot.points3D.values,
+        np.arange(6, dtype=np.float64).reshape(2, 3),
+    )
+
+
+def test_global_positioning_trace_snapshot_rejects_malformed_shape_and_size(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_snapshot_trace(tmp_path / "shape", include_optional=True)
+    metadata_path = trace_dir / "snapshots" / "iter_000003.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["artifacts"]["points3D"]["shape"] = [4, 3]
+    _write_json(metadata_path, metadata)
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="points3D.*shape"):
+        trace.snapshot(3)
+
+    trace_dir = _make_snapshot_trace(tmp_path / "size", include_optional=True)
+    (trace_dir / "snapshots" / "iter_000003_points3D_f64.bin").write_bytes(
+        b"short"
+    )
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    with pytest.raises(ValueError, match="byte size"):
+        trace.snapshot(3)
+
+
+def test_global_positioning_trace_snapshot_rejects_filename_iteration_mismatch(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_snapshot_trace(tmp_path, include_optional=True)
+    metadata_path = trace_dir / "snapshots" / "iter_000003.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["iteration"] = 4
+    _write_json(metadata_path, metadata)
+
+    with pytest.raises(
+        ValueError, match="filename does not match metadata iteration"
+    ):
+        pycolmap.GlobalPositioningTrace.load(trace_dir)
