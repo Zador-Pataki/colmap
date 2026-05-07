@@ -1,5 +1,6 @@
 #include "colmap/controllers/feature_matching.h"
 #include "colmap/controllers/pairing.h"
+#include "colmap/controllers/track_provenance.h"
 #include "colmap/estimators/two_view_geometry.h"
 #include "colmap/exe/feature.h"
 #include "colmap/exe/sfm.h"
@@ -14,6 +15,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <type_traits>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -49,6 +51,9 @@ void MatchFeatures(const std::filesystem::path& database_path,
       pairing_options, matching_options, verification_options, database_path);
   matcher->Start();
   PyWait(matcher.get());
+  if constexpr (std::is_same_v<PairingOptions, SequentialPairingOptions>) {
+    DeriveTrackProvenance(database_path, pairing_options);
+  }
 }
 
 void VerifyMatches(const std::filesystem::path& database_path,
@@ -213,6 +218,11 @@ void BindMatchFeatures(py::module& m) {
               "The maximum number of features to use for indexing "
               "an image. If an image has more features, only the "
               "largest-scale features will be indexed.")
+          .def_readwrite(
+              "use_track_provenance",
+              &SequentialPairingOptions::use_track_provenance,
+              "Whether to use track provenance after sequential "
+              "matching.")
           .def_readwrite("vocab_tree_path",
                          &SequentialPairingOptions::vocab_tree_path,
                          "Path to the vocabulary tree.")

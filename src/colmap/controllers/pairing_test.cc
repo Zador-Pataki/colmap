@@ -129,6 +129,14 @@ TEST(VocabTreePairGenerator, Nominal) {
   }
 }
 
+TEST(SequentialPairingOptions, LoopClosurePostprocessFlags) {
+  SequentialPairingOptions options;
+  EXPECT_FALSE(options.use_track_provenance);
+
+  options.use_track_provenance = true;
+  EXPECT_TRUE(options.use_track_provenance);
+}
+
 TEST(SequentialPairGenerator, Linear) {
   constexpr int kNumImages = 5;
   auto database = Database::Open(kInMemorySqliteDatabasePath);

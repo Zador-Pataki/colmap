@@ -147,6 +147,11 @@ struct SequentialPairingOptions {
   // image has more features, only the largest-scale features will be indexed.
   int loop_detection_max_num_features = -1;
 
+  // Whether to use track provenance after sequential matching.
+  // When enabled, consecutive pairs and transitive matches stay tracking/non-LC;
+  // remaining matches in generated non-direct pairs are marked as LC.
+  bool use_track_provenance = false;
+
   // Number of threads for loop detection indexing and retrieval.
   int num_threads = -1;
 

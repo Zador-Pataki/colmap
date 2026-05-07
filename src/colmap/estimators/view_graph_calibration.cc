@@ -36,7 +36,9 @@
 #include "colmap/util/logging.h"
 #include "colmap/util/threading.h"
 
+#include <algorithm>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace colmap {
@@ -153,6 +155,7 @@ void ReestimateRelativePoses(
     thread_pool.AddTask([&, i]() {
       auto& [pair_id, tvg] = pairs[i];
       const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+      const TwoViewGeometry prior_tvg = tvg;
 
       FeatureMatches matches;
       {
@@ -168,6 +171,7 @@ void ReestimateRelativePoses(
 
       tvg = EstimateCalibratedTwoViewGeometry(
           camera1, points1, camera2, points2, matches, two_view_options);
+      PreserveInlierLoopClosureProvenance(prior_tvg, &tvg);
     });
   }
   thread_pool.Wait();

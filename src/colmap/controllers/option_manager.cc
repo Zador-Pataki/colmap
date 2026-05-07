@@ -405,6 +405,8 @@ void OptionManager::AddSequentialPairingOptions() {
       &sequential_pairing->loop_detection_num_images_after_verification);
   AddDefaultOption("SequentialMatching.loop_detection_max_num_features",
                    &sequential_pairing->loop_detection_max_num_features);
+  AddDefaultOption("SequentialMatching.use_track_provenance",
+                   &sequential_pairing->use_track_provenance);
   AddDefaultOption("SequentialMatching.vocab_tree_path",
                    &sequential_pairing->vocab_tree_path);
   AddDefaultOption("SequentialMatching.num_threads",
@@ -733,6 +735,21 @@ void OptionManager::AddGlobalMapperOptions() {
   AddDefaultOption(
       "GlobalMapper.gp_loss_function_scale",
       &global_mapper->mapper.global_positioning.loss.scale);
+  AddDefaultOption(
+      "GlobalMapper.gp_use_lc_observations",
+      &global_mapper->mapper.global_positioning.use_lc_observations);
+  AddDefaultEnumOption(
+      "GlobalMapper.gp_lc_loss_type",
+      &global_mapper->mapper.global_positioning.loss_lc_geometry.type,
+      LossFunctionTypeToString,
+      LossFunctionTypeFromString,
+      "{TRIVIAL, SOFT_L1, CAUCHY, HUBER}");
+  AddDefaultOption(
+      "GlobalMapper.gp_lc_loss_scale",
+      &global_mapper->mapper.global_positioning.loss_lc_geometry.scale);
+  AddDefaultOption(
+      "GlobalMapper.gp_lc_loss_weight",
+      &global_mapper->mapper.global_positioning.loss_lc_geometry.weight);
   AddDefaultOption("GlobalMapper.gp_max_num_iterations",
                    &global_mapper->mapper.global_positioning.solver_options
                         .max_num_iterations);
@@ -791,6 +808,18 @@ void OptionManager::AddGlobalMapperOptions() {
   AddDefaultOption(
       "GlobalMapper.ra_max_rotation_error_deg",
       &global_mapper->mapper.rotation_averaging.max_rotation_error_deg);
+  AddDefaultOption(
+      "GlobalMapper.ra_skip_risky_lc_pairs",
+      &global_mapper->mapper.rotation_averaging.skip_risky_lc_pairs);
+  AddDefaultOption(
+      "GlobalMapper.ra_use_video_constraints",
+      &global_mapper->mapper.rotation_averaging.use_video_constraints);
+  AddDefaultOption(
+      "GlobalMapper.ra_video_tracking_huber_scale",
+      &global_mapper->mapper.rotation_averaging.video_tracking_huber_scale);
+  AddDefaultOption(
+      "GlobalMapper.ra_video_lc_cauchy_scale",
+      &global_mapper->mapper.rotation_averaging.video_lc_cauchy_scale);
 
   // Threshold options.
   AddDefaultOption("GlobalMapper.max_angular_reproj_error_deg",

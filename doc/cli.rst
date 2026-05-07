@@ -123,6 +123,45 @@ database::
         --image_path $DATASET_PATH/images \
         --output_path $DATASET_PATH/sparse
 
+For ordered image sequences, this branch can annotate an existing verified
+sequential-matcher database with track provenance before running global SfM.
+This is a separate database update, so feature extraction, matching, and
+geometric verification do not need to be recomputed::
+
+    $ colmap feature_extractor \
+       --database_path $DATASET_PATH/database.db \
+       --image_path $DATASET_PATH/images
+
+    $ colmap sequential_matcher \
+       --database_path $DATASET_PATH/database.db \
+       --SequentialMatching.use_track_provenance 0
+
+    # Work on a copy if you also want to keep the LC-free database.
+    $ cp $DATASET_PATH/database.db $DATASET_PATH/database_track_provenance.db
+
+    # Pass the same SequentialMatching options used for sequential_matcher.
+    $ colmap track_provenance \
+        --database_path $DATASET_PATH/database_track_provenance.db
+
+    $ mkdir -p $DATASET_PATH/sparse
+
+    $ colmap global_mapper \
+        --database_path $DATASET_PATH/database_track_provenance.db \
+        --image_path $DATASET_PATH/images \
+        --output_path $DATASET_PATH/sparse \
+        --GlobalMapper.track_lc_second_pass 1 \
+        --GlobalMapper.gp_use_lc_observations 1 \
+        --GlobalMapper.gp_lc_loss_type CAUCHY \
+        --GlobalMapper.gp_lc_loss_scale 1.0 \
+        --GlobalMapper.gp_lc_loss_weight 0.2
+
+The ``track_lc_second_pass`` option keeps LC matches out of the regular track
+union-find and adds them later as LC observations. The
+``gp_use_lc_observations`` option makes global positioning consume those LC
+observations, and ``gp_lc_loss_*`` controls their separate robust loss. The LC
+geometry loss values above mirror the first global-positioning pass in the
+VideoSfM config this logic was transferred from.
+
 If you want to run COLMAP on a computer without an attached display (e.g.,
 cluster or cloud service), COLMAP automatically switches to use CUDA if
 supported by your system. If no CUDA enabled device is available, you can
@@ -201,6 +240,7 @@ The available commands can be listed using the command::
           sequential_matcher
           spatial_matcher
           stereo_fusion
+          track_provenance
           transitive_matcher
           view_graph_calibrator
           vocab_tree_builder
