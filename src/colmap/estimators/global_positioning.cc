@@ -178,14 +178,27 @@ void GlobalPositioner::AddPointToCameraConstraints(
   }
   loss_function_ptcam_calibrated_ = loss_function_;
 
+  size_t num_regular_observations = 0;
+  size_t num_lc_observations = 0;
+  size_t num_trusted_lc_observations = 0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     if (point3D.track.Length() <
         static_cast<size_t>(options_.min_num_view_per_track)) {
       continue;
     }
 
+    num_regular_observations += point3D.track.Length();
+    if (options_.use_lc_observations) {
+      num_lc_observations += point3D.track.lc_elements.size();
+      num_trusted_lc_observations +=
+          point3D.track.trusted_lc_elements.size();
+    }
     AddPoint3DToProblem(point3D_id, reconstruction);
   }
+  LOG(INFO) << "GP observation routing: regular=" << num_regular_observations
+            << ", lc=" << num_lc_observations
+            << ", trusted_lc=" << num_trusted_lc_observations
+            << ", use_lc_observations=" << options_.use_lc_observations;
   VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
           << ", parameter blocks=" << problem_->NumParameterBlocks()
           << ", scales=" << scales_.size()

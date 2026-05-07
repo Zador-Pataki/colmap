@@ -36,7 +36,7 @@ void ValidateLoopClosureImagePairMetadata(
   }
 }
 
-void AddLoopClosureElementIfNew(Track& track,
+bool AddLoopClosureElementIfNew(Track& track,
                                 const image_t image_id,
                                 const point2D_t point2D_idx,
                                 const bool trusted) {
@@ -47,18 +47,20 @@ void AddLoopClosureElementIfNew(Track& track,
                               track.trusted_lc_elements.end(),
                               element);
   if (trusted_it != track.trusted_lc_elements.end()) {
-    return;
+    return false;
   }
   if (trusted) {
     if (normal_it != track.lc_elements.end()) {
       track.lc_elements.erase(normal_it);
     }
     track.trusted_lc_elements.emplace_back(element);
-    return;
+    return true;
   }
   if (normal_it == track.lc_elements.end()) {
     track.lc_elements.emplace_back(element);
+    return true;
   }
+  return false;
 }
 
 }  // namespace
@@ -273,6 +275,12 @@ void AppendLoopClosureObservations(
     }
   }
 
+  size_t num_lc_pairs = 0;
+  size_t num_trusted_lc_pairs = 0;
+  size_t num_lc_observations_added = 0;
+  size_t num_trusted_lc_observations_added = 0;
+  size_t num_lc_only_tracks_minted = 0;
+
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
     const bool trusted_pair = trusted_pair_ids.count(pair_id) > 0;
@@ -290,6 +298,10 @@ void AppendLoopClosureObservations(
       }
     }
     if (!has_lc) continue;
+    ++num_lc_pairs;
+    if (trusted_pair) {
+      ++num_trusted_lc_pairs;
+    }
 
     const image_t image_id1 = image_pair.image_id1;
     const image_t image_id2 = image_pair.image_id2;
@@ -316,11 +328,11 @@ void AppendLoopClosureObservations(
         const point3D_t tid_b = next_id++;
         Point3D track_a;
         track_a.track.AddElement(image_id1, p1);
-        AddLoopClosureElementIfNew(
+        const bool added_a = AddLoopClosureElementIfNew(
             track_a.track, image_id2, p2, trusted_pair);
         Point3D track_b;
         track_b.track.AddElement(image_id2, p2);
-        AddLoopClosureElementIfNew(
+        const bool added_b = AddLoopClosureElementIfNew(
             track_b.track, image_id1, p1, trusted_pair);
         const auto inserted_a = tracks.emplace(tid_a, std::move(track_a));
         THROW_CHECK(inserted_a.second)
@@ -334,6 +346,14 @@ void AppendLoopClosureObservations(
         obs_to_track[key2] = tid_b;
         regular_observations.insert(key1);
         regular_observations.insert(key2);
+        num_lc_only_tracks_minted += 2;
+        if (trusted_pair) {
+          num_trusted_lc_observations_added += added_a ? 1 : 0;
+          num_trusted_lc_observations_added += added_b ? 1 : 0;
+        } else {
+          num_lc_observations_added += added_a ? 1 : 0;
+          num_lc_observations_added += added_b ? 1 : 0;
+        }
         continue;
       }
       if (has_track1 && has_track2) {
@@ -341,26 +361,49 @@ void AppendLoopClosureObservations(
         const point3D_t t2 = it2->second;
         if (t1 != t2 && regular_observations.count(key1) > 0 &&
             regular_observations.count(key2) > 0) {
-          AddLoopClosureElementIfNew(
+          const bool added_1 = AddLoopClosureElementIfNew(
               tracks.at(t1).track, image_id2, p2, trusted_pair);
-          AddLoopClosureElementIfNew(
+          const bool added_2 = AddLoopClosureElementIfNew(
               tracks.at(t2).track, image_id1, p1, trusted_pair);
+          if (trusted_pair) {
+            num_trusted_lc_observations_added += added_1 ? 1 : 0;
+            num_trusted_lc_observations_added += added_2 ? 1 : 0;
+          } else {
+            num_lc_observations_added += added_1 ? 1 : 0;
+            num_lc_observations_added += added_2 ? 1 : 0;
+          }
         }
         continue;
       }
       if (has_track1 && regular_observations.count(key1) > 0) {
         const point3D_t track_id = it1->second;
-        AddLoopClosureElementIfNew(
+        const bool added = AddLoopClosureElementIfNew(
             tracks.at(track_id).track, image_id2, p2, trusted_pair);
+        if (trusted_pair) {
+          num_trusted_lc_observations_added += added ? 1 : 0;
+        } else {
+          num_lc_observations_added += added ? 1 : 0;
+        }
         obs_to_track[key2] = track_id;
       } else if (has_track2 && regular_observations.count(key2) > 0) {
         const point3D_t track_id = it2->second;
-        AddLoopClosureElementIfNew(
+        const bool added = AddLoopClosureElementIfNew(
             tracks.at(track_id).track, image_id1, p1, trusted_pair);
+        if (trusted_pair) {
+          num_trusted_lc_observations_added += added ? 1 : 0;
+        } else {
+          num_lc_observations_added += added ? 1 : 0;
+        }
         obs_to_track[key1] = track_id;
       }
     }
   }
+  LOG(INFO) << "LC append: pairs_with_lc=" << num_lc_pairs
+            << ", trusted_pairs_with_lc=" << num_trusted_lc_pairs
+            << ", lc_observations_added=" << num_lc_observations_added
+            << ", trusted_lc_observations_added="
+            << num_trusted_lc_observations_added
+            << ", lc_only_tracks_minted=" << num_lc_only_tracks_minted;
 }
 
 std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
