@@ -84,6 +84,7 @@ colmap global_mapper \
     --image_path "$DATASET_PATH/images" \
     --output_path "$DATASET_PATH/sparse" \
     --GlobalMapper.track_lc_second_pass 1 \
+    --GlobalMapper.track_trusted_lc_pairs_path "$DATASET_PATH/trusted_lc_pairs.txt" \
     --GlobalMapper.gp_use_lc_observations 1 \
     --GlobalMapper.gp_lc_loss_type CAUCHY \
     --GlobalMapper.gp_lc_loss_scale 1.0 \
@@ -99,10 +100,29 @@ adds them later as LC observations. `gp_use_lc_observations` makes global
 positioning consume those LC observations, and `gp_lc_loss_*` sets their
 separate robust loss. The LC geometry loss values above mirror the first
 global-positioning pass in the VideoSfM config this logic was transferred from.
-To treat specific trusted LC image pairs as regular-weight geometry in global
-positioning while still keeping them out of track union-find, pass a text file
-with one `image_id1 image_id2` pair per line via
-`--GlobalMapper.track_trusted_lc_pairs_path`.
+
+Trusted LC pairs are optional. Use them only when you know that specific
+loop-closure image pairs are reliable enough to receive the regular/non-LC
+global-positioning loss. They still stay out of regular track union-find, but
+their LC observations are routed through the normal GP geometry loss instead of
+`gp_lc_loss_*`.
+
+Create a trusted-pair file with database image ids, one pair per line. Lines may
+contain comments after `#`:
+
+```text
+# image_id1 image_id2
+12 481
+18 506  # manually verified LC
+```
+
+Then pass it with:
+
+```bash
+--GlobalMapper.track_trusted_lc_pairs_path "$DATASET_PATH/trusted_lc_pairs.txt"
+```
+
+If no pairs are trusted, omit the option.
 
 Documentation
 -------------
