@@ -5,11 +5,15 @@
 #include "colmap/sfm/incremental_mapper.h"
 #include "colmap/sfm/observation_manager.h"
 #include "colmap/sfm/track_establishment.h"
+#include "colmap/util/file.h"
 #include "colmap/util/logging.h"
 #include "colmap/util/misc.h"
+#include "colmap/util/string.h"
 #include "colmap/util/timer.h"
 
 #include <algorithm>
+#include <string>
+#include <unordered_set>
 
 namespace colmap {
 namespace {
@@ -52,6 +56,52 @@ GlobalMapperOptions InitializeOptions(const GlobalMapperOptions& options) {
     opts.bundle_adjustment.ceres->solver_options.num_threads = opts.num_threads;
   }
   return opts;
+}
+
+std::unordered_set<image_pair_t> ReadTrustedLoopClosurePairs(
+    const std::filesystem::path& path) {
+  std::unordered_set<image_pair_t> pair_ids;
+  if (path.empty()) {
+    return pair_ids;
+  }
+  const auto parse_image_id = [](const std::string& token,
+                                 const std::string& line) -> image_t {
+    size_t parsed_chars = 0;
+    uint64_t image_id = 0;
+    try {
+      image_id = std::stoull(token, &parsed_chars);
+    } catch (const std::exception& e) {
+      LOG(FATAL) << "Invalid image id '" << token
+                 << "' in trusted LC pair line '" << line << "': "
+                 << e.what();
+    }
+    THROW_CHECK_EQ(parsed_chars, token.size())
+        << "Invalid image id '" << token << "' in trusted LC pair line '"
+        << line << "'";
+    THROW_CHECK_LT(image_id, static_cast<uint64_t>(kMaxNumImages))
+        << "Image id out of range in trusted LC pair line '" << line << "'";
+    return static_cast<image_t>(image_id);
+  };
+  for (std::string line : ReadTextFileLines(path)) {
+    const size_t comment_pos = line.find('#');
+    if (comment_pos != std::string::npos) {
+      line = line.substr(0, comment_pos);
+    }
+    StringTrim(&line);
+    if (line.empty()) {
+      continue;
+    }
+    const std::vector<std::string> elems = StringSplit(line, " \t,");
+    THROW_CHECK_EQ(elems.size(), 2)
+        << "Each trusted LC pair line must contain two image ids: " << line;
+    const image_t image_id1 = parse_image_id(elems[0], line);
+    const image_t image_id2 = parse_image_id(elems[1], line);
+    THROW_CHECK_NE(image_id1, image_id2)
+        << "Trusted LC pair cannot repeat the same image id: " << line;
+    pair_ids.insert(ImagePairToPairId(image_id1, image_id2));
+  }
+  LOG(INFO) << "Read " << pair_ids.size() << " trusted LC pairs from " << path;
+  return pair_ids;
 }
 
 }  // namespace
@@ -150,9 +200,12 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   }
 
   MatchPredicate ignore_match;
+  std::unordered_set<image_pair_t> trusted_lc_pair_ids;
   if (options.track_lc_second_pass) {
     ignore_match = MakeLoopClosureMatchPredicate(
         valid_pair_ids, *database_cache_->CorrespondenceGraph());
+    trusted_lc_pair_ids =
+        ReadTrustedLoopClosurePairs(options.track_trusted_lc_pairs_path);
   }
   auto selected =
       EstablishTracksFromCorrGraph(valid_pair_ids,
@@ -162,7 +215,10 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
                                    ignore_match);
   if (options.track_lc_second_pass) {
     AppendLoopClosureObservations(
-        valid_pair_ids, *database_cache_->CorrespondenceGraph(), selected);
+        valid_pair_ids,
+        *database_cache_->CorrespondenceGraph(),
+        selected,
+        trusted_lc_pair_ids);
   }
   for (auto& [point3D_id, point3D] : selected) {
     reconstruction_->AddPoint3D(point3D_id, std::move(point3D));

@@ -42,7 +42,9 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                                 py::dict images_py,
                                 const TrackEstablishmentOptions& options,
                                 bool lc_second_pass,
-                                CorrespondenceGraph* lc_correspondence_graph) {
+                                CorrespondenceGraph* lc_correspondence_graph,
+                                const std::unordered_set<image_pair_t>&
+                                    trusted_lc_pair_ids) {
   std::unordered_map<image_t, Image> images;
   images.reserve(images_py.size());
   for (auto item : images_py) {
@@ -82,7 +84,8 @@ py::dict RunEstablishFullTracks(CorrespondenceGraph& correspondence_graph,
                                        ? *lc_correspondence_graph
                                        : correspondence_graph;
       const std::vector<image_pair_t> lc_pair_ids = CollectValidPairIds(lc_cg);
-      AppendLoopClosureObservations(lc_pair_ids, lc_cg, tracks);
+      AppendLoopClosureObservations(
+          lc_pair_ids, lc_cg, tracks, trusted_lc_pair_ids);
     }
   }
 
@@ -153,10 +156,12 @@ void BindTrackEstablishment(py::module& m) {
         "options"_a,
         "lc_second_pass"_a = false,
         "lc_correspondence_graph"_a = nullptr,
+        "trusted_lc_pair_ids"_a = std::unordered_set<image_pair_t>(),
         "Build tracks from a CorrespondenceGraph + dict-of-images via "
         "the union-find helper. When ``lc_second_pass=True``, "
         "AppendLoopClosureObservations runs after to populate "
-        "``Track::lc_elements`` from inliers flagged "
+        "``Track::lc_elements`` or ``Track::trusted_lc_elements`` from inliers "
+        "flagged "
         "``ImagePair::are_lc==true`` in ``lc_correspondence_graph`` "
         "(falls back to ``correspondence_graph`` if not provided).");
 

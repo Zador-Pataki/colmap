@@ -142,6 +142,8 @@ TEST(OptionManager, WriteAndRead) {
   options_write.sequential_pairing->use_track_provenance = true;
   options_write.mapper->min_num_matches = 20;
   options_write.global_mapper->mapper.track_lc_second_pass = true;
+  options_write.global_mapper->mapper.track_trusted_lc_pairs_path =
+      test_dir / "trusted_lc_pairs.txt";
   options_write.global_mapper->mapper.global_positioning.use_lc_observations =
       true;
   options_write.global_mapper->mapper.global_positioning.loss_lc_geometry.type =
@@ -184,6 +186,8 @@ TEST(OptionManager, WriteAndRead) {
             options_write.mapper->min_num_matches);
   EXPECT_EQ(options_read.global_mapper->mapper.track_lc_second_pass,
             options_write.global_mapper->mapper.track_lc_second_pass);
+  EXPECT_EQ(options_read.global_mapper->mapper.track_trusted_lc_pairs_path,
+            options_write.global_mapper->mapper.track_trusted_lc_pairs_path);
   EXPECT_EQ(
       options_read.global_mapper->mapper.global_positioning.use_lc_observations,
       options_write.global_mapper->mapper.global_positioning

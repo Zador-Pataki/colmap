@@ -89,6 +89,11 @@ class Track {
   // elements_ list; same (image_id, point2D_idx) value type as TrackElement).
   std::vector<TrackElement> lc_elements;
 
+  // LC elements from explicitly trusted image pairs. They are still excluded
+  // from regular track union-find, but global positioning routes them through
+  // the regular geometry loss.
+  std::vector<TrackElement> trusted_lc_elements;
+
  private:
   std::vector<TrackElement> elements_;
 };

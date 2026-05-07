@@ -102,6 +102,7 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     total_observations += point3D.track.Length();
     total_observations += point3D.track.lc_elements.size();
+    total_observations += point3D.track.trusted_lc_elements.size();
   }
   scales_.reserve(total_observations);
 }
@@ -129,6 +130,12 @@ void GlobalPositioner::InitializeRandomPositions(
     }
     if (options_.use_lc_observations) {
       for (const auto& observation : point3D.track.lc_elements) {
+        if (!reconstruction.ExistsImage(observation.image_id)) continue;
+        const Image& image = reconstruction.Image(observation.image_id);
+        if (!image.HasPose()) continue;
+        constrained_positions.insert(image.FrameId());
+      }
+      for (const auto& observation : point3D.track.trusted_lc_elements) {
         if (!reconstruction.ExistsImage(observation.image_id)) continue;
         const Image& image = reconstruction.Image(observation.image_id);
         if (!image.HasPose()) continue;
@@ -211,6 +218,13 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                               random_initialization,
                               reconstruction,
                               /*is_lc_observation=*/true);
+    }
+    for (const auto& observation : point3D.track.trusted_lc_elements) {
+      AddObservationToProblem(point3D_id,
+                              observation,
+                              random_initialization,
+                              reconstruction,
+                              /*is_lc_observation=*/false);
     }
   }
 }

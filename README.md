@@ -99,6 +99,10 @@ adds them later as LC observations. `gp_use_lc_observations` makes global
 positioning consume those LC observations, and `gp_lc_loss_*` sets their
 separate robust loss. The LC geometry loss values above mirror the first
 global-positioning pass in the VideoSfM config this logic was transferred from.
+To treat specific trusted LC image pairs as regular-weight geometry in global
+positioning while still keeping them out of track union-find, pass a text file
+with one `image_id1 image_id2` pair per line via
+`--GlobalMapper.track_trusted_lc_pairs_path`.
 
 Documentation
 -------------

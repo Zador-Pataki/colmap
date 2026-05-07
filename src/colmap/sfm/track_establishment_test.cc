@@ -268,6 +268,38 @@ TEST(FindTracksForProblem, LcOnlyTrackDoesNotSatisfyMinViews) {
   EXPECT_TRUE(selected.empty());
 }
 
+TEST(FindTracksForProblem, TrustedLcOnlyTrackDoesNotSatisfyMinViews) {
+  std::unordered_map<image_t, Image> images;
+  images.emplace(1, MakeImage(1, 5));
+  images.emplace(2, MakeImage(2, 5));
+  images.emplace(3, MakeImage(3, 5));
+
+  Point3D short_point3D;
+  short_point3D.track.AddElement(1, 0);
+  short_point3D.track.trusted_lc_elements.emplace_back(2, 0);
+
+  Point3D valid_point3D;
+  valid_point3D.track.AddElement(1, 1);
+  valid_point3D.track.AddElement(2, 1);
+  valid_point3D.track.trusted_lc_elements.emplace_back(3, 1);
+
+  std::unordered_map<point3D_t, Point3D> tracks_full;
+  tracks_full.emplace(0, std::move(short_point3D));
+  tracks_full.emplace(1, std::move(valid_point3D));
+
+  const auto reg_ids = MakeImageIds(images);
+
+  TrackProblemFilterOptions options;
+  options.min_num_views_per_track = 2;
+  const auto selected = FilterTracksForProblem(options, reg_ids, tracks_full);
+
+  ASSERT_EQ(selected.size(), 1u);
+  ASSERT_TRUE(selected.count(1));
+  const auto& trusted_lc = selected.at(1).track.trusted_lc_elements;
+  EXPECT_NE(std::find(trusted_lc.begin(), trusted_lc.end(), TrackElement(3, 1)),
+            trusted_lc.end());
+}
+
 // MaxLengthFilter: tracks of length 5 dropped when max=4.
 //
 // Drives FilterTracksForProblem.
@@ -349,6 +381,16 @@ bool TrackHasLCElement(const Track& track,
   return false;
 }
 
+// Helper: track contains (image_id, p2d_idx) as a trusted LC element.
+bool TrackHasTrustedLCElement(const Track& track,
+                              image_t image_id,
+                              point2D_t p2d_idx) {
+  for (const auto& el : track.trusted_lc_elements) {
+    if (el.image_id == image_id && el.point2D_idx == p2d_idx) return true;
+  }
+  return false;
+}
+
 // Populate an LC-only ImagePair directly (no AddTwoViewGeometry). Use for
 // tests that call AppendLoopClosureObservations in isolation.
 void AddLCOnlyPair(CorrespondenceGraph& corr_graph,
@@ -375,14 +417,15 @@ void AddLCOnlyPair(CorrespondenceGraph& corr_graph,
 std::unordered_map<point3D_t, Point3D> EstablishFullTracks(
     const CorrespondenceGraph& corr_graph,
     const std::unordered_map<image_t, std::vector<Eigen::Vector2d>>& keypoints,
-    const TrackEstablishmentOptions& options) {
+    const TrackEstablishmentOptions& options,
+    const std::unordered_set<image_pair_t>& trusted_pair_ids = {}) {
   const auto pair_ids = CollectPairIds(corr_graph);
   auto ignore_match = MakeLoopClosureMatchPredicate(pair_ids, corr_graph);
   TrackEstablishmentOptions opts = options;
   opts.required_tracks_per_view = std::numeric_limits<int>::max();
   auto tracks = EstablishTracksFromCorrGraph(
       pair_ids, corr_graph, keypoints, opts, ignore_match);
-  AppendLoopClosureObservations(pair_ids, corr_graph, tracks);
+  AppendLoopClosureObservations(pair_ids, corr_graph, tracks, trusted_pair_ids);
   return tracks;
 }
 
@@ -424,6 +467,39 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   // Not regular elements.
   EXPECT_FALSE(TrackHasElement(tracks.at(0).track, 2, 1));
   EXPECT_FALSE(TrackHasElement(tracks.at(1).track, 1, 0));
+}
+
+TEST(ProcessLoopClosurePairs, TrustedPairStaysOutOfUnionFind) {
+  CorrespondenceGraph corr_graph;
+  corr_graph.AddImage(1, 5);
+  corr_graph.AddImage(2, 5);
+
+  AddLCOnlyPair(corr_graph, 1, 2, {{0, 1}}, {0});
+
+  std::unordered_map<point3D_t, Point3D> tracks;
+  {
+    Point3D p;
+    p.track.AddElement(1, 0);
+    p.track.AddElement(3, 0);
+    tracks.emplace(0, std::move(p));
+  }
+  {
+    Point3D p;
+    p.track.AddElement(2, 1);
+    p.track.AddElement(3, 1);
+    tracks.emplace(1, std::move(p));
+  }
+
+  const image_pair_t pair_id = ImagePairToPairId(1, 2);
+  AppendLoopClosureObservations({pair_id}, corr_graph, tracks, {pair_id});
+
+  EXPECT_EQ(tracks.size(), 2u);
+  EXPECT_FALSE(TrackHasElement(tracks.at(0).track, 2, 1));
+  EXPECT_FALSE(TrackHasElement(tracks.at(1).track, 1, 0));
+  EXPECT_FALSE(TrackHasLCElement(tracks.at(0).track, 2, 1));
+  EXPECT_FALSE(TrackHasLCElement(tracks.at(1).track, 1, 0));
+  EXPECT_TRUE(TrackHasTrustedLCElement(tracks.at(0).track, 2, 1));
+  EXPECT_TRUE(TrackHasTrustedLCElement(tracks.at(1).track, 1, 0));
 }
 
 // Exactly one LC endpoint lies on an existing track; the other is orphan.
@@ -683,6 +759,33 @@ TEST(ProcessLoopClosurePairs, NonLcMatchSharingLcEndpointStillBuildsTrack) {
     if (TrackHasElement(p3d.track, 1, 0) && TrackHasElement(p3d.track, 3, 0)) {
       found_regular_track = true;
       EXPECT_TRUE(TrackHasLCElement(p3d.track, 2, 0));
+    }
+  }
+  EXPECT_TRUE(found_regular_track);
+}
+
+TEST(ProcessLoopClosurePairs, TrustedPairEndToEndStillSkipsUnionFind) {
+  CorrespondenceGraph corr_graph;
+  for (image_t i = 1; i <= 3; ++i) corr_graph.AddImage(i, 1);
+
+  AddImagePairWithLC(corr_graph, 1, 2, {{0, 0}}, {0}, {0});
+  AddImagePairWithLC(corr_graph, 1, 3, {{0, 0}}, {0}, {});
+
+  const auto kps = MakeWellSeparatedKeypoints({1, 2, 3}, 1);
+  TrackEstablishmentOptions opts;
+  opts.min_num_views_per_track = 1;
+  const image_pair_t trusted_pair_id = ImagePairToPairId(1, 2);
+  const auto tracks =
+      EstablishFullTracks(corr_graph, kps, opts, {trusted_pair_id});
+
+  EXPECT_EQ(tracks.size(), 1u);
+  bool found_regular_track = false;
+  for (const auto& [tid, p3d] : tracks) {
+    if (TrackHasElement(p3d.track, 1, 0) && TrackHasElement(p3d.track, 3, 0)) {
+      found_regular_track = true;
+      EXPECT_FALSE(TrackHasElement(p3d.track, 2, 0));
+      EXPECT_FALSE(TrackHasLCElement(p3d.track, 2, 0));
+      EXPECT_TRUE(TrackHasTrustedLCElement(p3d.track, 2, 0));
     }
   }
   EXPECT_TRUE(found_regular_track);

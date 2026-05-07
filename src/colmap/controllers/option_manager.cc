@@ -719,6 +719,8 @@ void OptionManager::AddGlobalMapperOptions() {
                    &global_mapper->mapper.track_min_num_views_per_track);
   AddDefaultOption("GlobalMapper.track_lc_second_pass",
                    &global_mapper->mapper.track_lc_second_pass);
+  AddDefaultOption("GlobalMapper.track_trusted_lc_pairs_path",
+                   &global_mapper->mapper.track_trusted_lc_pairs_path);
 
   // Global positioning options.
   AddDefaultOption("GlobalMapper.gp_use_gpu",

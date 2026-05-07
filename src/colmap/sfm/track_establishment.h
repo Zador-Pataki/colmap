@@ -60,7 +60,8 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
 void AppendLoopClosureObservations(
     const std::vector<image_pair_t>& valid_pair_ids,
     const CorrespondenceGraph& corr_graph,
-    std::unordered_map<point3D_t, Point3D>& tracks);
+    std::unordered_map<point3D_t, Point3D>& tracks,
+    const std::unordered_set<image_pair_t>& trusted_pair_ids = {});
 
 struct TrackProblemFilterOptions {
   int min_num_views_per_track = 3;

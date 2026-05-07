@@ -38,10 +38,25 @@ void ValidateLoopClosureImagePairMetadata(
 
 void AddLoopClosureElementIfNew(Track& track,
                                 const image_t image_id,
-                                const point2D_t point2D_idx) {
+                                const point2D_t point2D_idx,
+                                const bool trusted) {
   const TrackElement element(image_id, point2D_idx);
-  if (std::find(track.lc_elements.begin(), track.lc_elements.end(), element) ==
-      track.lc_elements.end()) {
+  auto normal_it =
+      std::find(track.lc_elements.begin(), track.lc_elements.end(), element);
+  auto trusted_it = std::find(track.trusted_lc_elements.begin(),
+                              track.trusted_lc_elements.end(),
+                              element);
+  if (trusted_it != track.trusted_lc_elements.end()) {
+    return;
+  }
+  if (trusted) {
+    if (normal_it != track.lc_elements.end()) {
+      track.lc_elements.erase(normal_it);
+    }
+    track.trusted_lc_elements.emplace_back(element);
+    return;
+  }
+  if (normal_it == track.lc_elements.end()) {
     track.lc_elements.emplace_back(element);
   }
 }
@@ -240,7 +255,8 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
 void AppendLoopClosureObservations(
     const std::vector<image_pair_t>& valid_pair_ids,
     const CorrespondenceGraph& corr_graph,
-    std::unordered_map<point3D_t, Point3D>& tracks) {
+    std::unordered_map<point3D_t, Point3D>& tracks,
+    const std::unordered_set<image_pair_t>& trusted_pair_ids) {
   // Build the lookup from observation -> track_id, and find the next
   // free track id (max + 1) so newly-minted LC-only tracks never
   // collide with the dense [0, N) ids written by
@@ -259,6 +275,7 @@ void AppendLoopClosureObservations(
 
   for (const image_pair_t pair_id : valid_pair_ids) {
     const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
+    const bool trusted_pair = trusted_pair_ids.count(pair_id) > 0;
     ValidateLoopClosureImagePairMetadata(pair_id, image_pair);
     const Eigen::MatrixXi& matches = image_pair.matches;
     const std::vector<int>& inliers = image_pair.inliers;
@@ -299,10 +316,12 @@ void AppendLoopClosureObservations(
         const point3D_t tid_b = next_id++;
         Point3D track_a;
         track_a.track.AddElement(image_id1, p1);
-        track_a.track.lc_elements.emplace_back(image_id2, p2);
+        AddLoopClosureElementIfNew(
+            track_a.track, image_id2, p2, trusted_pair);
         Point3D track_b;
         track_b.track.AddElement(image_id2, p2);
-        track_b.track.lc_elements.emplace_back(image_id1, p1);
+        AddLoopClosureElementIfNew(
+            track_b.track, image_id1, p1, trusted_pair);
         const auto inserted_a = tracks.emplace(tid_a, std::move(track_a));
         THROW_CHECK(inserted_a.second)
             << "Track id collision on " << tid_a
@@ -322,18 +341,22 @@ void AppendLoopClosureObservations(
         const point3D_t t2 = it2->second;
         if (t1 != t2 && regular_observations.count(key1) > 0 &&
             regular_observations.count(key2) > 0) {
-          AddLoopClosureElementIfNew(tracks.at(t1).track, image_id2, p2);
-          AddLoopClosureElementIfNew(tracks.at(t2).track, image_id1, p1);
+          AddLoopClosureElementIfNew(
+              tracks.at(t1).track, image_id2, p2, trusted_pair);
+          AddLoopClosureElementIfNew(
+              tracks.at(t2).track, image_id1, p1, trusted_pair);
         }
         continue;
       }
       if (has_track1 && regular_observations.count(key1) > 0) {
         const point3D_t track_id = it1->second;
-        AddLoopClosureElementIfNew(tracks.at(track_id).track, image_id2, p2);
+        AddLoopClosureElementIfNew(
+            tracks.at(track_id).track, image_id2, p2, trusted_pair);
         obs_to_track[key2] = track_id;
       } else if (has_track2 && regular_observations.count(key2) > 0) {
         const point3D_t track_id = it2->second;
-        AddLoopClosureElementIfNew(tracks.at(track_id).track, image_id1, p1);
+        AddLoopClosureElementIfNew(
+            tracks.at(track_id).track, image_id1, p1, trusted_pair);
         obs_to_track[key1] = track_id;
       }
     }
@@ -381,6 +404,10 @@ std::unordered_map<point3D_t, Point3D> FilterTracksForProblem(
     for (const auto& lc_el : src.track.lc_elements) {
       if (registered_image_id_set.count(lc_el.image_id) == 0) continue;
       candidate.track.lc_elements.emplace_back(lc_el);
+    }
+    for (const auto& lc_el : src.track.trusted_lc_elements) {
+      if (registered_image_id_set.count(lc_el.image_id) == 0) continue;
+      candidate.track.trusted_lc_elements.emplace_back(lc_el);
     }
     if (candidate.track.Length() <
         static_cast<size_t>(options.min_num_views_per_track)) {

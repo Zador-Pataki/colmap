@@ -68,6 +68,10 @@ struct GlobalMapperOptions {
   int track_min_num_views_per_track = 3;
   // Append LC observations to tracks after establishment.
   bool track_lc_second_pass = false;
+  // Optional text file of trusted LC image-id pairs. Each line: "image_id1
+  // image_id2". Trusted LC pairs stay out of track union-find, but their LC
+  // observations use the regular global-positioning geometry loss.
+  std::filesystem::path track_trusted_lc_pairs_path;
 
   // Thresholds for each component.
   double max_angular_reproj_error_deg = 1.;   // for global positioning
