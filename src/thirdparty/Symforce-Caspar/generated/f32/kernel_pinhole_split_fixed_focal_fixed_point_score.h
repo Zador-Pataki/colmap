@@ -14,6 +14,8 @@ void PinholeSplitFixedFocalFixedPointScore(
     SharedIndex* principal_point_indices,
     float* pixel,
     unsigned int pixel_num_alloc,
+    float* weight_loss,
+    unsigned int weight_loss_num_alloc,
     float* focal,
     unsigned int focal_num_alloc,
     float* point,

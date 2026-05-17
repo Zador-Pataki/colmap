@@ -17,6 +17,8 @@ void PinholeSplitFixedPrincipalPointScore(
     SharedIndex* point_indices,
     double* pixel,
     unsigned int pixel_num_alloc,
+    double* weight_loss,
+    unsigned int weight_loss_num_alloc,
     double* principal_point,
     unsigned int principal_point_num_alloc,
     double* const out_rTr,

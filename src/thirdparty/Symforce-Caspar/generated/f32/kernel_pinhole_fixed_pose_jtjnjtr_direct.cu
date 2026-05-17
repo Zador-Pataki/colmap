@@ -41,7 +41,13 @@ __global__ void __launch_bounds__(1024, 1)
            ? point_njtr_indices[global_thread_idx]
            : SharedIndex{0xffffffff, 0xffff, 0xffff});
 
-  float r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12;
+  float r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
+      r16, r17, r18;
+
+  if (global_thread_idx < problem_size) {
+    ReadIdx4<1024, float, float, float4>(
+        calib_jac, 0 * calib_jac_num_alloc, global_thread_idx, r0, r1, r2, r3);
+  };
   LoadShared<3, float, float>(point_njtr,
                               0 * point_njtr_num_alloc,
                               point_njtr_indices_loc,
@@ -49,25 +55,37 @@ __global__ void __launch_bounds__(1024, 1)
   if (global_thread_idx < problem_size) {
     ReadShared3<float>((float*)inout_shared,
                        point_njtr_indices_loc[threadIdx.x].target,
-                       r0,
-                       r1,
-                       r2);
+                       r4,
+                       r5,
+                       r6);
   };
   __syncthreads();
   if (global_thread_idx < problem_size) {
     ReadIdx2<1024, float, float, float2>(
-        point_jac, 4 * point_jac_num_alloc, global_thread_idx, r3, r4);
-    ReadIdx4<1024, float, float, float4>(
-        point_jac, 0 * point_jac_num_alloc, global_thread_idx, r5, r6, r7, r8);
-    r9 = fmaf(r1, r7, r2 * r3);
-    r9 = fmaf(r0, r5, r9);
-    ReadIdx2<1024, float, float, float2>(
-        calib_jac, 0 * calib_jac_num_alloc, global_thread_idx, r10, r11);
-    r12 = r10 * r9;
-    r1 = fmaf(r1, r8, r2 * r4);
-    r1 = fmaf(r0, r6, r1);
-    r0 = r11 * r1;
-    WriteSum4<float, float>((float*)inout_shared, r12, r0, r9, r1);
+        point_jac, 4 * point_jac_num_alloc, global_thread_idx, r7, r8);
+    ReadIdx4<1024, float, float, float4>(point_jac,
+                                         0 * point_jac_num_alloc,
+                                         global_thread_idx,
+                                         r9,
+                                         r10,
+                                         r11,
+                                         r12);
+    r13 = fmaf(r5, r12, r6 * r8);
+    r13 = fmaf(r4, r10, r13);
+    r5 = fmaf(r5, r11, r6 * r7);
+    r5 = fmaf(r4, r9, r5);
+    r4 = fmaf(r0, r5, r1 * r13);
+    r6 = fmaf(r2, r5, r3 * r13);
+    ReadIdx4<1024, float, float, float4>(calib_jac,
+                                         4 * calib_jac_num_alloc,
+                                         global_thread_idx,
+                                         r14,
+                                         r15,
+                                         r16,
+                                         r17);
+    r18 = fmaf(r14, r5, r15 * r13);
+    r5 = fmaf(r16, r5, r17 * r13);
+    WriteSum4<float, float>((float*)inout_shared, r4, r6, r18, r5);
   };
   FlushSumShared<4, float>(out_calib_njtr,
                            0 * out_calib_njtr_num_alloc,
@@ -80,19 +98,23 @@ __global__ void __launch_bounds__(1024, 1)
   if (global_thread_idx < problem_size) {
     ReadShared4<float>((float*)inout_shared,
                        calib_njtr_indices_loc[threadIdx.x].target,
-                       r1,
-                       r9,
-                       r0,
-                       r12);
+                       r5,
+                       r18,
+                       r6,
+                       r4);
   };
   __syncthreads();
   if (global_thread_idx < problem_size) {
-    r10 = fmaf(r1, r10, r0);
-    r11 = fmaf(r9, r11, r12);
-    r6 = fmaf(r6, r11, r5 * r10);
-    r8 = fmaf(r8, r11, r7 * r10);
-    r11 = fmaf(r4, r11, r3 * r10);
-    WriteSum3<float, float>((float*)inout_shared, r6, r8, r11);
+    r15 = fmaf(r6, r15, r4 * r17);
+    r15 = fmaf(r5, r1, r15);
+    r15 = fmaf(r18, r3, r15);
+    r16 = fmaf(r4, r16, r6 * r14);
+    r16 = fmaf(r5, r0, r16);
+    r16 = fmaf(r18, r2, r16);
+    r9 = fmaf(r9, r16, r10 * r15);
+    r11 = fmaf(r11, r16, r12 * r15);
+    r16 = fmaf(r7, r16, r8 * r15);
+    WriteSum3<float, float>((float*)inout_shared, r9, r11, r16);
   };
   FlushSumShared<3, float>(out_point_njtr,
                            0 * out_point_njtr_num_alloc,

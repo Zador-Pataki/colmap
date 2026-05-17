@@ -53,6 +53,8 @@ if(CASPAR_ENABLED)
     list(APPEND ESTIMATORS_SRCS
         bundle_adjustment_caspar.h
         bundle_adjustment_caspar.cc
+        mpsfm_bundle_adjustment_caspar.h
+        mpsfm_bundle_adjustment_caspar.cc
     )
 endif()
 
@@ -102,6 +104,11 @@ if(CASPAR_ENABLED)
     COLMAP_ADD_TEST(
         NAME bundle_adjustment_caspar_test
         SRCS bundle_adjustment_caspar_test.cc
+        LINK_LIBS colmap_estimators
+    )
+    COLMAP_ADD_TEST(
+        NAME mpsfm_bundle_adjustment_caspar_test
+        SRCS mpsfm_bundle_adjustment_caspar_test.cc
         LINK_LIBS colmap_estimators
     )
 endif()

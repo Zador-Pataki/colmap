@@ -11,6 +11,8 @@ void PinholeSplitFixedFocalFixedPrincipalPointFixedPointResJacFirst(
     SharedIndex* pose_indices,
     double* pixel,
     unsigned int pixel_num_alloc,
+    double* weight_loss,
+    unsigned int weight_loss_num_alloc,
     double* focal,
     unsigned int focal_num_alloc,
     double* principal_point,

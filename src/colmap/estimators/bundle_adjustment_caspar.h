@@ -33,6 +33,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <vector>
 #ifdef CASPAR_ENABLED
 #ifdef CASPAR_USE_DOUBLE
@@ -86,6 +87,7 @@ struct VariantData {
   std::vector<StorageType> const_points;  // 3 floats per factor
 
   std::vector<StorageType> pixels;  // 2 floats per factor
+  std::vector<StorageType> weight_loss;  // 7 floats per PINHOLE factor
   size_t num_factors = 0;
 };
 
@@ -129,6 +131,12 @@ std::unique_ptr<BundleAdjuster> CreateDefaultCasparBundleAdjuster(
 struct CasparBundleAdjustmentSummary : public BundleAdjustmentSummary {
   static std::shared_ptr<CasparBundleAdjustmentSummary> Create(
       const caspar::SolveResult& caspar_summary);
+
+  double initial_score = 0.0;
+  double final_score = 0.0;
+  int iteration_count = 0;
+  double solve_time = 0.0;
+  std::string exit_reason = "";
 };
 #endif
 }  // namespace colmap

@@ -34,8 +34,9 @@ COLMAP_ADD_LIBRARY(
     TYPE INTERFACE
     SRCS
         alignment.h
-        calibration.h
-        manifold.h
+    calibration.h
+    depth_prior.h
+    manifold.h
         motion_averaging.h
         pose_prior.h
         reprojection_error.h

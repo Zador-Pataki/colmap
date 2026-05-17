@@ -19,6 +19,8 @@ struct CasparSolverSizing {
   // Pose pools are per-model to prevent cross-model factor batching.
   size_t num_simple_radial_poses = 0;
   size_t num_pinhole_poses = 0;
+  size_t num_pinhole_translations = 0;
+  size_t num_depth_scales = 0;
   size_t num_points = 0;
 
   // SimpleRadial: num_calibs is shared by the merged Calib pool and the split
@@ -57,6 +59,24 @@ struct CasparSolverSizing {
   size_t num_pinhole_fixed_pose = 0;
   size_t num_pinhole_fixed_point = 0;
   size_t num_pinhole_fixed_pose_fixed_point = 0;
+  size_t num_pinhole_log_depth = 0;
+  size_t num_pinhole_log_depth_fixed_pose = 0;
+  size_t num_pinhole_log_depth_fixed_scale = 0;
+  size_t num_pinhole_log_depth_fixed_point = 0;
+  size_t num_pinhole_log_depth_fixed_pose_fixed_scale = 0;
+  size_t num_pinhole_log_depth_fixed_pose_fixed_point = 0;
+  size_t num_pinhole_log_depth_fixed_scale_fixed_point = 0;
+  size_t num_pinhole_fixed_rotation = 0;
+  size_t num_pinhole_fixed_rotation_fixed_calib = 0;
+  size_t num_pinhole_fixed_rotation_fixed_point = 0;
+  size_t num_pinhole_fixed_rotation_fixed_calib_fixed_point = 0;
+  size_t num_pinhole_log_depth_fixed_rotation = 0;
+  size_t num_pinhole_log_depth_fixed_rotation_fixed_scale = 0;
+  size_t num_pinhole_log_depth_fixed_rotation_fixed_point = 0;
+  size_t num_pinhole_log_depth_fixed_rotation_fixed_scale_fixed_point = 0;
+  size_t num_pinhole_intrinsics_prior = 0;
+  size_t num_pinhole_intrinsics_random_walk = 0;
+  size_t num_scale_prior = 0;
   size_t num_pinhole_split_fixed_focal = 0;
   size_t num_pinhole_split_fixed_principal_point = 0;
   size_t num_pinhole_split_fixed_pose_fixed_focal = 0;
@@ -68,6 +88,52 @@ struct CasparSolverSizing {
   size_t num_pinhole_split_fixed_pose_fixed_focal_fixed_point = 0;
   size_t num_pinhole_split_fixed_pose_fixed_principal_point_fixed_point = 0;
   size_t num_pinhole_split_fixed_focal_fixed_principal_point_fixed_point = 0;
+  size_t num_pinhole_split_fixed_rotation_fixed_focal = 0;
+  size_t num_pinhole_split_fixed_rotation_fixed_principal_point = 0;
+  size_t num_pinhole_split_fixed_rotation_fixed_focal_fixed_principal_point = 0;
+  size_t num_pinhole_split_fixed_rotation_fixed_focal_fixed_point = 0;
+  size_t num_pinhole_split_fixed_rotation_fixed_principal_point_fixed_point = 0;
+  size_t
+      num_pinhole_split_fixed_rotation_fixed_focal_fixed_principal_point_fixed_point =
+          0;
+  size_t num_pinhole_split_intrinsics_prior_fixed_focal = 0;
+  size_t num_pinhole_split_intrinsics_prior_fixed_principal_point = 0;
+  size_t num_pinhole_split_intrinsics_random_walk_fixed_prev_focal = 0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point = 0;
+  size_t num_pinhole_split_intrinsics_random_walk_fixed_next_focal = 0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_next_principal_point = 0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_focal =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_focal =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_next_focal_fixed_next_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point_fixed_next_focal =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point_fixed_next_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_focal_fixed_next_principal_point =
+          0;
+  size_t
+      num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_focal_fixed_next_principal_point =
+          0;
 };
 
 // One implementation per camera model.
@@ -664,6 +730,7 @@ class PinholeAdapter : public ICasparModelAdapter {
         s.SetPinholeCalibIndicesFromHost(d.focal_and_extra_indices.data(), n);
         s.SetPinholePointIndicesFromHost(d.point_indices.data(), n);
         s.SetPinholePixelDataFromStackedHost(d.pixels.data(), 0, n);
+        s.SetPinholeWeightLossDataFromStackedHost(d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE:
         s.SetPinholeFixedPoseNum(n);
@@ -673,6 +740,8 @@ class PinholeAdapter : public ICasparModelAdapter {
         s.SetPinholeFixedPosePoseDataFromStackedHost(
             d.const_poses.data(), 0, n);
         s.SetPinholeFixedPosePixelDataFromStackedHost(d.pixels.data(), 0, n);
+        s.SetPinholeFixedPoseWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_FOCAL_AND_EXTRA:
         s.SetPinholeSplitFixedFocalNum(n);
@@ -686,6 +755,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_focal_and_extra.data(), 0, n);
         s.SetPinholeSplitFixedFocalPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedFocalWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_PRINCIPAL_POINT:
         s.SetPinholeSplitFixedPrincipalPointNum(n);
@@ -699,6 +770,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_principal_point.data(), 0, n);
         s.SetPinholeSplitFixedPrincipalPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPrincipalPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POINT:
         s.SetPinholeFixedPointNum(n);
@@ -708,6 +781,8 @@ class PinholeAdapter : public ICasparModelAdapter {
         s.SetPinholeFixedPointPointDataFromStackedHost(
             d.const_points.data(), 0, n);
         s.SetPinholeFixedPointPixelDataFromStackedHost(d.pixels.data(), 0, n);
+        s.SetPinholeFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE_FIXED_FOCAL_AND_EXTRA:
         s.SetPinholeSplitFixedPoseFixedFocalNum(n);
@@ -721,6 +796,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_focal_and_extra.data(), 0, n);
         s.SetPinholeSplitFixedPoseFixedFocalPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPoseFixedFocalWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE_FIXED_PRINCIPAL_POINT:
         s.SetPinholeSplitFixedPoseFixedPrincipalPointNum(n);
@@ -734,6 +811,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_principal_point.data(), 0, n);
         s.SetPinholeSplitFixedPoseFixedPrincipalPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPoseFixedPrincipalPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE_FIXED_POINT:
         s.SetPinholeFixedPoseFixedPointNum(n);
@@ -745,6 +824,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeFixedPoseFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeFixedPoseFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_FOCAL_AND_EXTRA_FIXED_PRINCIPAL_POINT:
         s.SetPinholeSplitFixedFocalFixedPrincipalPointNum(n);
@@ -758,6 +839,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_principal_point.data(), 0, n);
         s.SetPinholeSplitFixedFocalFixedPrincipalPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedFocalFixedPrincipalPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_FOCAL_AND_EXTRA_FIXED_POINT:
         s.SetPinholeSplitFixedFocalFixedPointNum(n);
@@ -771,6 +854,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeSplitFixedFocalFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedFocalFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_PRINCIPAL_POINT_FIXED_POINT:
         s.SetPinholeSplitFixedPrincipalPointFixedPointNum(n);
@@ -784,6 +869,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeSplitFixedPrincipalPointFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPrincipalPointFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::
           FIXED_POSE_FIXED_FOCAL_AND_EXTRA_FIXED_PRINCIPAL_POINT:
@@ -798,6 +885,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_principal_point.data(), 0, n);
         s.SetPinholeSplitFixedPoseFixedFocalFixedPrincipalPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPoseFixedFocalFixedPrincipalPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE_FIXED_FOCAL_AND_EXTRA_FIXED_POINT:
         s.SetPinholeSplitFixedPoseFixedFocalFixedPointNum(n);
@@ -811,6 +900,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeSplitFixedPoseFixedFocalFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPoseFixedFocalFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::FIXED_POSE_FIXED_PRINCIPAL_POINT_FIXED_POINT:
         s.SetPinholeSplitFixedPoseFixedPrincipalPointFixedPointNum(n);
@@ -824,6 +915,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeSplitFixedPoseFixedPrincipalPointFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedPoseFixedPrincipalPointFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
       case FactorVariant::
           FIXED_FOCAL_AND_EXTRA_FIXED_PRINCIPAL_POINT_FIXED_POINT:
@@ -838,6 +931,8 @@ class PinholeAdapter : public ICasparModelAdapter {
             d.const_points.data(), 0, n);
         s.SetPinholeSplitFixedFocalFixedPrincipalPointFixedPointPixelDataFromStackedHost(
             d.pixels.data(), 0, n);
+        s.SetPinholeSplitFixedFocalFixedPrincipalPointFixedPointWeightLossDataFromStackedHost(
+            d.weight_loss.data(), 0, n);
         break;
     }
   }
@@ -865,17 +960,21 @@ inline caspar::GraphSolver CreateSolver(
     const caspar::SolverParams<StorageType>& params,
     const CasparSolverSizing& sz,
     size_t device_id = 0) {
+  (void)device_id;
   return caspar::GraphSolver(
       params,
       // Node type counts (alphabetical):
+      //   DepthScale,
       //   PinholeCalib, PinholeFocal, PinholePose,
-      //   PinholePrincipalPoint, Point,
+      //   PinholePrincipalPoint, PinholeTranslation, Point,
       //   SimpleRadialCalib, SimpleRadialFocalAndDistortion,
       //   SimpleRadialPose, SimpleRadialPrincipalPoint
+      sz.num_depth_scales,          // DepthScale
       sz.num_pinhole_calibs,        // PinholeCalib        (merged pool)
       sz.num_pinhole_calibs,        // PinholeFocal         (split pool)
       sz.num_pinhole_poses,         // PinholePose
       sz.num_pinhole_calibs,        // PinholePrincipalPoint (split pool)
+      sz.num_pinhole_translations,  // PinholeTranslation
       sz.num_points,                // Point
       sz.num_simple_radial_calibs,  // SimpleRadialCalib              (merged
                                     // pool)
@@ -894,6 +993,26 @@ inline caspar::GraphSolver CreateSolver(
       sz.num_pinhole_fixed_pose,              // {pose}
       sz.num_pinhole_fixed_point,             // {point}
       sz.num_pinhole_fixed_pose_fixed_point,  // {pose, point}
+      // MPSFM/fixed-rotation factor counts are zero for the upstream
+      // reprojection-only BA adapter. The dedicated MPSFM adapter owns these.
+      sz.num_pinhole_log_depth,
+      sz.num_pinhole_log_depth_fixed_pose,
+      sz.num_pinhole_log_depth_fixed_scale,
+      sz.num_pinhole_log_depth_fixed_point,
+      sz.num_pinhole_log_depth_fixed_pose_fixed_scale,
+      sz.num_pinhole_log_depth_fixed_pose_fixed_point,
+      sz.num_pinhole_log_depth_fixed_scale_fixed_point,
+      sz.num_pinhole_fixed_rotation,
+      sz.num_pinhole_fixed_rotation_fixed_calib,
+      sz.num_pinhole_fixed_rotation_fixed_point,
+      sz.num_pinhole_fixed_rotation_fixed_calib_fixed_point,
+      sz.num_pinhole_log_depth_fixed_rotation,
+      sz.num_pinhole_log_depth_fixed_rotation_fixed_scale,
+      sz.num_pinhole_log_depth_fixed_rotation_fixed_point,
+      sz.num_pinhole_log_depth_fixed_rotation_fixed_scale_fixed_point,
+      sz.num_pinhole_intrinsics_prior,
+      sz.num_pinhole_intrinsics_random_walk,
+      sz.num_scale_prior,
       // simple_radial_split factor counts (11 variants, must_fix_one_of):
       sz.num_simple_radial_split_fixed_focal_and_distortion,  // r=1 {fad}
       sz.num_simple_radial_split_fixed_principal_point,       // r=1 {pp}
@@ -922,7 +1041,31 @@ inline caspar::GraphSolver CreateSolver(
       sz.num_pinhole_split_fixed_pose_fixed_focal_fixed_point,            // r=3
       sz.num_pinhole_split_fixed_pose_fixed_principal_point_fixed_point,  // r=3
       sz.num_pinhole_split_fixed_focal_fixed_principal_point_fixed_point,  // r=3
-      device_id);
+      // pinhole_split_fixed_rotation variants.
+      sz.num_pinhole_split_fixed_rotation_fixed_focal,
+      sz.num_pinhole_split_fixed_rotation_fixed_principal_point,
+      sz.num_pinhole_split_fixed_rotation_fixed_focal_fixed_principal_point,
+      sz.num_pinhole_split_fixed_rotation_fixed_focal_fixed_point,
+      sz.num_pinhole_split_fixed_rotation_fixed_principal_point_fixed_point,
+      sz.num_pinhole_split_fixed_rotation_fixed_focal_fixed_principal_point_fixed_point,
+      // pinhole_split_intrinsics_prior variants.
+      sz.num_pinhole_split_intrinsics_prior_fixed_focal,
+      sz.num_pinhole_split_intrinsics_prior_fixed_principal_point,
+      // pinhole_split_intrinsics_random_walk variants.
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_next_focal,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_focal,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_focal,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_next_focal_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point_fixed_next_focal,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_prev_principal_point_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_focal_fixed_next_focal_fixed_next_principal_point,
+      sz.num_pinhole_split_intrinsics_random_walk_fixed_prev_principal_point_fixed_next_focal_fixed_next_principal_point);
 }
 
 }  // namespace colmap

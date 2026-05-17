@@ -42,7 +42,7 @@ __global__ void __launch_bounds__(1024, 1)
            ? point_njtr_indices[global_thread_idx]
            : SharedIndex{0xffffffff, 0xffff, 0xffff});
 
-  double r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
+  double r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12;
 
   if (global_thread_idx < problem_size) {
     ReadIdx2<1024, double, double, double2>(
@@ -79,11 +79,13 @@ __global__ void __launch_bounds__(1024, 1)
     ReadIdx2<1024, double, double, double2>(
         point_jac, 0 * point_jac_num_alloc, global_thread_idx, r10, r11);
     r9 = fma(r5, r10, r9);
-    r9 = r0 * r9;
     r6 = fma(r6, r8, r2 * r4);
     r6 = fma(r5, r11, r6);
-    r6 = r1 * r6;
-    WriteSum2<double, double>((double*)inout_shared, r9, r6);
+    r5 = fma(r1, r6, r0 * r9);
+    ReadIdx2<1024, double, double, double2>(
+        focal_jac, 2 * focal_jac_num_alloc, global_thread_idx, r2, r12);
+    r6 = fma(r12, r6, r2 * r9);
+    WriteSum2<double, double>((double*)inout_shared, r5, r6);
   };
   FlushSumShared<2, double>(out_focal_njtr,
                             0 * out_focal_njtr_num_alloc,
@@ -97,14 +99,14 @@ __global__ void __launch_bounds__(1024, 1)
     ReadShared2<double>((double*)inout_shared,
                         focal_njtr_indices_loc[threadIdx.x].target,
                         r6,
-                        r9);
+                        r5);
   };
   __syncthreads();
   if (global_thread_idx < problem_size) {
-    r1 = r9 * r1;
-    r0 = r6 * r0;
-    r10 = fma(r10, r0, r11 * r1);
-    r7 = fma(r7, r0, r8 * r1);
+    r12 = fma(r5, r12, r6 * r1);
+    r0 = fma(r6, r0, r5 * r2);
+    r10 = fma(r10, r0, r11 * r12);
+    r7 = fma(r7, r0, r8 * r12);
     WriteSum2<double, double>((double*)inout_shared, r10, r7);
   };
   FlushSumShared<2, double>(out_point_njtr,
@@ -112,7 +114,7 @@ __global__ void __launch_bounds__(1024, 1)
                             point_njtr_indices_loc,
                             (double*)inout_shared);
   if (global_thread_idx < problem_size) {
-    r0 = fma(r3, r0, r4 * r1);
+    r0 = fma(r3, r0, r4 * r12);
     WriteSum1<double, double>((double*)inout_shared, r0);
   };
   FlushSumShared<1, double>(out_point_njtr,

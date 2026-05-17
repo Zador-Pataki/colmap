@@ -1,12 +1,17 @@
 #include "colmap/estimators/bundle_adjustment.h"
 
+#include "colmap/estimators/bundle_adjustment_caspar.h"
 #include "colmap/estimators/bundle_adjustment_ceres.h"
+#ifdef CASPAR_ENABLED
+#include "colmap/estimators/mpsfm_bundle_adjustment_caspar.h"
+#endif
 
 #include "pycolmap/helpers.h"
 #include "pycolmap/pybind11_extension.h"
 #include "pycolmap/utils.h"
 
 #include <pybind11/eigen.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -93,6 +98,19 @@ void BindBundleAdjuster(py::module& m) {
                          "Full Ceres solver summary.");
   MakeDataclass(PyCeresBundleAdjustmentSummary);
 
+#ifdef CASPAR_ENABLED
+  using CasparBASummary = CasparBundleAdjustmentSummary;
+  auto PyCasparBundleAdjustmentSummary =
+      py::classh<CasparBASummary, BASummary>(m, "CasparBundleAdjustmentSummary")
+          .def(py::init<>())
+          .def_readwrite("initial_score", &CasparBASummary::initial_score)
+          .def_readwrite("final_score", &CasparBASummary::final_score)
+          .def_readwrite("iteration_count", &CasparBASummary::iteration_count)
+          .def_readwrite("solve_time", &CasparBASummary::solve_time)
+          .def_readwrite("exit_reason", &CasparBASummary::exit_reason);
+  MakeDataclass(PyCasparBundleAdjustmentSummary);
+#endif
+
   auto PyBundleAdjustmentGauge =
       py::enum_<BundleAdjustmentGauge>(m, "BundleAdjustmentGauge")
           .value("UNSPECIFIED", BundleAdjustmentGauge::UNSPECIFIED)
@@ -103,7 +121,8 @@ void BindBundleAdjuster(py::module& m) {
 
   auto PyBundleAdjustmentBackend =
       py::enum_<BundleAdjustmentBackend>(m, "BundleAdjustmentBackend")
-          .value("CERES", BundleAdjustmentBackend::CERES);
+          .value("CERES", BundleAdjustmentBackend::CERES)
+          .value("CASPAR", BundleAdjustmentBackend::CASPAR);
   AddStringToEnumConstructor(PyBundleAdjustmentBackend);
 
   using BACfg = BundleAdjustmentConfig;
@@ -239,6 +258,29 @@ void BindBundleAdjuster(py::module& m) {
           .def("check", &CeresBAOpts::Check);
   MakeDataclass(PyCeresBundleAdjustmentOptions);
 
+  using CasparBAOpts = CasparBundleAdjustmentOptions;
+  auto PyCasparBundleAdjustmentOptions =
+      py::classh<CasparBAOpts>(m, "CasparBundleAdjustmentOptions")
+          .def(py::init<>())
+          .def_readwrite("solver_iter_max", &CasparBAOpts::solver_iter_max)
+          .def_readwrite("pcg_iter_max", &CasparBAOpts::pcg_iter_max)
+          .def_readwrite("diag_init", &CasparBAOpts::diag_init)
+          .def_readwrite("diag_min", &CasparBAOpts::diag_min)
+          .def_readwrite("diag_scaling_up", &CasparBAOpts::diag_scaling_up)
+          .def_readwrite("diag_scaling_down", &CasparBAOpts::diag_scaling_down)
+          .def_readwrite("diag_exit_value", &CasparBAOpts::diag_exit_value)
+          .def_readwrite("score_exit_value", &CasparBAOpts::score_exit_value)
+          .def_readwrite("pcg_rel_error_exit",
+                         &CasparBAOpts::pcg_rel_error_exit)
+          .def_readwrite("pcg_rel_score_exit",
+                         &CasparBAOpts::pcg_rel_score_exit)
+          .def_readwrite("pcg_rel_decrease_min",
+                         &CasparBAOpts::pcg_rel_decrease_min)
+          .def_readwrite("solver_rel_decrease_min",
+                         &CasparBAOpts::solver_rel_decrease_min)
+          .def_readwrite("gpu_index", &CasparBAOpts::gpu_index);
+  MakeDataclass(PyCasparBundleAdjustmentOptions);
+
   // Solver-agnostic bundle adjustment options
   using BAOpts = BundleAdjustmentOptions;
   auto PyBundleAdjustmentOptions =
@@ -282,8 +324,125 @@ void BindBundleAdjuster(py::module& m) {
           .def_readwrite("ceres",
                          &BAOpts::ceres,
                          "Ceres-specific bundle adjustment options.")
+          .def_readwrite("caspar",
+                         &BAOpts::caspar,
+                         "Caspar-specific bundle adjustment options.")
           .def("check", &BAOpts::Check);
   MakeDataclass(PyBundleAdjustmentOptions);
+
+#ifdef CASPAR_ENABLED
+  using MpsfmLossType = MpsfmCasparLossType;
+  auto PyMpsfmCasparLossType =
+      py::enum_<MpsfmLossType>(m, "MpsfmCasparLossType")
+          .value("TRIVIAL", MpsfmLossType::TRIVIAL)
+          .value("SOFT_L1", MpsfmLossType::SOFT_L1)
+          .value("CAUCHY", MpsfmLossType::CAUCHY)
+          .value("HUBER", MpsfmLossType::HUBER);
+  AddStringToEnumConstructor(PyMpsfmCasparLossType);
+
+  using MpsfmReprojOptions = MpsfmCasparReprojectionOptions;
+  auto PyMpsfmCasparReprojectionOptions =
+      py::classh<MpsfmReprojOptions>(m, "MpsfmCasparReprojectionOptions")
+          .def(py::init<>())
+          .def_readwrite("loss_type", &MpsfmReprojOptions::loss_type)
+          .def_readwrite("loss_scale", &MpsfmReprojOptions::loss_scale)
+          .def_readwrite("keypoint_std", &MpsfmReprojOptions::keypoint_std)
+          .def_readwrite("residual_weight",
+                         &MpsfmReprojOptions::residual_weight)
+          .def_readwrite("use_keypoint_covariances",
+                         &MpsfmReprojOptions::use_keypoint_covariances);
+  MakeDataclass(PyMpsfmCasparReprojectionOptions);
+
+  using MpsfmDepthObservation = MpsfmCasparDepthObservation;
+  auto PyMpsfmCasparDepthObservation =
+      py::classh<MpsfmDepthObservation>(m, "MpsfmCasparDepthObservation")
+          .def(py::init<>())
+          .def_readwrite("image_id", &MpsfmDepthObservation::image_id)
+          .def_readwrite("point3D_id", &MpsfmDepthObservation::point3D_id)
+          .def_readwrite("depth", &MpsfmDepthObservation::depth)
+          .def_readwrite("sqrt_information",
+                         &MpsfmDepthObservation::sqrt_information)
+          .def_readwrite("loss_type", &MpsfmDepthObservation::loss_type)
+          .def_readwrite("loss_scale", &MpsfmDepthObservation::loss_scale)
+          .def_readwrite("gross_outlier", &MpsfmDepthObservation::gross_outlier)
+          .def_readwrite("risky", &MpsfmDepthObservation::risky);
+  MakeDataclass(PyMpsfmCasparDepthObservation);
+
+  using MpsfmIntrinsicsPrior = MpsfmCasparIntrinsicsPrior;
+  auto PyMpsfmCasparIntrinsicsPrior =
+      py::classh<MpsfmIntrinsicsPrior>(m, "MpsfmCasparIntrinsicsPrior")
+          .def(py::init<>())
+          .def_readwrite("camera_id", &MpsfmIntrinsicsPrior::camera_id)
+          .def_readwrite("prior", &MpsfmIntrinsicsPrior::prior)
+          .def_readwrite("std_dev", &MpsfmIntrinsicsPrior::std_dev);
+  MakeDataclass(PyMpsfmCasparIntrinsicsPrior);
+
+  using MpsfmIntrinsicsRandomWalk = MpsfmCasparIntrinsicsRandomWalk;
+  auto PyMpsfmCasparIntrinsicsRandomWalk =
+      py::classh<MpsfmIntrinsicsRandomWalk>(m,
+                                            "MpsfmCasparIntrinsicsRandomWalk")
+          .def(py::init<>())
+          .def_readwrite("prev_camera_id",
+                         &MpsfmIntrinsicsRandomWalk::prev_camera_id)
+          .def_readwrite("next_camera_id",
+                         &MpsfmIntrinsicsRandomWalk::next_camera_id)
+          .def_readwrite("variance_per_frame",
+                         &MpsfmIntrinsicsRandomWalk::variance_per_frame)
+          .def_readwrite("frame_gap", &MpsfmIntrinsicsRandomWalk::frame_gap);
+  MakeDataclass(PyMpsfmCasparIntrinsicsRandomWalk);
+
+  using MpsfmScalePrior = MpsfmCasparScalePrior;
+  auto PyMpsfmCasparScalePrior =
+      py::classh<MpsfmScalePrior>(m, "MpsfmCasparScalePrior")
+          .def(py::init<>())
+          .def_readwrite("image_id", &MpsfmScalePrior::image_id)
+          .def_readwrite("std_dev", &MpsfmScalePrior::std_dev)
+          .def_readwrite("loss_type", &MpsfmScalePrior::loss_type)
+          .def_readwrite("loss_scale", &MpsfmScalePrior::loss_scale)
+          .def_readwrite("magnitude", &MpsfmScalePrior::magnitude);
+  MakeDataclass(PyMpsfmCasparScalePrior);
+
+  using MpsfmBAProblem = MpsfmCasparBundleAdjustmentProblem;
+  auto PyMpsfmCasparBundleAdjustmentProblem =
+      py::classh<MpsfmBAProblem>(m, "MpsfmCasparBundleAdjustmentProblem")
+          .def(py::init<>())
+          .def_readwrite("reprojection", &MpsfmBAProblem::reprojection)
+          .def_readwrite("depth_observations",
+                         &MpsfmBAProblem::depth_observations)
+          .def_readwrite("intrinsics_priors",
+                         &MpsfmBAProblem::intrinsics_priors)
+          .def_readwrite("intrinsics_random_walks",
+                         &MpsfmBAProblem::intrinsics_random_walks)
+          .def_readwrite("scale_priors", &MpsfmBAProblem::scale_priors)
+          .def_readwrite("shift_scale", &MpsfmBAProblem::shift_scale)
+          .def_readwrite("tie_focal", &MpsfmBAProblem::tie_focal)
+          .def_readwrite("log_depth", &MpsfmBAProblem::log_depth);
+  MakeDataclass(PyMpsfmCasparBundleAdjustmentProblem);
+
+  using MpsfmBASummary = MpsfmCasparBundleAdjustmentSummary;
+  auto PyMpsfmCasparBundleAdjustmentSummary =
+      py::classh<MpsfmBASummary, BASummary>(
+          m, "MpsfmCasparBundleAdjustmentSummary")
+          .def(py::init<>())
+          .def_readwrite("num_reprojection_factors",
+                         &MpsfmBASummary::num_reprojection_factors)
+          .def_readwrite("num_depth_factors",
+                         &MpsfmBASummary::num_depth_factors)
+          .def_readwrite("num_intrinsics_prior_factors",
+                         &MpsfmBASummary::num_intrinsics_prior_factors)
+          .def_readwrite("num_intrinsics_random_walk_factors",
+                         &MpsfmBASummary::num_intrinsics_random_walk_factors)
+          .def_readwrite("num_scale_prior_factors",
+                         &MpsfmBASummary::num_scale_prior_factors)
+          .def_readwrite("construction_time",
+                         &MpsfmBASummary::construction_time)
+          .def_readwrite("solve_time", &MpsfmBASummary::solve_time)
+          .def_readwrite("initial_score", &MpsfmBASummary::initial_score)
+          .def_readwrite("final_score", &MpsfmBASummary::final_score)
+          .def_readwrite("iteration_count", &MpsfmBASummary::iteration_count)
+          .def_readwrite("backend_message", &MpsfmBASummary::backend_message);
+  MakeDataclass(PyMpsfmCasparBundleAdjustmentSummary);
+#endif
 
   // Ceres-specific pose prior bundle adjustment options
   using CeresPosePriorBAOpts = CeresPosePriorBundleAdjustmentOptions;
@@ -353,6 +512,21 @@ void BindBundleAdjuster(py::module& m) {
         "config"_a,
         "reconstruction"_a);
 
+#ifdef CASPAR_ENABLED
+  m.def("create_default_caspar_bundle_adjuster",
+        CreateDefaultCasparBundleAdjuster,
+        "options"_a,
+        "config"_a,
+        "reconstruction"_a);
+
+  m.def("solve_mpsfm_caspar_bundle_adjustment",
+        SolveMpsfmCasparBundleAdjustment,
+        "options"_a,
+        "config"_a,
+        "reconstruction"_a,
+        "problem"_a = MpsfmCasparBundleAdjustmentProblem());
+#endif
+
   m.def("create_pose_prior_bundle_adjuster",
         CreatePosePriorBundleAdjuster,
         "options"_a,
@@ -368,4 +542,50 @@ void BindBundleAdjuster(py::module& m) {
         "config"_a,
         "pose_priors"_a,
         "reconstruction"_a);
+
+  m.def("create_depth_bundle_adjuster",
+        [](ceres::Problem* problem,
+           image_t image_id,
+           const std::vector<point3D_t>& point3D_ids,
+           const std::vector<double>& depths,
+           const std::vector<double>& loss_magnitudes,
+           const std::vector<double>& loss_params,
+           const std::vector<CeresBundleAdjustmentOptions::LossFunctionType>&
+               loss_types,
+           py::array_t<double> shift_scale,
+           Reconstruction& reconstruction,
+           bool logloss,
+           bool fix_shift,
+           bool fix_scale) {
+          auto buf = shift_scale.request();
+          if (buf.ndim != 1 || buf.shape[0] != 2) {
+            throw std::runtime_error(
+                "shift_scale must have exactly 2 elements.");
+          }
+          double* shift_scale_ptr = static_cast<double*>(buf.ptr);
+          DepthPriorBundleAdjuster(problem,
+                                   image_id,
+                                   point3D_ids,
+                                   depths,
+                                   loss_magnitudes,
+                                   loss_params,
+                                   loss_types,
+                                   shift_scale_ptr,
+                                   reconstruction,
+                                   logloss,
+                                   fix_shift,
+                                   fix_scale);
+        },
+        "problem"_a,
+        "image_id"_a,
+        "point3D_ids"_a,
+        "depths"_a,
+        "loss_magnitudes"_a,
+        "loss_params"_a,
+        "loss_types"_a,
+        "shift_scale"_a,
+        "reconstruction"_a,
+        "logloss"_a = false,
+        "fix_shift"_a = false,
+        "fix_scale"_a = false);
 }

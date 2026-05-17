@@ -1,0 +1,28 @@
+#pragma once
+
+#include "shared_indices.h"
+#include <cuda_runtime.h>
+
+namespace caspar {
+
+void PinholeSplitIntrinsicsPriorFixedPrincipalPointResJac(
+    float* focal,
+    unsigned int focal_num_alloc,
+    SharedIndex* focal_indices,
+    float* prior,
+    unsigned int prior_num_alloc,
+    float* inv_std,
+    unsigned int inv_std_num_alloc,
+    float* principal_point,
+    unsigned int principal_point_num_alloc,
+    float* out_res,
+    unsigned int out_res_num_alloc,
+    float* const out_focal_njtr,
+    unsigned int out_focal_njtr_num_alloc,
+    float* const out_focal_precond_diag,
+    unsigned int out_focal_precond_diag_num_alloc,
+    float* const out_focal_precond_tril,
+    unsigned int out_focal_precond_tril_num_alloc,
+    size_t problem_size);
+
+}  // namespace caspar

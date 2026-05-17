@@ -1,0 +1,290 @@
+#include "kernel_pinhole_fixed_rotation_jtjnjtr_direct.h"
+#include "memops.cuh"
+#include <cooperative_groups.h>
+#include <cooperative_groups/details/partitioning.h>
+#include <cooperative_groups/memcpy_async.h>
+#include <cooperative_groups/reduce.h>
+#include <cuda_runtime.h>
+
+namespace cg = cooperative_groups;
+
+namespace caspar {
+
+__global__ void __launch_bounds__(1024, 1)
+    PinholeFixedRotationJtjnjtrDirectKernel(
+        double* translation_njtr,
+        unsigned int translation_njtr_num_alloc,
+        SharedIndex* translation_njtr_indices,
+        double* translation_jac,
+        unsigned int translation_jac_num_alloc,
+        double* calib_njtr,
+        unsigned int calib_njtr_num_alloc,
+        SharedIndex* calib_njtr_indices,
+        double* calib_jac,
+        unsigned int calib_jac_num_alloc,
+        double* point_njtr,
+        unsigned int point_njtr_num_alloc,
+        SharedIndex* point_njtr_indices,
+        double* point_jac,
+        unsigned int point_jac_num_alloc,
+        double* const out_translation_njtr,
+        unsigned int out_translation_njtr_num_alloc,
+        double* const out_calib_njtr,
+        unsigned int out_calib_njtr_num_alloc,
+        double* const out_point_njtr,
+        unsigned int out_point_njtr_num_alloc,
+        size_t problem_size) {
+  const int global_thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  __shared__ uint8_t inout_shared[16384];
+
+  __shared__ SharedIndex translation_njtr_indices_loc[1024];
+  translation_njtr_indices_loc[threadIdx.x] =
+      (global_thread_idx < problem_size
+           ? translation_njtr_indices[global_thread_idx]
+           : SharedIndex{0xffffffff, 0xffff, 0xffff});
+
+  __shared__ SharedIndex calib_njtr_indices_loc[1024];
+  calib_njtr_indices_loc[threadIdx.x] =
+      (global_thread_idx < problem_size
+           ? calib_njtr_indices[global_thread_idx]
+           : SharedIndex{0xffffffff, 0xffff, 0xffff});
+
+  __shared__ SharedIndex point_njtr_indices_loc[1024];
+  point_njtr_indices_loc[threadIdx.x] =
+      (global_thread_idx < problem_size
+           ? point_njtr_indices[global_thread_idx]
+           : SharedIndex{0xffffffff, 0xffff, 0xffff});
+
+  double r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
+      r16, r17, r18, r19, r20, r21, r22, r23, r24, r25;
+
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(translation_jac,
+                                            0 * translation_jac_num_alloc,
+                                            global_thread_idx,
+                                            r0,
+                                            r1);
+  };
+  LoadShared<2, double, double>(calib_njtr,
+                                2 * calib_njtr_num_alloc,
+                                calib_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared2<double>((double*)inout_shared,
+                        calib_njtr_indices_loc[threadIdx.x].target,
+                        r2,
+                        r3);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 4 * calib_jac_num_alloc, global_thread_idx, r4, r5);
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 6 * calib_jac_num_alloc, global_thread_idx, r6, r7);
+    r8 = fma(r3, r6, r2 * r4);
+  };
+  LoadShared<2, double, double>(calib_njtr,
+                                0 * calib_njtr_num_alloc,
+                                calib_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared2<double>((double*)inout_shared,
+                        calib_njtr_indices_loc[threadIdx.x].target,
+                        r9,
+                        r10);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 0 * calib_jac_num_alloc, global_thread_idx, r11, r12);
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 2 * calib_jac_num_alloc, global_thread_idx, r13, r14);
+    r8 = fma(r9, r11, r8);
+    r8 = fma(r10, r13, r8);
+  };
+  LoadShared<1, double, double>(point_njtr,
+                                2 * point_njtr_num_alloc,
+                                point_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared1<double>(
+        (double*)inout_shared, point_njtr_indices_loc[threadIdx.x].target, r15);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(
+        point_jac, 4 * point_jac_num_alloc, global_thread_idx, r16, r17);
+  };
+  LoadShared<2, double, double>(point_njtr,
+                                0 * point_njtr_num_alloc,
+                                point_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared2<double>((double*)inout_shared,
+                        point_njtr_indices_loc[threadIdx.x].target,
+                        r18,
+                        r19);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(
+        point_jac, 2 * point_jac_num_alloc, global_thread_idx, r20, r21);
+    r22 = fma(r19, r20, r15 * r16);
+    ReadIdx2<1024, double, double, double2>(
+        point_jac, 0 * point_jac_num_alloc, global_thread_idx, r23, r24);
+    r22 = fma(r18, r23, r22);
+    r25 = r8 + r22;
+    r2 = fma(r2, r5, r3 * r7);
+    r2 = fma(r9, r12, r2);
+    r2 = fma(r10, r14, r2);
+    r19 = fma(r19, r21, r15 * r17);
+    r19 = fma(r18, r24, r19);
+    r18 = r2 + r19;
+    r15 = fma(r1, r18, r0 * r25);
+    ReadIdx2<1024, double, double, double2>(translation_jac,
+                                            2 * translation_jac_num_alloc,
+                                            global_thread_idx,
+                                            r10,
+                                            r9);
+    r3 = fma(r9, r18, r10 * r25);
+    WriteSum2<double, double>((double*)inout_shared, r15, r3);
+  };
+  FlushSumShared<2, double>(out_translation_njtr,
+                            0 * out_translation_njtr_num_alloc,
+                            translation_njtr_indices_loc,
+                            (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadIdx2<1024, double, double, double2>(translation_jac,
+                                            4 * translation_jac_num_alloc,
+                                            global_thread_idx,
+                                            r3,
+                                            r15);
+    r18 = fma(r15, r18, r3 * r25);
+    WriteSum1<double, double>((double*)inout_shared, r18);
+  };
+  FlushSumShared<1, double>(out_translation_njtr,
+                            2 * out_translation_njtr_num_alloc,
+                            translation_njtr_indices_loc,
+                            (double*)inout_shared);
+  LoadShared<2, double, double>(translation_njtr,
+                                0 * translation_njtr_num_alloc,
+                                translation_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared2<double>((double*)inout_shared,
+                        translation_njtr_indices_loc[threadIdx.x].target,
+                        r18,
+                        r25);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    r10 = fma(r25, r10, r18 * r0);
+  };
+  LoadShared<1, double, double>(translation_njtr,
+                                2 * translation_njtr_num_alloc,
+                                translation_njtr_indices_loc,
+                                (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    ReadShared1<double>((double*)inout_shared,
+                        translation_njtr_indices_loc[threadIdx.x].target,
+                        r0);
+  };
+  __syncthreads();
+  if (global_thread_idx < problem_size) {
+    r10 = fma(r0, r3, r10);
+    r22 = r22 + r10;
+    r9 = fma(r25, r9, r18 * r1);
+    r9 = fma(r0, r15, r9);
+    r19 = r19 + r9;
+    r12 = fma(r12, r19, r11 * r22);
+    r14 = fma(r14, r19, r13 * r22);
+    WriteSum2<double, double>((double*)inout_shared, r12, r14);
+  };
+  FlushSumShared<2, double>(out_calib_njtr,
+                            0 * out_calib_njtr_num_alloc,
+                            calib_njtr_indices_loc,
+                            (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    r5 = fma(r5, r19, r4 * r22);
+    r19 = fma(r7, r19, r6 * r22);
+    WriteSum2<double, double>((double*)inout_shared, r5, r19);
+  };
+  FlushSumShared<2, double>(out_calib_njtr,
+                            2 * out_calib_njtr_num_alloc,
+                            calib_njtr_indices_loc,
+                            (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    r10 = r8 + r10;
+    r9 = r2 + r9;
+    r24 = fma(r24, r9, r23 * r10);
+    r21 = fma(r21, r9, r20 * r10);
+    WriteSum2<double, double>((double*)inout_shared, r24, r21);
+  };
+  FlushSumShared<2, double>(out_point_njtr,
+                            0 * out_point_njtr_num_alloc,
+                            point_njtr_indices_loc,
+                            (double*)inout_shared);
+  if (global_thread_idx < problem_size) {
+    r9 = fma(r17, r9, r16 * r10);
+    WriteSum1<double, double>((double*)inout_shared, r9);
+  };
+  FlushSumShared<1, double>(out_point_njtr,
+                            2 * out_point_njtr_num_alloc,
+                            point_njtr_indices_loc,
+                            (double*)inout_shared);
+}
+
+void PinholeFixedRotationJtjnjtrDirect(
+    double* translation_njtr,
+    unsigned int translation_njtr_num_alloc,
+    SharedIndex* translation_njtr_indices,
+    double* translation_jac,
+    unsigned int translation_jac_num_alloc,
+    double* calib_njtr,
+    unsigned int calib_njtr_num_alloc,
+    SharedIndex* calib_njtr_indices,
+    double* calib_jac,
+    unsigned int calib_jac_num_alloc,
+    double* point_njtr,
+    unsigned int point_njtr_num_alloc,
+    SharedIndex* point_njtr_indices,
+    double* point_jac,
+    unsigned int point_jac_num_alloc,
+    double* const out_translation_njtr,
+    unsigned int out_translation_njtr_num_alloc,
+    double* const out_calib_njtr,
+    unsigned int out_calib_njtr_num_alloc,
+    double* const out_point_njtr,
+    unsigned int out_point_njtr_num_alloc,
+    size_t problem_size) {
+  if (problem_size == 0) {
+    return;
+  }
+
+  const int n_blocks = (problem_size + 1024 - 1) / 1024;
+  PinholeFixedRotationJtjnjtrDirectKernel<<<n_blocks, 1024>>>(
+      translation_njtr,
+      translation_njtr_num_alloc,
+      translation_njtr_indices,
+      translation_jac,
+      translation_jac_num_alloc,
+      calib_njtr,
+      calib_njtr_num_alloc,
+      calib_njtr_indices,
+      calib_jac,
+      calib_jac_num_alloc,
+      point_njtr,
+      point_njtr_num_alloc,
+      point_njtr_indices,
+      point_jac,
+      point_jac_num_alloc,
+      out_translation_njtr,
+      out_translation_njtr_num_alloc,
+      out_calib_njtr,
+      out_calib_njtr_num_alloc,
+      out_point_njtr,
+      out_point_njtr_num_alloc,
+      problem_size);
+}
+
+}  // namespace caspar

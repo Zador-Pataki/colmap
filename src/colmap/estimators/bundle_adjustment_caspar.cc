@@ -368,6 +368,15 @@ class CasparBundleAdjuster : public BundleAdjuster {
 
     vd.pixels.push_back(point2D.xy.x());
     vd.pixels.push_back(point2D.xy.y());
+    if (camera.model_id == CameraModelId::kPinhole) {
+      vd.weight_loss.push_back(1);
+      vd.weight_loss.push_back(0);
+      vd.weight_loss.push_back(0);
+      vd.weight_loss.push_back(1);
+      vd.weight_loss.push_back(0);
+      vd.weight_loss.push_back(1);
+      vd.weight_loss.push_back(1);
+    }
     ++vd.num_factors;
   }
 
@@ -987,19 +996,26 @@ std::shared_ptr<CasparBundleAdjustmentSummary>
 CasparBundleAdjustmentSummary::Create(
     const caspar::SolveResult& caspar_summary) {
   auto summary = std::make_shared<CasparBundleAdjustmentSummary>();
+  summary->initial_score = caspar_summary.initial_score;
+  summary->final_score = caspar_summary.final_score;
+  summary->iteration_count = caspar_summary.iteration_count;
+  summary->solve_time = caspar_summary.runtime;
   switch (caspar_summary.exit_reason) {
     case caspar::ExitReason::CONVERGED_DIAG_EXIT:
+      summary->exit_reason = "CONVERGED_DIAG_EXIT";
       VLOG(1) << "Caspar: CONVERGED_DIAG_EXIT after "
               << caspar_summary.iteration_count << " iters"
               << " (diag limit hit -> likely premature termination)";
       summary->termination_type = BundleAdjustmentTerminationType::CONVERGENCE;
       break;
     case caspar::ExitReason::CONVERGED_SCORE_THRESHOLD:
+      summary->exit_reason = "CONVERGED_SCORE_THRESHOLD";
       VLOG(1) << "Caspar: CONVERGED_SCORE_THRESHOLD after "
               << caspar_summary.iteration_count << " iters";
       summary->termination_type = BundleAdjustmentTerminationType::CONVERGENCE;
       break;
     case caspar::ExitReason::MAX_ITERATIONS:
+      summary->exit_reason = "MAX_ITERATIONS";
       VLOG(1) << "Caspar: MAX_ITERATIONS (" << caspar_summary.iteration_count
               << ")";
       summary->termination_type =

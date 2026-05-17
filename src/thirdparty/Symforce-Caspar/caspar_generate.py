@@ -21,7 +21,17 @@ symforce.set_epsilon_to_number(1e-15 if precision == "f64" else 1e-6)
 import symforce.symbolic as sf  # noqa: E402
 from symforce import typing as T  # noqa: E402
 from symforce.caspar import CasparLibrary  # noqa: E402
+from symforce.caspar.code_formulation import ftypes  # noqa: E402
 from symforce.caspar import memory as mem  # noqa: E402
+from symengine.lib import symengine_wrapper  # noqa: E402
+
+
+class Log(ftypes.Func):
+    def assign_code(self, outs: list[str], args: list[str], dtype) -> str:
+        return f"{outs[0]} = {'log' if dtype.is_double() else 'logf'}({args[0]});"
+
+
+ftypes.EXPR_TO_FUNC.setdefault(symengine_wrapper.log, Log)
 
 
 # Point and ConstPoint are shared across camera models so that different
@@ -36,6 +46,26 @@ class ConstPoint(sf.V3):
 
 class ConstPixel(sf.V2):
     pass
+
+
+class ConstLogDepth(sf.V1):
+    pass
+
+
+class ConstInvStd4(sf.V4):
+    pass
+
+
+class ConstInvStd1(sf.V1):
+    pass
+
+
+class ConstRobustLoss(sf.V3):
+    pass  # [loss_type, loss_scale, magnitude]
+
+
+class ConstReprojectionWeightLoss(sf.V7):
+    pass  # [sqrt_info00, sqrt_info01, sqrt_info10, sqrt_info11, type, scale, magnitude]
 
 
 # Calibration node layout:
@@ -96,6 +126,14 @@ class ConstPinholePose(sf.Pose3):
     pass
 
 
+class ConstPinholeRotation(sf.Rot3):
+    pass
+
+
+class PinholeTranslation(sf.V3):
+    pass
+
+
 class PinholeCalib(sf.V4):
     pass  # [fx, fy, cx, cy]  (merged)
 
@@ -117,6 +155,14 @@ class PinholeFocal(sf.V2):
 
 
 class ConstPinholeFocal(sf.V2):
+    pass
+
+
+class DepthScale(sf.V1):
+    pass
+
+
+class ConstDepthScale(sf.V1):
     pass
 
 
@@ -191,6 +237,47 @@ def register_camera_model(
             )
 
 
+def robustify(residual, loss: ConstRobustLoss):
+    """Return an equivalent residual vector for the supported Ceres losses."""
+    loss_type = loss[0]
+    loss_scale = sf.Max(loss[1], sf.epsilon())
+    magnitude = sf.Max(loss[2], 0)
+    s = residual.squared_norm()
+    safe_s = sf.Max(s, sf.epsilon())
+    a2 = loss_scale * loss_scale
+    rho_trivial = s
+    rho_soft_l1 = 2 * a2 * (sf.sqrt(1 + s / a2) - 1)
+    rho_cauchy = a2 * sf.log(1 + s / a2)
+    rho_huber = sf.Piecewise(
+        (s, s <= a2), (2 * loss_scale * sf.sqrt(safe_s) - a2, True)
+    )
+    rho_nontrivial = sf.Piecewise(
+        (rho_soft_l1, loss_type < 1.5),
+        (
+            sf.Piecewise((rho_cauchy, loss_type < 2.5), (rho_huber, True)),
+            True,
+        ),
+    )
+    rho = sf.Piecewise((rho_trivial, loss_type < 0.5), (rho_nontrivial, True))
+    scale = sf.Piecewise(
+        (sf.sqrt(magnitude), s <= sf.epsilon()),
+        (sf.sqrt(magnitude * sf.Max(rho, 0) / safe_s), True),
+    )
+    return residual * scale
+
+
+def reprojection_weight_and_robustify(residual: sf.V2, weight_loss: ConstReprojectionWeightLoss):
+    weighted = sf.V2(
+        [
+            weight_loss[0] * residual[0] + weight_loss[1] * residual[1],
+            weight_loss[2] * residual[0] + weight_loss[3] * residual[1],
+        ]
+    )
+    return robustify(
+        weighted, ConstRobustLoss([weight_loss[4], weight_loss[5], weight_loss[6]])
+    )
+
+
 # --- Camera models ---
 
 # Merged cores define the canonical projection math reused by split variants.
@@ -221,6 +308,7 @@ def pinhole_core(
     calib: T.Annotated[PinholeCalib, mem.TunableShared],  # [fx, fy, cx, cy]
     point: T.Annotated[Point, mem.TunableShared],
     pixel: T.Annotated[ConstPixel, mem.ConstantSequential],
+    weight_loss: T.Annotated[ConstReprojectionWeightLoss, mem.ConstantSequential],
 ) -> sf.V2:
     """Reprojection residual for COLMAP's PINHOLE model (sensor/models.h).
 
@@ -232,7 +320,127 @@ def pinhole_core(
     point_cam = cam_T_world * point
     depth = point_cam[2]
     p = sf.V2(point_cam[:2]) / (depth + sf.epsilon() * sf.sign_no_zero(depth))
-    return sf.V2([fx * p[0] + cx, fy * p[1] + cy]) - pixel
+    residual = sf.V2([fx * p[0] + cx, fy * p[1] + cy]) - pixel
+    return reprojection_weight_and_robustify(residual, weight_loss)
+
+
+def pinhole_fixed_rotation_core(
+    rotation: T.Annotated[ConstPinholeRotation, mem.ConstantSequential],
+    translation: T.Annotated[PinholeTranslation, mem.TunableShared],
+    calib: T.Annotated[PinholeCalib, mem.TunableShared],  # [fx, fy, cx, cy]
+    point: T.Annotated[Point, mem.TunableShared],
+    pixel: T.Annotated[ConstPixel, mem.ConstantSequential],
+    weight_loss: T.Annotated[ConstReprojectionWeightLoss, mem.ConstantSequential],
+) -> sf.V2:
+    """PINHOLE reprojection residual with fixed rotation and tunable translation."""
+    fx, fy, cx, cy = calib
+    point_cam = rotation * point + translation
+    depth = point_cam[2]
+    p = sf.V2(point_cam[:2]) / (depth + sf.epsilon() * sf.sign_no_zero(depth))
+    residual = sf.V2([fx * p[0] + cx, fy * p[1] + cy]) - pixel
+    return reprojection_weight_and_robustify(residual, weight_loss)
+
+
+def pinhole_log_depth_core(
+    pose: T.Annotated[PinholePose, mem.TunableShared],
+    scale: T.Annotated[DepthScale, mem.TunableShared],
+    point: T.Annotated[Point, mem.TunableShared],
+    log_depth: T.Annotated[ConstLogDepth, mem.ConstantSequential],
+    loss: T.Annotated[ConstRobustLoss, mem.ConstantSequential],
+) -> sf.V1:
+    """MPSFM log-depth residual.
+
+    residual = 0                                        if predicted depth <= 0
+             = log((R * point + t).z) - log_depth - scale otherwise
+    """
+    point_cam = pose * point
+    depth = point_cam[2]
+    safe_depth = sf.Max(depth, sf.epsilon())
+    residual = sf.log(safe_depth) - log_depth[0] - scale[0]
+    raw = sf.V1([sf.Piecewise((residual, depth > 0), (0, True))])
+    return robustify(raw, loss)
+
+
+def pinhole_log_depth_fixed_rotation_core(
+    rotation: T.Annotated[ConstPinholeRotation, mem.ConstantSequential],
+    translation: T.Annotated[PinholeTranslation, mem.TunableShared],
+    scale: T.Annotated[DepthScale, mem.TunableShared],
+    point: T.Annotated[Point, mem.TunableShared],
+    log_depth: T.Annotated[ConstLogDepth, mem.ConstantSequential],
+    loss: T.Annotated[ConstRobustLoss, mem.ConstantSequential],
+) -> sf.V1:
+    """MPSFM log-depth residual with fixed rotation and tunable translation."""
+    point_cam = rotation * point + translation
+    depth = point_cam[2]
+    safe_depth = sf.Max(depth, sf.epsilon())
+    residual = sf.log(safe_depth) - log_depth[0] - scale[0]
+    raw = sf.V1([sf.Piecewise((residual, depth > 0), (0, True))])
+    return robustify(raw, loss)
+
+
+def pinhole_intrinsics_prior(
+    calib: T.Annotated[PinholeCalib, mem.TunableShared],
+    prior: T.Annotated[ConstPinholeCalib, mem.ConstantSequential],
+    inv_std: T.Annotated[ConstInvStd4, mem.ConstantSequential],
+) -> sf.V4:
+    """Diagonal Gaussian prior on PINHOLE [fx, fy, cx, cy]."""
+    return sf.V4([(calib[i] - prior[i]) * inv_std[i] for i in range(4)])
+
+
+def pinhole_split_intrinsics_prior(
+    focal: T.Annotated[PinholeFocal, mem.TunableShared],
+    principal_point: T.Annotated[PinholePrincipalPoint, mem.TunableShared],
+    prior: T.Annotated[ConstPinholeCalib, mem.ConstantSequential],
+    inv_std: T.Annotated[ConstInvStd4, mem.ConstantSequential],
+) -> sf.V4:
+    """Split-node PINHOLE intrinsics prior on [fx, fy, cx, cy]."""
+    calib = sf.V4([focal[0], focal[1], principal_point[0], principal_point[1]])
+    return sf.V4([(calib[i] - prior[i]) * inv_std[i] for i in range(4)])
+
+
+def pinhole_intrinsics_random_walk(
+    prev_calib: T.Annotated[PinholeCalib, mem.TunableShared],
+    next_calib: T.Annotated[PinholeCalib, mem.TunableShared],
+    inv_std: T.Annotated[ConstInvStd4, mem.ConstantSequential],
+) -> sf.V4:
+    """Random-walk residual between adjacent PINHOLE [fx, fy, cx, cy] nodes."""
+    return sf.V4([(next_calib[i] - prev_calib[i]) * inv_std[i] for i in range(4)])
+
+
+def pinhole_split_intrinsics_random_walk(
+    prev_focal: T.Annotated[PinholeFocal, mem.TunableShared],
+    prev_principal_point: T.Annotated[PinholePrincipalPoint, mem.TunableShared],
+    next_focal: T.Annotated[PinholeFocal, mem.TunableShared],
+    next_principal_point: T.Annotated[PinholePrincipalPoint, mem.TunableShared],
+    inv_std: T.Annotated[ConstInvStd4, mem.ConstantSequential],
+) -> sf.V4:
+    """Split-node random-walk residual between adjacent PINHOLE intrinsics."""
+    prev_calib = sf.V4(
+        [
+            prev_focal[0],
+            prev_focal[1],
+            prev_principal_point[0],
+            prev_principal_point[1],
+        ]
+    )
+    next_calib = sf.V4(
+        [
+            next_focal[0],
+            next_focal[1],
+            next_principal_point[0],
+            next_principal_point[1],
+        ]
+    )
+    return sf.V4([(next_calib[i] - prev_calib[i]) * inv_std[i] for i in range(4)])
+
+
+def scale_prior(
+    scale: T.Annotated[DepthScale, mem.TunableShared],
+    inv_std: T.Annotated[ConstInvStd1, mem.ConstantSequential],
+    loss: T.Annotated[ConstRobustLoss, mem.ConstantSequential],
+) -> sf.V1:
+    """Gaussian prior on MPSFM log-depth scale."""
+    return robustify(sf.V1([scale[0] * inv_std[0]]), loss)
 
 
 # Split cores delegate to merged cores to avoid duplicating projection math.
@@ -270,6 +478,7 @@ def pinhole_split_core(
     principal_point: T.Annotated[PinholePrincipalPoint, mem.TunableShared],
     point: T.Annotated[Point, mem.TunableShared],
     pixel: T.Annotated[ConstPixel, mem.ConstantSequential],
+    weight_loss: T.Annotated[ConstReprojectionWeightLoss, mem.ConstantSequential],
 ) -> sf.V2:
     """Split-calib variant of pinhole_core for COLMAP's PINHOLE model.
 
@@ -277,7 +486,23 @@ def pinhole_split_core(
     focal = [fx, fy], principal_point = [cx, cy].
     """
     calib = sf.V4([focal[0], focal[1], principal_point[0], principal_point[1]])
-    return pinhole_core(pose, calib, point, pixel)
+    return pinhole_core(pose, calib, point, pixel, weight_loss)
+
+
+def pinhole_split_fixed_rotation_core(
+    rotation: T.Annotated[ConstPinholeRotation, mem.ConstantSequential],
+    translation: T.Annotated[PinholeTranslation, mem.TunableShared],
+    focal: T.Annotated[PinholeFocal, mem.TunableShared],
+    principal_point: T.Annotated[PinholePrincipalPoint, mem.TunableShared],
+    point: T.Annotated[Point, mem.TunableShared],
+    pixel: T.Annotated[ConstPixel, mem.ConstantSequential],
+    weight_loss: T.Annotated[ConstReprojectionWeightLoss, mem.ConstantSequential],
+) -> sf.V2:
+    """Split-calib PINHOLE reprojection with fixed rotation and tunable translation."""
+    calib = sf.V4([focal[0], focal[1], principal_point[0], principal_point[1]])
+    return pinhole_fixed_rotation_core(
+        rotation, translation, calib, point, pixel, weight_loss
+    )
 
 
 dtype = mem.DType.DOUBLE if precision == "f64" else mem.DType.FLOAT
@@ -294,8 +519,8 @@ caslib = CasparLibrary(name="caspar_lib", dtype=dtype)
 #   refine_points3D                            -> point
 #
 # Limitations:
-#   - constant_rig_from_world_rotation not supported (needs separate pose
-#     rotation/translation sub-nodes)
+#   - constant_rig_from_world_rotation is supported for PINHOLE through
+#     dedicated fixed-rotation factors with a tunable translation node.
 #   - refine_sensor_from_rig not supported (for now) due to high shared memory
 #     usage (single camera per rig assumed)
 #   - refine_focal_length != refine_extra_params not supported (observations
@@ -309,6 +534,22 @@ FIXABLE_SIMPLE_RADIAL = {
 
 FIXABLE_PINHOLE = {
     "pose": ConstPinholePose,
+    "point": ConstPoint,
+}
+
+FIXABLE_PINHOLE_LOG_DEPTH = {
+    "pose": ConstPinholePose,
+    "scale": ConstDepthScale,
+    "point": ConstPoint,
+}
+
+FIXABLE_PINHOLE_FIXED_ROTATION = {
+    "calib": ConstPinholeCalib,
+    "point": ConstPoint,
+}
+
+FIXABLE_PINHOLE_LOG_DEPTH_FIXED_ROTATION = {
+    "scale": ConstDepthScale,
     "point": ConstPoint,
 }
 
@@ -326,6 +567,24 @@ FIXABLE_PINHOLE_SPLIT = {
     "point": ConstPoint,
 }
 
+FIXABLE_PINHOLE_SPLIT_FIXED_ROTATION = {
+    "focal": ConstPinholeFocal,
+    "principal_point": ConstPinholePrincipalPoint,
+    "point": ConstPoint,
+}
+
+FIXABLE_PINHOLE_SPLIT_INTRINSICS_PRIOR = {
+    "focal": ConstPinholeFocal,
+    "principal_point": ConstPinholePrincipalPoint,
+}
+
+FIXABLE_PINHOLE_SPLIT_INTRINSICS_RANDOM_WALK = {
+    "prev_focal": ConstPinholeFocal,
+    "prev_principal_point": ConstPinholePrincipalPoint,
+    "next_focal": ConstPinholeFocal,
+    "next_principal_point": ConstPinholePrincipalPoint,
+}
+
 # Merged: BASE, FIXED_POSE, FIXED_POINT, FIXED_POSE_FIXED_POINT (4 variants).
 register_camera_model(
     caslib,
@@ -337,6 +596,29 @@ register_camera_model(
 register_camera_model(
     caslib, "pinhole", pinhole_core, FIXABLE_PINHOLE, include_all_fixed=True
 )
+register_camera_model(
+    caslib,
+    "pinhole_log_depth",
+    pinhole_log_depth_core,
+    FIXABLE_PINHOLE_LOG_DEPTH,
+)
+register_camera_model(
+    caslib,
+    "pinhole_fixed_rotation",
+    pinhole_fixed_rotation_core,
+    FIXABLE_PINHOLE_FIXED_ROTATION,
+    include_all_fixed=True,
+)
+register_camera_model(
+    caslib,
+    "pinhole_log_depth_fixed_rotation",
+    pinhole_log_depth_fixed_rotation_core,
+    FIXABLE_PINHOLE_LOG_DEPTH_FIXED_ROTATION,
+    include_all_fixed=True,
+)
+caslib.add_factor(pinhole_intrinsics_prior)
+caslib.add_factor(pinhole_intrinsics_random_walk)
+caslib.add_factor(scale_prior)
 
 # Split: all variants where at least one of
 # {focal_and_distortion, principal_point} is fixed (11 variants per model).
@@ -353,6 +635,33 @@ register_camera_model(
     pinhole_split_core,
     FIXABLE_PINHOLE_SPLIT,
     must_fix_one_of={"focal", "principal_point"},
+)
+register_camera_model(
+    caslib,
+    "pinhole_split_fixed_rotation",
+    pinhole_split_fixed_rotation_core,
+    FIXABLE_PINHOLE_SPLIT_FIXED_ROTATION,
+    must_fix_one_of={"focal", "principal_point"},
+    include_all_fixed=True,
+)
+register_camera_model(
+    caslib,
+    "pinhole_split_intrinsics_prior",
+    pinhole_split_intrinsics_prior,
+    FIXABLE_PINHOLE_SPLIT_INTRINSICS_PRIOR,
+    must_fix_one_of={"focal", "principal_point"},
+)
+register_camera_model(
+    caslib,
+    "pinhole_split_intrinsics_random_walk",
+    pinhole_split_intrinsics_random_walk,
+    FIXABLE_PINHOLE_SPLIT_INTRINSICS_RANDOM_WALK,
+    must_fix_one_of={
+        "prev_focal",
+        "prev_principal_point",
+        "next_focal",
+        "next_principal_point",
+    },
 )
 
 out_dir = Path(f"{sys.argv[1]}")

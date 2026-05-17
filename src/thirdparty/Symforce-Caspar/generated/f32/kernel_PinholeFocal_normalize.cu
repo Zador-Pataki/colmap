@@ -24,35 +24,39 @@ __global__ void __launch_bounds__(1024, 1)
   const int global_thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
   __shared__ uint8_t inout_shared[4096];
 
-  float r0, r1, r2, r3, r4, r5, r6;
-
-  if (global_thread_idx < problem_size) {
-    ReadIdx2<1024, float, float, float2>(
-        njtr, 0 * njtr_num_alloc, global_thread_idx, r0, r1);
-    ReadIdx2<1024, float, float, float2>(
-        precond_diag, 0 * precond_diag_num_alloc, global_thread_idx, r2, r3);
-  };
+  float r0, r1, r2, r3, r4, r5;
   LoadUnique<1, float, float>(diag, 0, (float*)inout_shared);
   if (global_thread_idx < problem_size) {
-    ReadShared1<float>((float*)inout_shared, 0, r4);
+    ReadShared1<float>((float*)inout_shared, 0, r0);
   };
   __syncthreads();
   if (global_thread_idx < problem_size) {
-    r5 = 1.00000000000000000e+00;
-    r5 = r4 + r5;
-    r6 = 9.99999999999999955e-07;
-    r6 = r4 * r6;
-    r2 = fmaf(r2, r5, r6);
-    r2 = 1.0 / r2;
-    r2 = r0 * r2;
-    r5 = fmaf(r3, r5, r6);
-    r5 = 1.0 / r5;
-    r5 = r1 * r5;
+    r1 = 9.99999999999999955e-07;
+    r1 = r0 * r1;
+    ReadIdx2<1024, float, float, float2>(
+        precond_diag, 0 * precond_diag_num_alloc, global_thread_idx, r2, r3);
+    r4 = 1.00000000000000000e+00;
+    r4 = r0 + r4;
+    r3 = fmaf(r3, r4, r1);
+    ReadIdx1<1024, float, float, float>(
+        precond_tril, 0 * precond_tril_num_alloc, global_thread_idx, r0);
+    r5 = -1.00000000000000000e+00;
+    r5 = r0 * r5;
+    r4 = fmaf(r2, r4, r1);
+    r4 = 1.0 / r4;
+    r5 = r5 * r4;
+    r3 = fmaf(r0, r5, r3);
+    r3 = 1.0 / r3;
+    ReadIdx2<1024, float, float, float2>(
+        njtr, 0 * njtr_num_alloc, global_thread_idx, r0, r2);
+    r2 = fmaf(r0, r5, r2);
+    r2 = r3 * r2;
+    r5 = fmaf(r5, r2, r0 * r4);
     WriteIdx2<1024, float, float, float2>(out_normalized,
                                           0 * out_normalized_num_alloc,
                                           global_thread_idx,
-                                          r2,
-                                          r5);
+                                          r5,
+                                          r2);
   };
 }
 

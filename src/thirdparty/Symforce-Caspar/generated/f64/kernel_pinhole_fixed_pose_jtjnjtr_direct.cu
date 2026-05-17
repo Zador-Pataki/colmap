@@ -41,7 +41,8 @@ __global__ void __launch_bounds__(1024, 1)
            ? point_njtr_indices[global_thread_idx]
            : SharedIndex{0xffffffff, 0xffff, 0xffff});
 
-  double r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12;
+  double r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
+      r16;
 
   if (global_thread_idx < problem_size) {
     ReadIdx2<1024, double, double, double2>(
@@ -74,22 +75,30 @@ __global__ void __launch_bounds__(1024, 1)
   if (global_thread_idx < problem_size) {
     ReadIdx2<1024, double, double, double2>(
         point_jac, 2 * point_jac_num_alloc, global_thread_idx, r7, r8);
-    r9 = fma(r6, r7, r2 * r3);
+    r9 = fma(r6, r8, r2 * r4);
     ReadIdx2<1024, double, double, double2>(
         point_jac, 0 * point_jac_num_alloc, global_thread_idx, r10, r11);
-    r9 = fma(r5, r10, r9);
-    r12 = r0 * r9;
-    r6 = fma(r6, r8, r2 * r4);
-    r6 = fma(r5, r11, r6);
-    r5 = r1 * r6;
-    WriteSum2<double, double>((double*)inout_shared, r12, r5);
+    r9 = fma(r5, r11, r9);
+    r6 = fma(r6, r7, r2 * r3);
+    r6 = fma(r5, r10, r6);
+    r5 = fma(r0, r6, r1 * r9);
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 2 * calib_jac_num_alloc, global_thread_idx, r2, r12);
+    r13 = fma(r2, r6, r12 * r9);
+    WriteSum2<double, double>((double*)inout_shared, r5, r13);
   };
   FlushSumShared<2, double>(out_calib_njtr,
                             0 * out_calib_njtr_num_alloc,
                             calib_njtr_indices_loc,
                             (double*)inout_shared);
   if (global_thread_idx < problem_size) {
-    WriteSum2<double, double>((double*)inout_shared, r9, r6);
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 4 * calib_jac_num_alloc, global_thread_idx, r13, r5);
+    r14 = fma(r13, r6, r5 * r9);
+    ReadIdx2<1024, double, double, double2>(
+        calib_jac, 6 * calib_jac_num_alloc, global_thread_idx, r15, r16);
+    r6 = fma(r15, r6, r16 * r9);
+    WriteSum2<double, double>((double*)inout_shared, r14, r6);
   };
   FlushSumShared<2, double>(out_calib_njtr,
                             2 * out_calib_njtr_num_alloc,
@@ -103,9 +112,12 @@ __global__ void __launch_bounds__(1024, 1)
     ReadShared2<double>((double*)inout_shared,
                         calib_njtr_indices_loc[threadIdx.x].target,
                         r6,
-                        r9);
+                        r14);
   };
   __syncthreads();
+  if (global_thread_idx < problem_size) {
+    r5 = fma(r6, r5, r14 * r16);
+  };
   LoadShared<2, double, double>(calib_njtr,
                                 0 * calib_njtr_num_alloc,
                                 calib_njtr_indices_loc,
@@ -113,24 +125,27 @@ __global__ void __launch_bounds__(1024, 1)
   if (global_thread_idx < problem_size) {
     ReadShared2<double>((double*)inout_shared,
                         calib_njtr_indices_loc[threadIdx.x].target,
-                        r5,
-                        r12);
+                        r16,
+                        r9);
   };
   __syncthreads();
   if (global_thread_idx < problem_size) {
-    r0 = fma(r5, r0, r6);
-    r1 = fma(r12, r1, r9);
-    r11 = fma(r11, r1, r10 * r0);
-    r8 = fma(r8, r1, r7 * r0);
-    WriteSum2<double, double>((double*)inout_shared, r11, r8);
+    r5 = fma(r16, r1, r5);
+    r5 = fma(r9, r12, r5);
+    r15 = fma(r14, r15, r6 * r13);
+    r15 = fma(r16, r0, r15);
+    r15 = fma(r9, r2, r15);
+    r10 = fma(r10, r15, r11 * r5);
+    r7 = fma(r7, r15, r8 * r5);
+    WriteSum2<double, double>((double*)inout_shared, r10, r7);
   };
   FlushSumShared<2, double>(out_point_njtr,
                             0 * out_point_njtr_num_alloc,
                             point_njtr_indices_loc,
                             (double*)inout_shared);
   if (global_thread_idx < problem_size) {
-    r1 = fma(r4, r1, r3 * r0);
-    WriteSum1<double, double>((double*)inout_shared, r1);
+    r15 = fma(r3, r15, r4 * r5);
+    WriteSum1<double, double>((double*)inout_shared, r15);
   };
   FlushSumShared<1, double>(out_point_njtr,
                             2 * out_point_njtr_num_alloc,
