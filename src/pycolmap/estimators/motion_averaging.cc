@@ -13,6 +13,8 @@ using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
 
+void BindGlobalPositioningTraceJacobianReducer(py::module& m);
+
 void BindGlobalPositioner(py::module& m) {
   // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
   // bundle_adjustment.cc), which runs earlier in ``BindEstimators``.
@@ -38,10 +40,11 @@ void BindGlobalPositioner(py::module& m) {
           .def_readwrite(
               "snapshot_every_n_iterations",
               &GlobalPositioningTraceOptions::snapshot_every_n_iterations)
-          .def_readwrite(
-              "max_snapshotted_points",
-              &GlobalPositioningTraceOptions::max_snapshotted_points);
+          .def_readwrite("write_legacy_jsonl",
+                         &GlobalPositioningTraceOptions::write_legacy_jsonl);
   MakeDataclass(PyGlobalPositioningTraceOptions);
+
+  BindGlobalPositioningTraceJacobianReducer(m);
 
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")

@@ -33,6 +33,90 @@ def _write_raw_json(stream, value: dict) -> None:
     _write_raw_string(stream, json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def _write_raw_optional_double(stream, value) -> None:
+    stream.write(struct.pack("<?", value is not None))
+    if value is not None:
+        stream.write(struct.pack("<d", value))
+
+
+def _write_raw_parameter_block(stream, value: dict) -> None:
+    _write_raw_string(stream, value["role"])
+    _write_raw_string(stream, value["kind"])
+    stream.write(struct.pack("<Q", value["id"]))
+    stream.write(struct.pack("<?", "size" in value))
+    if "size" in value:
+        stream.write(struct.pack("<Q", value["size"]))
+
+
+def _write_raw_trace_value(stream, value) -> None:
+    if value is None:
+        stream.write(struct.pack("<B", 0))
+    elif isinstance(value, bool):
+        stream.write(struct.pack("<B?", 1, value))
+    elif isinstance(value, int):
+        stream.write(struct.pack("<Bq", 2, value))
+    elif isinstance(value, float):
+        stream.write(struct.pack("<Bd", 4, value))
+    elif isinstance(value, str):
+        stream.write(struct.pack("<B", 5))
+        _write_raw_string(stream, value)
+    elif isinstance(value, list):
+        stream.write(struct.pack("<BI", 7, len(value)))
+        for item in value:
+            _write_raw_parameter_block(stream, item)
+    elif isinstance(value, dict) and {"bucket", "type", "scale", "weight", "source"}.issubset(value):
+        stream.write(struct.pack("<B", 8))
+        _write_raw_string(stream, value["bucket"])
+        _write_raw_string(stream, value["type"])
+        _write_raw_optional_double(stream, value["scale"])
+        _write_raw_optional_double(stream, value["weight"])
+        _write_raw_string(stream, value["source"])
+        _write_raw_optional_double(stream, value.get("observation_count_weight"))
+    elif isinstance(value, dict):
+        stream.write(struct.pack("<B", 9))
+        for key in (
+            "cam_from_point3D_dir",
+            "keypoint_covariance_world_row_major",
+            "cam_from_rig_dir",
+            "rig_from_world_rotation_wxyz",
+            "world_from_rig_rotation_wxyz",
+            "camera_rotation_wxyz",
+        ):
+            item = value.get(key)
+            stream.write(struct.pack("<?", item is not None))
+            if item is not None:
+                stream.write(struct.pack("<I", len(item)))
+                for scalar in item:
+                    stream.write(struct.pack("<d", scalar))
+        item = value.get("metric_depth_use_log_scale")
+        stream.write(struct.pack("<?", item is not None))
+        if item is not None:
+            stream.write(struct.pack("<?", item))
+        item = value.get("metric_depth_residual_type")
+        stream.write(struct.pack("<?", item is not None))
+        if item is not None:
+            _write_raw_string(stream, item)
+        item = value.get("metric_depth_zero_residual_behind")
+        stream.write(struct.pack("<?", item is not None))
+        if item is not None:
+            stream.write(struct.pack("<?", item))
+        for key in (
+            "metric_depth_log_linear_threshold",
+            "scale_prior_target",
+            "scale_prior_stddev",
+        ):
+            _write_raw_optional_double(stream, value.get(key))
+    else:
+        raise TypeError(f"unsupported raw trace value: {value!r}")
+
+
+def _write_raw_trace_attrs(stream, attrs: dict) -> None:
+    stream.write(struct.pack("<I", len(attrs)))
+    for key, value in attrs.items():
+        _write_raw_string(stream, key)
+        _write_raw_trace_value(stream, value)
+
+
 def _write_raw_array(path: Path, name: str, ids, values) -> None:
     values = np.asarray(values, dtype="<f8")
     ids = np.asarray(ids, dtype="<i8")
@@ -50,10 +134,10 @@ def _write_raw_array(path: Path, name: str, ids, values) -> None:
         values.reshape(-1).tofile(stream)
 
 
-def _write_raw_residual_ledger(path: Path, records: list[dict]) -> None:
+def _write_raw_residual_ledger(path: Path, records: list[dict], *, version: int = 2) -> None:
     with path.open("wb") as stream:
         stream.write(b"GPTRLGR1")
-        stream.write(struct.pack("<IQ", 1, len(records)))
+        stream.write(struct.pack("<IQ", version, len(records)))
         for record in records:
             attrs = record["attrs"]
             _write_raw_string(stream, attrs["residual_id"])
@@ -68,7 +152,10 @@ def _write_raw_residual_ledger(path: Path, records: list[dict]) -> None:
                     attrs.get("is_lc_observation", False),
                 )
             )
-            _write_raw_json(stream, attrs)
+            if version == 1:
+                _write_raw_json(stream, attrs)
+            else:
+                _write_raw_trace_attrs(stream, attrs)
 
 
 def _write_raw_residual_values(
@@ -199,6 +286,7 @@ def _make_raw_binary_trace(
     *,
     with_jacobians: bool = False,
     force_residual_version: int | None = None,
+    residual_ledger_version: int = 2,
 ) -> Path:
     trace_dir = tmp_path / "trace_raw_binary"
     static_dir = trace_dir / "static"
@@ -207,16 +295,18 @@ def _make_raw_binary_trace(
     iteration_dir.mkdir(parents=True)
 
     records = _raw_support_records()
-    _write_raw_residual_ledger(static_dir / "residual_ledger.bin", records)
+    _write_raw_residual_ledger(
+        static_dir / "residual_ledger.bin",
+        records,
+        version=residual_ledger_version,
+    )
     _write_raw_array(
         iteration_dir / "frame_centers.bin",
         "frame_centers",
         [10, 20],
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
     )
-    _write_raw_array(
-        iteration_dir / "point_xyz.bin", "point_xyz", [100], [[0.0, 0.0, 2.0]]
-    )
+    _write_raw_array(iteration_dir / "point_xyz.bin", "point_xyz", [100], [[0.0, 0.0, 2.0]])
     _write_raw_array(iteration_dir / "scales.bin", "scales", [0], [1.0])
     parameter_blocks = None
     raw_jacobians = None
@@ -290,6 +380,29 @@ def _make_raw_binary_trace(
         },
     )
     return trace_dir
+
+
+def test_raw_binary_trace_load_refuses_large_eager_residual_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace_dir = _make_raw_binary_trace(tmp_path)
+    monkeypatch.delenv("PYCOLMAP_GP_TRACE_ALLOW_HEAVY_LOAD", raising=False)
+    monkeypatch.setenv("PYCOLMAP_GP_TRACE_MAX_EAGER_RAW_RECORDS", "1")
+
+    with pytest.raises(RuntimeError, match="Refusing to eagerly load 2 raw GP residual records"):
+        pycolmap.GlobalPositioningTrace.load(trace_dir)
+
+
+def test_raw_binary_trace_load_allows_explicit_heavy_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace_dir = _make_raw_binary_trace(tmp_path)
+    monkeypatch.setenv("PYCOLMAP_GP_TRACE_ALLOW_HEAVY_LOAD", "1")
+    monkeypatch.setenv("PYCOLMAP_GP_TRACE_MAX_EAGER_RAW_RECORDS", "1")
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+
+    assert len(trace.residual_blocks) == 2
 
 
 def _artifact(filename: str, ids, shape) -> dict:
@@ -384,9 +497,7 @@ def _iteration_metric(
     )
 
 
-def _make_trace(
-    tmp_path: Path, *, with_jacobians: bool, with_loss_rho: bool = False
-) -> Path:
+def _make_trace(tmp_path: Path, *, with_jacobians: bool, with_loss_rho: bool = False) -> Path:
     trace_dir = tmp_path / ("trace_jacobians" if with_jacobians else "trace_values")
     residual_values_dir = trace_dir / "residual_values"
     residual_values_dir.mkdir(parents=True)
@@ -397,9 +508,7 @@ def _make_trace(
             "schema_version": 1,
             "run_id": "run",
             "status": "finished",
-            "trace_level": (
-                "residual_jacobians" if with_jacobians else "residual_values"
-            ),
+            "trace_level": ("residual_jacobians" if with_jacobians else "residual_values"),
         },
     )
     _write_jsonl(
@@ -466,9 +575,7 @@ def _make_trace(
                     [[-1.0, -1.0, -1.0], [1e-5]],
                     [[1e-5]],
                 ],
-                "raw_jacobian_layout": (
-                    "residual_block_major/parameter_block_major/row_major"
-                ),
+                "raw_jacobian_layout": ("residual_block_major/parameter_block_major/row_major"),
                 "jacobian_domain": "raw_cost_function_ambient_parameters",
                 "loss_applied_to_jacobians": False,
                 "manifold_applied_to_jacobians": False,
@@ -543,24 +650,16 @@ def _make_snapshot_trace(tmp_path: Path, *, include_optional: bool = True) -> Pa
     _write_f64(snapshots_dir / f"{prefix}_scales_f64.bin", scales)
 
     artifacts = {
-        "frame_centers": _artifact(
-            f"{prefix}_frame_centers_f64.bin", frame_ids, frame_centers.shape
-        ),
-        "points3D": _artifact(
-            f"{prefix}_points3D_f64.bin", point3D_ids, points3D.shape
-        ),
+        "frame_centers": _artifact(f"{prefix}_frame_centers_f64.bin", frame_ids, frame_centers.shape),
+        "points3D": _artifact(f"{prefix}_points3D_f64.bin", point3D_ids, points3D.shape),
         "scales": _artifact(f"{prefix}_scales_f64.bin", scale_ids, scales.shape),
     }
     dmap_shape = [0]
     if include_optional:
         _write_f64(snapshots_dir / f"{prefix}_dmap_scales_f64.bin", dmap_scales)
         _write_f64(snapshots_dir / f"{prefix}_cams_in_rig_f64.bin", cams_in_rig)
-        artifacts["dmap_scales"] = _artifact(
-            f"{prefix}_dmap_scales_f64.bin", dmap_ids, dmap_scales.shape
-        )
-        artifacts["cams_in_rig"] = _artifact(
-            f"{prefix}_cams_in_rig_f64.bin", cam_ids, cams_in_rig.shape
-        )
+        artifacts["dmap_scales"] = _artifact(f"{prefix}_dmap_scales_f64.bin", dmap_ids, dmap_scales.shape)
+        artifacts["cams_in_rig"] = _artifact(f"{prefix}_cams_in_rig_f64.bin", cam_ids, cams_in_rig.shape)
         dmap_shape = list(dmap_scales.shape)
     else:
         dmap_ids = []
@@ -670,19 +769,11 @@ def _make_replay_trace(tmp_path: Path, records: list[dict] | None = None) -> Pat
             "dmap_image_ids": [50],
             "dmap_scales_stored_shape": list(dmap_scales.shape),
             "artifacts": {
-                "frame_centers": _artifact(
-                    f"{prefix}_frame_centers_f64.bin", [10], frame_centers.shape
-                ),
-                "points3D": _artifact(
-                    f"{prefix}_points3D_f64.bin", [20], points3D.shape
-                ),
+                "frame_centers": _artifact(f"{prefix}_frame_centers_f64.bin", [10], frame_centers.shape),
+                "points3D": _artifact(f"{prefix}_points3D_f64.bin", [20], points3D.shape),
                 "scales": _artifact(f"{prefix}_scales_f64.bin", [30], scales.shape),
-                "dmap_scales": _artifact(
-                    f"{prefix}_dmap_scales_f64.bin", [50], dmap_scales.shape
-                ),
-                "cams_in_rig": _artifact(
-                    f"{prefix}_cams_in_rig_f64.bin", [70], cams_in_rig.shape
-                ),
+                "dmap_scales": _artifact(f"{prefix}_dmap_scales_f64.bin", [50], dmap_scales.shape),
+                "cams_in_rig": _artifact(f"{prefix}_cams_in_rig_f64.bin", [70], cams_in_rig.shape),
             },
         },
     )
@@ -877,18 +968,11 @@ def _write_replay_residual_dump(trace_dir: Path) -> None:
         ],
         [{"role": "dmap_scale", "kind": "dmap_scale", "id": 50}],
     ]
-    parameter_block_sizes = [
-        [block.shape[1] for block in residual_blocks]
-        for residual_blocks in jacobian_blocks
-    ]
-    parameter_block_is_constant = [
-        [False] * len(residual_blocks) for residual_blocks in jacobian_blocks
-    ]
+    parameter_block_sizes = [[block.shape[1] for block in residual_blocks] for residual_blocks in jacobian_blocks]
+    parameter_block_is_constant = [[False] * len(residual_blocks) for residual_blocks in jacobian_blocks]
     parameter_block_lower_bounds = []
     for residual_blocks in jacobian_blocks:
-        parameter_block_lower_bounds.append(
-            [[-1e100] * block.shape[1] for block in residual_blocks]
-        )
+        parameter_block_lower_bounds.append([[-1e100] * block.shape[1] for block in residual_blocks])
 
     _write_json(
         residual_values_dir / f"{prefix}.json",
@@ -954,9 +1038,7 @@ def _write_replay_residual_dump(trace_dir: Path) -> None:
     _write_f64(residual_values_dir / f"{prefix}_raw_residuals_f64.bin", raw_residuals)
     _write_f64(residual_values_dir / f"{prefix}_raw_costs_f64.bin", raw_costs)
     _write_f64(residual_values_dir / f"{prefix}_robust_costs_f64.bin", robust_costs)
-    _write_f64(
-        residual_values_dir / f"{prefix}_loss_rho_values_f64.bin", loss_rho_values
-    )
+    _write_f64(residual_values_dir / f"{prefix}_loss_rho_values_f64.bin", loss_rho_values)
     _write_f64(residual_values_dir / f"{prefix}_raw_jacobians_f64.bin", raw_jacobians)
 
 
@@ -970,18 +1052,12 @@ def _flatten_replay_jacobians(
     replay: pycolmap.GlobalPositioningReplayEvaluation,
 ) -> np.ndarray:
     return np.concatenate(
-        [
-            block.values.ravel()
-            for residual_blocks in replay.raw_jacobians
-            for block in residual_blocks
-        ]
+        [block.values.ravel() for residual_blocks in replay.raw_jacobians for block in residual_blocks]
     )
 
 
 def test_global_positioning_trace_loads_residual_values(tmp_path: Path) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_trace(tmp_path, with_jacobians=False)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_trace(tmp_path, with_jacobians=False))
 
     assert trace.status == "finished"
     assert trace.trace_level == "residual_values"
@@ -1130,9 +1206,7 @@ def test_global_positioning_trace_rejects_non_iteration_metric_event(
 def test_global_positioning_trace_loads_loss_rho_values(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_trace(tmp_path, with_jacobians=False, with_loss_rho=True)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_trace(tmp_path, with_jacobians=False, with_loss_rho=True))
 
     residual_values = trace.residual_values()
     assert residual_values.has_loss_rho_values is True
@@ -1220,9 +1294,7 @@ def test_global_positioning_trace_allows_failed_loss_rho_nan_rows(
 
 
 def test_global_positioning_trace_loads_raw_jacobians(tmp_path: Path) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_trace(tmp_path, with_jacobians=True)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_trace(tmp_path, with_jacobians=True))
     residual_values = trace.residual_values(iteration=0)
 
     assert residual_values.has_raw_jacobians is True
@@ -1236,22 +1308,16 @@ def test_global_positioning_trace_loads_raw_jacobians(tmp_path: Path) -> None:
     assert residual.parameter_blocks[1].is_constant is True
     assert residual.parameter_blocks[1].lower_bounds == (1e-5,)
 
-    np.testing.assert_allclose(
-        residual.jacobian(0), np.arange(6, dtype=np.float64).reshape(2, 3)
-    )
+    np.testing.assert_allclose(residual.jacobian(0), np.arange(6, dtype=np.float64).reshape(2, 3))
     np.testing.assert_allclose(residual.jacobian("bata_scale"), [[6.0], [7.0]])
-    np.testing.assert_allclose(
-        residual_values.residual("r1").jacobian("dmap_scale", id=20), [[8.0]]
-    )
+    np.testing.assert_allclose(residual_values.residual("r1").jacobian("dmap_scale", id=20), [[8.0]])
 
 
 def test_global_positioning_trace_rejects_bad_sidecar_size(
     tmp_path: Path,
 ) -> None:
     trace_dir = _make_trace(tmp_path, with_jacobians=False)
-    (trace_dir / "residual_values" / "iter_000000_raw_costs_f64.bin").write_bytes(
-        b"short"
-    )
+    (trace_dir / "residual_values" / "iter_000000_raw_costs_f64.bin").write_bytes(b"short")
 
     trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
     with np.testing.assert_raises(ValueError):
@@ -1357,9 +1423,7 @@ def test_global_positioning_trace_rejects_deferred_residual_ledger_block(
     )
 
     trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
-    assert trace.residual_blocks[0]["attrs"]["fixed_parameters_status"] == (
-        "deferred_not_serialized"
-    )
+    assert trace.residual_blocks[0]["attrs"]["fixed_parameters_status"] == ("deferred_not_serialized")
     with pytest.raises(ValueError, match="fixed_parameters_status"):
         _ = trace.residual_ledger_blocks
 
@@ -1415,9 +1479,7 @@ def test_global_positioning_trace_rejects_bad_ledger_fixed_parameters(
 def test_global_positioning_trace_ignores_legacy_residual_ledger_rows(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_trace(tmp_path, with_jacobians=False)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_trace(tmp_path, with_jacobians=False))
 
     assert [record["attrs"]["residual_id"] for record in trace.residual_blocks] == [
         "r0",
@@ -1515,9 +1577,7 @@ def test_global_positioning_trace_rejects_residual_path_traversal(
 def test_global_positioning_trace_loads_snapshot_with_all_artifacts(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_snapshot_trace(tmp_path, include_optional=True)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_snapshot_trace(tmp_path, include_optional=True))
 
     assert trace.snapshot_iterations == (3,)
     snapshot = trace.snapshot(3)
@@ -1551,9 +1611,7 @@ def test_global_positioning_trace_loads_snapshot_with_all_artifacts(
 def test_global_positioning_trace_snapshot_optional_artifacts_missing(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_snapshot_trace(tmp_path, include_optional=False)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_snapshot_trace(tmp_path, include_optional=False))
 
     snapshot = trace.snapshot(3)
 
@@ -1581,9 +1639,7 @@ def test_global_positioning_trace_snapshot_accepts_legacy_missing_scales(
 
 
 def test_global_positioning_trace_snapshot_max_points(tmp_path: Path) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_snapshot_trace(tmp_path, include_optional=True)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_snapshot_trace(tmp_path, include_optional=True))
 
     snapshot = trace.snapshot(3, max_points=2)
 
@@ -1723,9 +1779,7 @@ def test_global_positioning_trace_replay_exposes_residual_values_compatibility(
     residual_with_jacobians = replay_with_jacobians.residual("bata_ref")
     assert residual_with_jacobians.raw_cost == pytest.approx(residual.raw_cost)
     np.testing.assert_allclose(residual_with_jacobians.loss_rho, residual.loss_rho)
-    assert len(residual_with_jacobians.jacobian_blocks) == len(
-        residual_with_jacobians.parameter_blocks
-    )
+    assert len(residual_with_jacobians.jacobian_blocks) == len(residual_with_jacobians.parameter_blocks)
     jacobian_block = residual_with_jacobians.jacobian_blocks[0]
     assert jacobian_block.parameter_block.role == "frame_center"
     assert jacobian_block.parameter_block.kind == "frame_center"
@@ -1740,9 +1794,7 @@ def test_global_positioning_trace_replay_matches_synthetic_on_disk_residual_dump
     tmp_path: Path,
 ) -> None:
     """Synthetic on-disk parity, not a true C++-generated golden trace."""
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_replay_trace_with_residual_dump(tmp_path)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_replay_trace_with_residual_dump(tmp_path))
     dumped = trace.residual_values(iteration=3)
 
     replay = trace.replay(iteration=3)
@@ -1763,9 +1815,7 @@ def test_global_positioning_trace_replay_matches_synthetic_on_disk_residual_dump
         assert replay_residual.residual_dim == dumped_residual.residual_dim
         assert replay_residual.residual_offset == dumped_residual.residual_offset
         assert replay_residual.evaluation_success == dumped_residual.evaluation_success
-        np.testing.assert_allclose(
-            replay_residual.raw_residuals, dumped_residual.raw_residuals
-        )
+        np.testing.assert_allclose(replay_residual.raw_residuals, dumped_residual.raw_residuals)
         assert replay_residual.raw_cost == pytest.approx(dumped_residual.raw_cost)
         assert replay_residual.robust_cost == pytest.approx(dumped_residual.robust_cost)
         np.testing.assert_allclose(replay_residual.loss_rho, dumped_residual.loss_rho)
@@ -1782,9 +1832,7 @@ def test_global_positioning_trace_replay_matches_synthetic_on_disk_residual_dump
     for residual_id in replay_with_jacobians.residual_ids:
         replay_residual = replay_with_jacobians.residual(residual_id)
         dumped_residual = dumped.residual(residual_id)
-        assert len(replay_residual.jacobian_blocks) == len(
-            dumped_residual.jacobian_blocks
-        )
+        assert len(replay_residual.jacobian_blocks) == len(dumped_residual.jacobian_blocks)
         for replay_block, dumped_block in zip(
             replay_residual.jacobian_blocks,
             dumped_residual.jacobian_blocks,
@@ -1792,16 +1840,10 @@ def test_global_positioning_trace_replay_matches_synthetic_on_disk_residual_dump
         ):
             assert replay_block.offset == dumped_block.offset
             assert replay_block.residual_dim == dumped_block.residual_dim
-            assert (
-                replay_block.parameter_block.role == dumped_block.parameter_block.role
-            )
-            assert (
-                replay_block.parameter_block.kind == dumped_block.parameter_block.kind
-            )
+            assert replay_block.parameter_block.role == dumped_block.parameter_block.role
+            assert replay_block.parameter_block.kind == dumped_block.parameter_block.kind
             assert replay_block.parameter_block.id == dumped_block.parameter_block.id
-            assert (
-                replay_block.parameter_block.size == dumped_block.parameter_block.size
-            )
+            assert replay_block.parameter_block.size == dumped_block.parameter_block.size
             np.testing.assert_allclose(
                 replay_block.values,
                 dumped_block.values,
@@ -1847,9 +1889,7 @@ def test_global_positioning_trace_replay_finite_difference_jacobian_shape(
     assert residual.jacobian_blocks[2].values.shape == (3, 1)
     np.testing.assert_allclose(residual.jacobian_blocks[0].values, 0.5 * np.eye(3))
     np.testing.assert_allclose(residual.jacobian_blocks[1].values, -0.5 * np.eye(3))
-    np.testing.assert_allclose(
-        residual.jacobian_blocks[2].values[:, 0], [-3.0, -2.0, -3.0]
-    )
+    np.testing.assert_allclose(residual.jacobian_blocks[2].values[:, 0], [-3.0, -2.0, -3.0])
     assert residual.jacobian_blocks[0].offset == 0
     assert residual.jacobian_blocks[1].offset == 9
     assert residual.jacobian_blocks[2].offset == 18
@@ -1874,9 +1914,7 @@ def test_global_positioning_trace_replay_fails_loudly_for_bad_inputs(
             ),
         }
     ]
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_replay_trace(tmp_path / "bad_loss", unknown_loss_records)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_replay_trace(tmp_path / "bad_loss", unknown_loss_records))
     with pytest.raises(ValueError, match="unsupported loss type"):
         trace.replay(iteration=3)
 
@@ -1902,9 +1940,7 @@ def test_global_positioning_trace_replay_fails_loudly_for_bad_inputs(
             ),
         }
     ]
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_replay_trace(tmp_path / "bad_quat", bad_quat_records)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_replay_trace(tmp_path / "bad_quat", bad_quat_records))
     with pytest.raises(ValueError, match="camera_rotation_wxyz.*length 4"):
         trace.replay(iteration=3)
 
@@ -1923,9 +1959,7 @@ def test_global_positioning_trace_replay_fails_loudly_for_bad_inputs(
             ),
         }
     ]
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_replay_trace(tmp_path / "missing_fixed", missing_fixed_records)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_replay_trace(tmp_path / "missing_fixed", missing_fixed_records))
     with pytest.raises(KeyError, match="cam_from_rig_dir"):
         trace.replay(iteration=3)
 
@@ -1983,19 +2017,76 @@ def test_global_positioning_trace_raw_binary_fixture_contract_minimal(
     assert snapshot.frame_centers.ids == (10, 20)
     assert snapshot.points3D.ids == (100,)
     assert snapshot.scales.ids == (0,)
-    np.testing.assert_allclose(
-        snapshot.frame_centers.values, [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
-    )
+    np.testing.assert_allclose(snapshot.frame_centers.values, [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
     np.testing.assert_allclose(snapshot.points3D.values, [[0.0, 0.0, 2.0]])
     np.testing.assert_allclose(snapshot.scales.values, [1.0])
+
+
+def test_global_positioning_trace_raw_binary_accepts_legacy_json_ledger(
+    tmp_path: Path,
+) -> None:
+    trace = pycolmap.GlobalPositioningTrace.load(_make_raw_binary_trace(tmp_path, residual_ledger_version=1))
+
+    assert [record["attrs"]["residual_id"] for record in trace.residual_blocks] == [
+        "r10",
+        "r20",
+    ]
+    assert trace.residual_blocks[0]["attrs"]["frame_id"] == 10
+
+
+def test_global_positioning_trace_raw_binary_loads_structured_v2_ledger(
+    tmp_path: Path,
+) -> None:
+    trace_dir = _make_raw_binary_trace(tmp_path)
+    records = _raw_support_records()
+    records[0]["attrs"].update(
+        {
+            "replay_schema_version": 1,
+            "parameter_blocks": [
+                {"role": "frame_center", "kind": "frame_center", "id": 10, "size": 3},
+                {"role": "point3D", "kind": "point3D", "id": 100, "size": 3},
+            ],
+            "loss": {
+                "bucket": "geometry_normal_inlier",
+                "type": "huber",
+                "scale": 0.1,
+                "weight": 0.5,
+                "source": "test",
+                "observation_count_weight": 2.0,
+            },
+            "fixed_parameters_status": "serialized",
+            "fixed_parameters": {
+                "cam_from_point3D_dir": [1.0, 0.0, 0.0],
+                "metric_depth_use_log_scale": True,
+                "metric_depth_residual_type": "log",
+                "metric_depth_zero_residual_behind": False,
+                "metric_depth_log_linear_threshold": 0.25,
+                "scale_prior_target": 1.5,
+                "scale_prior_stddev": 0.2,
+            },
+        }
+    )
+    _write_raw_residual_ledger(
+        trace_dir / "static" / "residual_ledger.bin",
+        records,
+        version=2,
+    )
+
+    trace = pycolmap.GlobalPositioningTrace.load(trace_dir)
+    block = trace.residual_ledger_blocks[0]
+
+    assert block.replay_schema_version == 1
+    assert block.parameter_blocks[0].size == 3
+    assert block.loss.type == "huber"
+    assert block.loss.observation_count_weight == 2.0
+    assert block.fixed_parameters["cam_from_point3D_dir"] == [1.0, 0.0, 0.0]
+    assert block.fixed_parameters["metric_depth_use_log_scale"] is True
 
 
 def test_global_positioning_trace_raw_binary_accepts_v2_without_jacobians(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_raw_binary_trace(tmp_path, force_residual_version=2)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_raw_binary_trace(tmp_path, force_residual_version=2))
 
     residual_values = trace.residual_values(0)
     assert residual_values.has_raw_jacobians is False
@@ -2006,9 +2097,7 @@ def test_global_positioning_trace_raw_binary_accepts_v2_without_jacobians(
 def test_global_positioning_trace_raw_binary_loads_optional_jacobians(
     tmp_path: Path,
 ) -> None:
-    trace = pycolmap.GlobalPositioningTrace.load(
-        _make_raw_binary_trace(tmp_path, with_jacobians=True)
-    )
+    trace = pycolmap.GlobalPositioningTrace.load(_make_raw_binary_trace(tmp_path, with_jacobians=True))
 
     residual_values = trace.residual_values(0)
     assert residual_values.has_raw_jacobians is True
@@ -2032,9 +2121,7 @@ def test_global_positioning_trace_raw_binary_loads_optional_jacobians(
         [-np.inf, -np.inf, -np.inf],
     )
     np.testing.assert_allclose(residual.parameter_blocks[1].lower_bounds, [1e-5])
-    np.testing.assert_allclose(
-        residual.jacobian("frame_center"), np.arange(6).reshape(2, 3)
-    )
+    np.testing.assert_allclose(residual.jacobian("frame_center"), np.arange(6).reshape(2, 3))
     np.testing.assert_allclose(residual.jacobian("bata_scale"), [[6.0], [7.0]])
 
     residual_2 = residual_values.residual("r20")

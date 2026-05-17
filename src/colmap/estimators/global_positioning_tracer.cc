@@ -66,8 +66,7 @@ void WriteParameterSnapshot(
     const std::unordered_map<frame_t, Eigen::Vector3d>& frame_centers,
     const std::vector<double>& scales,
     const std::map<image_t, double>& dmap_scales,
-    const std::unordered_map<sensor_t, Eigen::Vector3d>& cams_in_rig,
-    const int max_snapshotted_points) {
+    const std::unordered_map<sensor_t, Eigen::Vector3d>& cams_in_rig) {
   if (recorder == nullptr) {
     return;
   }
@@ -98,10 +97,6 @@ void WriteParameterSnapshot(
     point3D_ids.push_back(point3D_id);
   }
   std::sort(point3D_ids.begin(), point3D_ids.end());
-  if (max_snapshotted_points >= 0 &&
-      point3D_ids.size() > static_cast<size_t>(max_snapshotted_points)) {
-    point3D_ids.resize(static_cast<size_t>(max_snapshotted_points));
-  }
   snapshot.points3D.shape = {point3D_ids.size(), 3};
   snapshot.points3D.ids.reserve(point3D_ids.size());
   snapshot.points3D.values.reserve(3 * point3D_ids.size());
@@ -169,7 +164,6 @@ class GlobalPositioningTraceIterationCallback
       const std::vector<GlobalPositioningResidualReplayEntry>*
           residual_replay_entries,
       const int snapshot_every_n_iterations,
-      const int max_snapshotted_points,
       const bool write_parameter_snapshots,
       const bool write_residual_values,
       const bool write_raw_jacobians)
@@ -182,7 +176,6 @@ class GlobalPositioningTraceIterationCallback
         cams_in_rig_(cams_in_rig),
         residual_replay_entries_(residual_replay_entries),
         snapshot_every_n_iterations_(snapshot_every_n_iterations),
-        max_snapshotted_points_(max_snapshotted_points),
         write_parameter_snapshots_(write_parameter_snapshots),
         write_residual_values_(write_residual_values),
         write_raw_jacobians_(write_raw_jacobians) {}
@@ -201,8 +194,7 @@ class GlobalPositioningTraceIterationCallback
                                *frame_centers_,
                                *scales_,
                                *dmap_scales_,
-                               *cams_in_rig_,
-                               max_snapshotted_points_);
+                               *cams_in_rig_);
       }
       if (write_residual_values_) {
         recorder_->WriteResidualValues(
@@ -226,7 +218,6 @@ class GlobalPositioningTraceIterationCallback
   const std::vector<GlobalPositioningResidualReplayEntry>*
       residual_replay_entries_ = nullptr;
   int snapshot_every_n_iterations_ = 1;
-  int max_snapshotted_points_ = -1;
   bool write_parameter_snapshots_ = false;
   bool write_residual_values_ = false;
   bool write_raw_jacobians_ = false;
@@ -445,7 +436,6 @@ GlobalPositioningTracer::CreateIterationCallback(
       &live_state.cams_in_rig,
       &residual_replay_entries_,
       options_.snapshot_every_n_iterations,
-      options_.max_snapshotted_points,
       ParameterSnapshotsEnabled(),
       ResidualValuesEnabled(),
       ResidualJacobiansEnabled());

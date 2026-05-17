@@ -467,8 +467,25 @@ uint64_t ReadRawLedgerRecordCountForTest(const std::filesystem::path& path) {
   THROW_CHECK_FILE_OPEN(file, path);
   EXPECT_EQ(ReadBinaryPrefixForTest(path, 8), "GPTRLGR1");
   file.seekg(8, std::ios::beg);
-  EXPECT_EQ(ReadRawLittleEndianForTest<uint32_t>(file, path), 1);
+  EXPECT_EQ(ReadRawLittleEndianForTest<uint32_t>(file, path), 2);
   return ReadRawLittleEndianForTest<uint64_t>(file, path);
+}
+
+std::tuple<uint32_t, uint64_t, uint64_t> ReadRawPointIndexIdentityForTest(
+    const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  THROW_CHECK_FILE_OPEN(file, path);
+  EXPECT_EQ(ReadBinaryPrefixForTest(path, 8), "GPTRIDX1");
+  file.seekg(8, std::ios::beg);
+  EXPECT_EQ(ReadRawLittleEndianForTest<uint32_t>(file, path), 2);
+  EXPECT_GT(ReadRawLittleEndianForTest<uint64_t>(file, path), uint64_t{0});
+  const uint32_t ledger_version =
+      ReadRawLittleEndianForTest<uint32_t>(file, path);
+  const uint64_t ledger_count =
+      ReadRawLittleEndianForTest<uint64_t>(file, path);
+  const uint64_t ledger_size =
+      ReadRawLittleEndianForTest<uint64_t>(file, path);
+  return {ledger_version, ledger_count, ledger_size};
 }
 
 std::pair<uint64_t, uint64_t> ReadRawArrayHeaderForTest(
@@ -1118,7 +1135,6 @@ TEST(GlobalPositioning, ParameterSnapshotsTraceWritesMetadataAndSidecars) {
   options.trace.level = GlobalPositioningTraceLevel::kParameterSnapshots;
   options.trace.output_path = trace_dir;
   options.trace.snapshot_every_n_iterations = 1;
-  options.trace.max_snapshotted_points = 2;
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
@@ -1161,7 +1177,8 @@ TEST(GlobalPositioning, ParameterSnapshotsTraceWritesMetadataAndSidecars) {
             positioner.NumFrameCenters() * 3 * sizeof(double));
 
   const uintmax_t points3D_size = std::filesystem::file_size(points3D_path);
-  EXPECT_LE(points3D_size, 2u * 3u * sizeof(double));
+  EXPECT_EQ(points3D_size,
+            data.reconstruction.NumPoints3D() * 3u * sizeof(double));
   EXPECT_EQ(points3D_size % (3u * sizeof(double)), 0u);
 
   const uintmax_t scales_size = std::filesystem::file_size(scales_path);
@@ -1223,7 +1240,6 @@ TEST(GlobalPositioning, ResidualValuesTraceWritesMetadataAndSidecars) {
   options.trace.level = GlobalPositioningTraceLevel::kResidualValues;
   options.trace.output_path = trace_dir;
   options.trace.snapshot_every_n_iterations = 1;
-  options.trace.max_snapshotted_points = -1;
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
@@ -1434,7 +1450,6 @@ TEST(GlobalPositioning, ResidualJacobiansTraceWritesMetadataAndSidecars) {
   options.trace.level = GlobalPositioningTraceLevel::kResidualJacobians;
   options.trace.output_path = trace_dir;
   options.trace.snapshot_every_n_iterations = 1;
-  options.trace.max_snapshotted_points = -1;
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
@@ -1581,7 +1596,6 @@ TEST(GlobalPositioning, LowerTraceLevelsDoNotCreateResidualValues) {
     options.trace.level = level;
     options.trace.output_path = trace_dir;
     options.trace.snapshot_every_n_iterations = 1;
-    options.trace.max_snapshotted_points = 2;
 
     TestableGlobalPositioner positioner(options);
     ASSERT_TRUE(positioner.Solve(data.pose_graph, reconstruction))
@@ -1785,6 +1799,42 @@ TEST(GlobalPositioning, ResidualLedgerTraceWritesBlocksAndMatchesProblemBuilt) {
   ASSERT_TRUE(expected_num_residual_blocks.has_value());
   EXPECT_EQ(CountJsonlRecordsForTest(residual_blocks),
             static_cast<size_t>(*expected_num_residual_blocks));
+}
+
+TEST(GlobalPositioning, ResidualLedgerTraceCanDisableLegacyJsonlBlocks) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  const std::filesystem::path trace_dir = CreateTestDir() / "gp_trace";
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.trace.level = GlobalPositioningTraceLevel::kResidualLedger;
+  options.trace.output_path = trace_dir;
+  options.trace.write_legacy_jsonl = false;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_FALSE(ExistsFile(trace_dir / "residual_blocks.jsonl"));
+  EXPECT_FALSE(ExistsFile(trace_dir / "residual_skips.jsonl"));
+  const std::filesystem::path raw_binary_dir = trace_dir / "raw_binary";
+  ASSERT_TRUE(ExistsFile(raw_binary_dir / "manifest.json"));
+  const std::filesystem::path raw_ledger_path =
+      raw_binary_dir / "static" / "residual_ledger.bin";
+  const std::filesystem::path raw_point_index_path =
+      raw_binary_dir / "static" / "residual_point_index.bin";
+  ASSERT_TRUE(ExistsFile(raw_ledger_path));
+  ASSERT_TRUE(
+      ExistsFile(raw_point_index_path));
+  const uint64_t ledger_count = ReadRawLedgerRecordCountForTest(raw_ledger_path);
+  EXPECT_GT(ledger_count, uint64_t{0});
+  const auto [indexed_ledger_version, indexed_ledger_count, indexed_ledger_size] =
+      ReadRawPointIndexIdentityForTest(raw_point_index_path);
+  EXPECT_EQ(indexed_ledger_version, uint32_t{2});
+  EXPECT_EQ(indexed_ledger_count, ledger_count);
+  EXPECT_EQ(indexed_ledger_size, std::filesystem::file_size(raw_ledger_path));
+  const std::string manifest =
+      ReadFileForTest(raw_binary_dir / "manifest.json");
+  EXPECT_NE(manifest.find("\"write_legacy_jsonl\": false"), std::string::npos);
 }
 
 TEST(GlobalPositioning, ResidualLedgerTraceWritesReplayDescriptorsAndLoss) {

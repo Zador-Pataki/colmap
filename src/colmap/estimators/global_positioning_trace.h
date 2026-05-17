@@ -30,7 +30,7 @@ struct GlobalPositioningTraceOptions {
   std::filesystem::path output_path;
   std::string run_label;
   int snapshot_every_n_iterations = 1;
-  int max_snapshotted_points = -1;
+  bool write_legacy_jsonl = true;
 };
 
 struct GlobalPositioningTraceParameterBlockDescriptor {
@@ -158,6 +158,12 @@ struct GlobalPositioningRawBinaryTraceIterationArtifacts {
   bool has_residual_values = false;
 };
 
+struct GlobalPositioningRawBinaryResidualPointIndexEntry {
+  int64_t min_frame_id = 0;
+  int64_t max_frame_id = 0;
+  std::vector<uint64_t> residual_ledger_offsets;
+};
+
 class GlobalPositioningTraceRecorder {
  public:
   explicit GlobalPositioningTraceRecorder(
@@ -188,6 +194,7 @@ class GlobalPositioningTraceRecorder {
   void WriteRawBinaryResidualLedgerHeader();
   void UpdateRawBinaryResidualLedgerHeader();
   void WriteRawBinaryResidualBlock(const GlobalPositioningTraceRecord& record);
+  void WriteRawBinaryResidualPointIndex();
   void WriteRawBinaryParameterSnapshot(
       const GlobalPositioningTraceParameterSnapshot& snapshot);
   void WriteRawBinaryResidualValues(
@@ -206,6 +213,8 @@ class GlobalPositioningTraceRecorder {
   std::ofstream residual_blocks_stream_;
   std::ofstream residual_skips_stream_;
   std::ofstream raw_binary_residual_ledger_stream_;
+  std::map<uint64_t, GlobalPositioningRawBinaryResidualPointIndexEntry>
+      raw_binary_residual_point_index_;
   std::vector<GlobalPositioningRawBinaryTraceIterationArtifacts>
       raw_binary_iterations_;
 };
