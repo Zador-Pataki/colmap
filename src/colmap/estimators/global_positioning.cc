@@ -232,7 +232,8 @@ void GlobalPositioner::InitializeRandomPositions(
     }
     if (options_.generate_random_positions && options_.optimize_positions &&
         !options_.use_init) {
-      frame_centers_[frame_id] = options_.random_init_scale * RandVector3d(-1, 1);
+      frame_centers_[frame_id] =
+          options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -354,9 +355,9 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
-  const bool random_initialization =
-      options_.optimize_points && options_.generate_random_points &&
-      !options_.use_init;
+  const bool random_initialization = options_.optimize_points &&
+                                     options_.generate_random_points &&
+                                     !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
@@ -410,7 +411,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       << "Not enough capacity was reserved for the scales.";
   double& scale = scales_.emplace_back(1);
 
-  if (!options_.generate_scales && random_initialization) {
+  if (!options_.generate_scales) {
     const Eigen::Vector3d cam_from_point3D_translation =
         point3D.xyz - frame_centers_[image.FrameId()];
     scale = std::max(1e-5,

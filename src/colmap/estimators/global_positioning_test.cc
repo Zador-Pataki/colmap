@@ -37,6 +37,7 @@
 #include "colmap/scene/synthetic.h"
 #include "colmap/util/testing.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <ceres/loss_function.h>
@@ -325,6 +326,11 @@ class TestableGlobalPositioner : public GlobalPositioner {
   using GlobalPositioner::GlobalPositioner;
   size_t NumScales() const { return scales_.size(); }
   size_t NumFrameCenters() const { return frame_centers_.size(); }
+  size_t NumNonUnitScales(double eps = 1e-9) const {
+    return std::count_if(scales_.begin(), scales_.end(), [eps](double scale) {
+      return std::abs(scale - 1.0) > eps;
+    });
+  }
   void SetupOnlyForTest(const PoseGraph& pose_graph,
                         Reconstruction& reconstruction) {
     SetupProblem(pose_graph, reconstruction);
@@ -516,6 +522,24 @@ TEST(GlobalPositioning, MetricDepthConstraintConverges) {
     EXPECT_NEAR(scale, 1.0, 0.5) << "dmap_scale for image " << image_id << " = "
                                  << scale << ", expected ~1.0";
   }
+}
+
+TEST(GlobalPositioning, WarmStartGenerateScalesFalseInitializesBataScales) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_init = true;
+  options.generate_scales = false;
+
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(data.pose_graph, data.gt_reconstruction);
+
+  EXPECT_GT(positioner.NumScales(), 0u);
+  EXPECT_GT(positioner.NumNonUnitScales(), 0u)
+      << "Warm-started GP with generate_scales=false must initialize BATA "
+         "scales from current camera/point geometry instead of leaving every "
+         "scale at the constructor default 1.0.";
 }
 
 TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {
