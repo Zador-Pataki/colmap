@@ -411,7 +411,8 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       << "Not enough capacity was reserved for the scales.";
   double& scale = scales_.emplace_back(1);
 
-  if (!options_.generate_scales) {
+  if (!options_.generate_scales &&
+      (random_initialization || options_.initialize_warm_start_scales)) {
     const Eigen::Vector3d cam_from_point3D_translation =
         point3D.xyz - frame_centers_[image.FrameId()];
     scale = std::max(1e-5,

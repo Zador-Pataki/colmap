@@ -531,6 +531,7 @@ TEST(GlobalPositioning, WarmStartGenerateScalesFalseInitializesBataScales) {
   GlobalPositionerOptions options = BaselineGpOptions();
   options.use_init = true;
   options.generate_scales = false;
+  options.initialize_warm_start_scales = true;
 
   TestableGlobalPositioner positioner(options);
   positioner.SetupOnlyForTest(data.pose_graph, data.gt_reconstruction);
@@ -540,6 +541,24 @@ TEST(GlobalPositioning, WarmStartGenerateScalesFalseInitializesBataScales) {
       << "Warm-started GP with generate_scales=false must initialize BATA "
          "scales from current camera/point geometry instead of leaving every "
          "scale at the constructor default 1.0.";
+}
+
+TEST(GlobalPositioning, LegacyWarmStartScaleInitializationCanBeReproduced) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_init = true;
+  options.generate_scales = false;
+  options.initialize_warm_start_scales = false;
+
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(data.pose_graph, data.gt_reconstruction);
+
+  EXPECT_GT(positioner.NumScales(), 0u);
+  EXPECT_EQ(positioner.NumNonUnitScales(), 0u)
+      << "Legacy warm-started GP behavior should leave BATA scales at 1.0 "
+         "when generate_scales=false.";
 }
 
 TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {

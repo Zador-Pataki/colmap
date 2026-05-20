@@ -23,6 +23,10 @@ struct GlobalPositionerOptions {
   // Whether to initialize the camera scales to a constant 1 or derive them from
   // the initialized camera and point positions.
   bool generate_scales = true;
+  // When generate_scales is false, derive per-observation BATA scales from the
+  // current camera/point geometry even for warm-started solves. Disable only to
+  // reproduce legacy behavior where warm-started solves left these scales at 1.
+  bool initialize_warm_start_scales = true;
 
   // Flags for which parameters to optimize
   bool optimize_positions = true;

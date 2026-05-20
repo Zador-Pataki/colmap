@@ -28,6 +28,12 @@ void BindGlobalPositioner(py::module& m) {
                          &GlobalPositionerOptions::generate_scales,
                          "Whether to initialize scales to constant 1 or derive "
                          "from positions.")
+          .def_readwrite(
+              "initialize_warm_start_scales",
+              &GlobalPositionerOptions::initialize_warm_start_scales,
+              "When generate_scales is false, derive BATA scales from current "
+              "camera/point geometry even for warm-started solves. Set false "
+              "only to reproduce legacy warm-start behavior.")
           .def_readwrite("optimize_positions",
                          &GlobalPositionerOptions::optimize_positions,
                          "Whether to optimize camera positions.")
