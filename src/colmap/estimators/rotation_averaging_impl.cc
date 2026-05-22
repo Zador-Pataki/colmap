@@ -5,6 +5,7 @@
 #include "colmap/math/random.h"
 #include "colmap/optim/least_absolute_deviations.h"
 
+#include <algorithm>
 #include <limits>
 
 #include <Eigen/CholmodSupport>
@@ -26,6 +27,33 @@ bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair) {
 }
 
 namespace {
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
+  std::sort(ids.begin(), ids.end());
+  std::unordered_map<IdT, char> legacy_map;
+  legacy_map.reserve(ids.size());
+  for (const IdT id : ids) {
+    legacy_map.emplace(id, 0);
+  }
+
+  std::vector<IdT> ordered_ids;
+  ordered_ids.reserve(ids.size());
+  for (const auto& [id, _] : legacy_map) {
+    ordered_ids.push_back(id);
+  }
+  return ordered_ids;
+}
+
+std::vector<image_pair_t> LegacyOrderedValidPairIds(
+    const PoseGraph& pose_graph) {
+  std::vector<image_pair_t> pair_ids;
+  pair_ids.reserve(pose_graph.NumEdges());
+  for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+    pair_ids.push_back(pair_id);
+  }
+  return LegacyPyglomapMapOrder(std::move(pair_ids));
+}
 
 // Computes the 1-DOF residual for gravity-aligned rotation constraints.
 // Returns (angle_2 - angle_1) - angle_12, wrapped to [-π, π] with jitter
@@ -129,6 +157,27 @@ size_t RotationAveragingProblem::AllocateParameters(
   camera_id_to_param_idx_.reserve(reconstruction.NumCameras());
   estimated_rotations_.resize(6 * reconstruction.NumImages());
 
+  std::vector<image_t> ordered_active_image_ids;
+  ordered_active_image_ids.reserve(image_id_to_frame_id_.size());
+  for (const auto& [image_id, frame_id] : image_id_to_frame_id_) {
+    if (active_frame_ids_.count(frame_id)) {
+      ordered_active_image_ids.push_back(image_id);
+    }
+  }
+  ordered_active_image_ids =
+      LegacyPyglomapMapOrder(std::move(ordered_active_image_ids));
+
+  std::vector<frame_t> ordered_active_frame_ids;
+  ordered_active_frame_ids.reserve(active_frame_ids_.size());
+  std::unordered_set<frame_t> seen_frame_ids;
+  seen_frame_ids.reserve(active_frame_ids_.size());
+  for (const image_t image_id : ordered_active_image_ids) {
+    const frame_t frame_id = image_id_to_frame_id_.at(image_id);
+    if (seen_frame_ids.emplace(frame_id).second) {
+      ordered_active_frame_ids.push_back(frame_id);
+    }
+  }
+
   // Identify cameras that need cam_from_rig estimation
   // (non-reference cameras without calibrated extrinsics).
   std::unordered_map<camera_t, Eigen::AngleAxisd> cam_from_rig_rotations;
@@ -153,7 +202,7 @@ size_t RotationAveragingProblem::AllocateParameters(
   }
 
   // Cache camera_id -> frame_id mapping for UpdateState cam_from_rig averaging.
-  for (const frame_t frame_id : active_frame_ids_) {
+  for (const frame_t frame_id : ordered_active_frame_ids) {
     const auto& frame = reconstruction.Frame(frame_id);
     for (const auto& data_id : frame.ImageIds()) {
       const auto it = camera_id_to_param_idx_.find(
@@ -166,7 +215,7 @@ size_t RotationAveragingProblem::AllocateParameters(
 
   // Allocate frame parameters and cache frame info.
   size_t num_params = 0;
-  for (const frame_t frame_id : active_frame_ids_) {
+  for (const frame_t frame_id : ordered_active_frame_ids) {
     const auto& frame = reconstruction.Frame(frame_id);
     frame_id_to_param_idx_[frame_id] = num_params;
 
@@ -224,7 +273,7 @@ size_t RotationAveragingProblem::AllocateParameters(
 
   // If no gravity-aligned frame found, use first active frame as fixed.
   if (fixed_frame_id_ == kInvalidFrameId) {
-    for (const frame_t frame_id : active_frame_ids_) {
+    for (const frame_t frame_id : ordered_active_frame_ids) {
       const auto& frame = reconstruction.Frame(frame_id);
       fixed_frame_id_ = frame_id;
       // Use identity rotation if frame doesn't have a pose yet.
@@ -247,7 +296,8 @@ void RotationAveragingProblem::BuildPairConstraints(
     const PoseGraph& pose_graph, const Reconstruction& reconstruction) {
   int gravity_aligned_count = 0;
 
-  for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+  for (const image_pair_t pair_id : LegacyOrderedValidPairIds(pose_graph)) {
+    const auto& edge = pose_graph.Edges().at(pair_id);
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
 
     // Skip LC-dominated pairs.
@@ -368,7 +418,7 @@ void RotationAveragingProblem::BuildConstraintMatrix(
 
   size_t curr_row = 0;
 
-  for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+  for (const image_pair_t pair_id : LegacyOrderedValidPairIds(pose_graph)) {
     if (pair_constraints_.find(pair_id) == pair_constraints_.end()) continue;
 
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
@@ -888,7 +938,14 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   const frame_t fixed_frame_id = problem.FixedFrameId();
 
   // Add parameter blocks for all active frames (3-DOF angle-axis).
-  for (const auto& [frame_id, param_idx] : frame_id_to_param_idx) {
+  std::vector<std::pair<frame_t, int>> ordered_frame_params(
+      frame_id_to_param_idx.begin(), frame_id_to_param_idx.end());
+  std::sort(ordered_frame_params.begin(),
+            ordered_frame_params.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.second < rhs.second;
+            });
+  for (const auto& [frame_id, param_idx] : ordered_frame_params) {
     double* param = estimated_rotations.data() + param_idx;
     ceres_problem.AddParameterBlock(param, 3);
     if (frame_id == fixed_frame_id) {
@@ -897,7 +954,14 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   }
 
   // Add residual blocks for each pair_constraint.
+  std::vector<image_pair_t> ordered_pair_ids;
+  ordered_pair_ids.reserve(problem.PairConstraints().size());
   for (const auto& [pair_id, constraint] : problem.PairConstraints()) {
+    ordered_pair_ids.push_back(pair_id);
+  }
+  ordered_pair_ids = LegacyPyglomapMapOrder(std::move(ordered_pair_ids));
+  for (const image_pair_t pair_id : ordered_pair_ids) {
+    const auto& constraint = problem.PairConstraints().at(pair_id);
     const auto* full_3dof =
         std::get_if<RotationAveragingProblem::Full3DOF>(&constraint.constraint);
     if (full_3dof == nullptr) {
