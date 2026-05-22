@@ -154,8 +154,15 @@ class Image {
   inline bool operator==(const Image& other) const;
   inline bool operator!=(const Image& other) const;
 
+  // Per-feature monocular depth priors.
+  std::vector<double> depth_priors;
+  std::vector<double> depth_prior_stddevs;
+  std::vector<bool> depth_prior_validity;
+
   // Per-feature inlier flag for GP loss routing.
   std::vector<bool> is_inlier;
+  // Per-feature depth outlier flag for GP loss routing.
+  std::vector<bool> is_depth_outlier;
   // Per-feature track-anchor flag for GP loss routing.
   std::vector<bool> is_track_anchor;
   // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.

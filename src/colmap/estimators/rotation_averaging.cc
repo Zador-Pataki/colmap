@@ -42,6 +42,26 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
   return all_known;
 }
 
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
+  // pyglomap's Python bindings materialized Python dicts as std::unordered_map:
+  // reserve(final_size), insert sorted ids, then iterate buckets. Mirror that
+  // order for parity where legacy code consumed unordered_map iteration.
+  std::sort(ids.begin(), ids.end());
+  std::unordered_map<IdT, char> legacy_map;
+  legacy_map.reserve(ids.size());
+  for (const IdT id : ids) {
+    legacy_map.emplace(id, 0);
+  }
+
+  std::vector<IdT> ordered_ids;
+  ordered_ids.reserve(ids.size());
+  for (const auto& [id, _] : legacy_map) {
+    ordered_ids.push_back(id);
+  }
+  return ordered_ids;
+}
+
 }  // namespace
 
 image_t ComputeMaximumPoseGraphSpanningTree(
@@ -56,7 +76,9 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   image_id_to_idx.reserve(image_ids.size());
   idx_to_image_id.reserve(image_ids.size());
 
-  for (const image_t image_id : image_ids) {
+  std::vector<image_t> ordered_image_ids(image_ids.begin(), image_ids.end());
+  ordered_image_ids = LegacyPyglomapMapOrder(std::move(ordered_image_ids));
+  for (const image_t image_id : ordered_image_ids) {
     image_id_to_idx[image_id] = static_cast<int>(idx_to_image_id.size());
     idx_to_image_id.push_back(image_id);
   }
@@ -80,7 +102,14 @@ image_t ComputeMaximumPoseGraphSpanningTree(
                                ? &correspondence_graph->ImagePairsMap()
                                : nullptr;
 
+  std::vector<image_pair_t> ordered_pair_ids;
+  ordered_pair_ids.reserve(pose_graph.NumEdges());
   for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+    ordered_pair_ids.push_back(pair_id);
+  }
+  ordered_pair_ids = LegacyPyglomapMapOrder(std::move(ordered_pair_ids));
+  for (const image_pair_t pair_id : ordered_pair_ids) {
+    const auto& edge = pose_graph.Edges().at(pair_id);
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const auto it1 = image_id_to_idx.find(image_id1);
     const auto it2 = image_id_to_idx.find(image_id2);

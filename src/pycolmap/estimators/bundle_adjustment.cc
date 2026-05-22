@@ -347,7 +347,9 @@ void BindBundleAdjuster(py::module& m) {
            }),
            "options"_a,
            "config"_a)
-      .def_property_readonly("problem", &CeresBundleAdjuster::Problem);
+      .def_property_readonly("problem",
+                             &CeresBundleAdjuster::Problem,
+                             py::return_value_policy::reference_internal);
 
   m.def("create_default_bundle_adjuster",
         [](const BundleAdjustmentOptions& options,
@@ -365,7 +367,8 @@ void BindBundleAdjuster(py::module& m) {
         },
         "options"_a,
         "config"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 3>());
 
   m.def("create_default_ceres_bundle_adjuster",
         [](const BundleAdjustmentOptions& options,
@@ -383,7 +386,8 @@ void BindBundleAdjuster(py::module& m) {
         },
         "options"_a,
         "config"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 3>());
 
   m.def("create_pose_prior_bundle_adjuster",
         CreatePosePriorBundleAdjuster,
@@ -391,7 +395,8 @@ void BindBundleAdjuster(py::module& m) {
         "prior_options"_a,
         "config"_a,
         "pose_priors"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 5>());
 
   m.def("create_pose_prior_ceres_bundle_adjuster",
         CreatePosePriorCeresBundleAdjuster,
@@ -399,7 +404,8 @@ void BindBundleAdjuster(py::module& m) {
         "prior_options"_a,
         "config"_a,
         "pose_priors"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 5>());
 
   m.def("create_depth_bundle_adjuster",
         [](ceres::Problem* problem,
@@ -444,5 +450,7 @@ void BindBundleAdjuster(py::module& m) {
         "reconstruction"_a,
         "logloss"_a = false,
         "fix_shift"_a = false,
-        "fix_scale"_a = false);
+        "fix_scale"_a = false,
+        py::keep_alive<1, 8>(),
+        py::keep_alive<1, 9>());
 }

@@ -1182,6 +1182,9 @@ void DepthPriorBundleAdjuster(
 
   Image& image = reconstruction.Image(image_id);
   double* pose_params = image.FramePtr()->RigFromWorld().params.data();
+  if (!problem->HasParameterBlock(shift_scale_ptr)) {
+    problem->AddParameterBlock(shift_scale_ptr, 2);
+  }
 
   for (size_t i = 0; i < point3D_ids.size(); ++i) {
     Point3D& point3D = reconstruction.Point3D(point3D_ids[i]);
@@ -1206,6 +1209,16 @@ void DepthPriorBundleAdjuster(
     problem->AddResidualBlock(
         cost_function, final_loss, pose_params, point3D.xyz.data(),
         shift_scale_ptr);
+  }
+
+  if (fix_shift && fix_scale) {
+    problem->SetParameterBlockConstant(shift_scale_ptr);
+  } else if (fix_shift || fix_scale) {
+    std::vector<int> constant_parameters;
+    if (fix_shift) constant_parameters.push_back(0);
+    if (fix_scale) constant_parameters.push_back(1);
+    problem->SetManifold(shift_scale_ptr,
+                         new ceres::SubsetManifold(2, constant_parameters));
   }
 }
 

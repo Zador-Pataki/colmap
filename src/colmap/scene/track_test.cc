@@ -38,6 +38,9 @@ TEST(TrackElement, Empty) {
   TrackElement track_el;
   EXPECT_EQ(track_el.image_id, kInvalidImageId);
   EXPECT_EQ(track_el.point2D_idx, kInvalidPoint2DIdx);
+  EXPECT_FALSE(track_el.is_inlier);
+  EXPECT_FALSE(track_el.is_depth_outlier);
+  EXPECT_FALSE(track_el.is_track_anchor);
 }
 
 TEST(TrackElement, Equals) {
@@ -47,6 +50,10 @@ TEST(TrackElement, Equals) {
   track_el.image_id = 1;
   EXPECT_NE(track_el, other);
   other.image_id = 1;
+  EXPECT_EQ(track_el, other);
+  track_el.is_inlier = true;
+  track_el.is_depth_outlier = true;
+  track_el.is_track_anchor = true;
   EXPECT_EQ(track_el, other);
 }
 

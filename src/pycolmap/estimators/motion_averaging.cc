@@ -28,6 +28,12 @@ void BindGlobalPositioner(py::module& m) {
                          &GlobalPositionerOptions::generate_scales,
                          "Whether to initialize scales to constant 1 or derive "
                          "from positions.")
+          .def_readwrite(
+              "initialize_warm_start_scales",
+              &GlobalPositionerOptions::initialize_warm_start_scales,
+              "When generate_scales is false, derive BATA scales from current "
+              "camera/point geometry even for warm-started solves. Set false "
+              "only to reproduce legacy warm-start behavior.")
           .def_readwrite("optimize_positions",
                          &GlobalPositionerOptions::optimize_positions,
                          "Whether to optimize camera positions.")
@@ -134,10 +140,51 @@ void BindGlobalPositioner(py::module& m) {
               &GlobalPositionerOptions::random_init_scale,
               "Cube size for random init of camera centers / points (linear).");
 
-  // LC geometry loss config. ``LossConfig`` carries
+  // Full-branch metric-depth and LC extensions. ``LossConfig`` carries
   // (type=LossFunctionType enum, scale, weight).
-  PyGlobalPositionerOptions.def_readwrite(
-      "loss_lc_geometry", &GlobalPositionerOptions::loss_lc_geometry);
+  PyGlobalPositionerOptions
+      .def_readwrite("use_metric_depth_constraint",
+                     &GlobalPositionerOptions::use_metric_depth_constraint)
+      .def_readwrite(
+          "use_log_scale_for_depth_map_scales",
+          &GlobalPositionerOptions::use_log_scale_for_depth_map_scales)
+      .def_readwrite("use_log_residual_for_depth",
+                     &GlobalPositionerOptions::use_log_residual_for_depth)
+      .def_readwrite("zero_residual_behind",
+                     &GlobalPositionerOptions::zero_residual_behind)
+      .def_readwrite("smooth_log_linear_transition",
+                     &GlobalPositionerOptions::smooth_log_linear_transition)
+      .def_readwrite("log_linear_threshold",
+                     &GlobalPositionerOptions::log_linear_threshold)
+      .def_readwrite("scale_prior_stddev",
+                     &GlobalPositionerOptions::scale_prior_stddev)
+      .def_readwrite("filter_depth_outliers",
+                     &GlobalPositionerOptions::filter_depth_outliers)
+      .def_readwrite("initial_dmap_scales",
+                     &GlobalPositionerOptions::initial_dmap_scales)
+      .def_readwrite("loss_normal_geometry",
+                     &GlobalPositionerOptions::loss_normal_geometry)
+      .def_readwrite("loss_normal_depth",
+                     &GlobalPositionerOptions::loss_normal_depth)
+      .def_readwrite("loss_lc_geometry",
+                     &GlobalPositionerOptions::loss_lc_geometry)
+      .def_readwrite("loss_lc_depth", &GlobalPositionerOptions::loss_lc_depth)
+      .def_readwrite("loss_normal_geometry_inlier",
+                     &GlobalPositionerOptions::loss_normal_geometry_inlier)
+      .def_readwrite("loss_normal_depth_inlier",
+                     &GlobalPositionerOptions::loss_normal_depth_inlier)
+      .def_readwrite("loss_normal_depth_outlier",
+                     &GlobalPositionerOptions::loss_normal_depth_outlier)
+      .def_readwrite("loss_normal_geometry_trackstart",
+                     &GlobalPositionerOptions::loss_normal_geometry_trackstart)
+      .def_readwrite("loss_normal_depth_trackstart",
+                     &GlobalPositionerOptions::loss_normal_depth_trackstart)
+      .def_readwrite("loss_scale_prior",
+                     &GlobalPositionerOptions::loss_scale_prior)
+      .def_readwrite("filter_depth_outlier_sigma",
+                     &GlobalPositionerOptions::filter_depth_outlier_sigma)
+      .def_readwrite("loss_soft_outlier_fallback",
+                     &GlobalPositionerOptions::loss_soft_outlier_fallback);
 
   MakeDataclass(PyGlobalPositionerOptions);
 
@@ -152,7 +199,12 @@ void BindGlobalPositioner(py::module& m) {
           py::gil_scoped_release release;
           success = positioner.Solve(pose_graph, reconstruction);
         }
-        return success;
+        py::dict output;
+        output["success"] = success;
+        output["dmap_scale_map"] = positioner.GetDmapScales();
+        output["dmap_scale_map_nested"] = positioner.GetDmapScales();
+        output["dmap_scales"] = positioner.GetDmapScales();
+        return output;
       },
       "options"_a,
       "pose_graph"_a,
@@ -256,6 +308,9 @@ void BindRotationEstimator(py::module& m) {
           .def_readwrite("skip_risky_lc_pairs",
                          &RotationEstimatorOptions::skip_risky_lc_pairs,
                          "Drop pairs whose LC inliers exceed non-LC inliers.")
+          .def_readwrite("skip_risky_LC_pairs",
+                         &RotationEstimatorOptions::skip_risky_lc_pairs,
+                         "Legacy spelling for skip_risky_lc_pairs.")
           .def_readwrite(
               "use_video_constraints",
               &RotationEstimatorOptions::use_video_constraints,
@@ -270,7 +325,26 @@ void BindRotationEstimator(py::module& m) {
               "video_lc_cauchy_scale",
               &RotationEstimatorOptions::video_lc_cauchy_scale,
               "Cauchy loss scale for loop-closure pairs in the video "
-              "solver.");
+              "solver.")
+          // --- Ceres solver_options (SolveCeres path) ---
+          .def_property(
+              "num_threads",
+              [](const RotationEstimatorOptions& self) {
+                return self.solver_options.num_threads;
+              },
+              [](RotationEstimatorOptions& self, int v) {
+                self.solver_options.num_threads = v;
+              },
+              "Ceres solver thread count.")
+          .def_property(
+              "max_num_iterations",
+              [](const RotationEstimatorOptions& self) {
+                return self.solver_options.max_num_iterations;
+              },
+              [](RotationEstimatorOptions& self, int v) {
+                self.solver_options.max_num_iterations = v;
+              },
+              "Ceres solver max iterations (SolveCeres path).");
   MakeDataclass(PyRotationEstimatorOptions);
 
   m.def(

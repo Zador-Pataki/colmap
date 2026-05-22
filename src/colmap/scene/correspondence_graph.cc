@@ -127,7 +127,6 @@ void CorrespondenceGraph::AddTwoViewGeometry(
   auto& image_pair = image_pair_it->second;
   image_pair.image_id1 = image_id1;
   image_pair.image_id2 = image_id2;
-  image_pair.pair_id = pair_id;
   image_pair.num_matches =
       static_cast<point2D_t>(two_view_geometry.inlier_matches.size());
 
@@ -216,7 +215,7 @@ void CorrespondenceGraph::AddTwoViewGeometry(
     two_view_geometry.Invert();
   }
 
-  image_pair.two_view_geometry = std::move(two_view_geometry);
+  image_pair_it->second.two_view_geometry = std::move(two_view_geometry);
 }
 
 CorrespondenceGraph::CorrespondenceRange

@@ -1,10 +1,22 @@
 #include "colmap/sfm/global_mapper.h"
 
+#include "colmap/feature/types.h"
+#include "colmap/geometry/rigid3.h"
 #include "colmap/scene/database_cache.h"
+#include "colmap/scene/frame.h"
+#include "colmap/scene/image.h"
 #include "colmap/scene/reconstruction_matchers.h"
 #include "colmap/scene/synthetic.h"
+#include "colmap/scene/two_view_geometry.h"
+#include "colmap/sensor/models.h"
+#include "colmap/sensor/rig.h"
 #include "colmap/util/testing.h"
 
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <Eigen/Core>
 #include <gtest/gtest.h>
 
 namespace colmap {
@@ -15,6 +27,61 @@ namespace {
 std::shared_ptr<DatabaseCache> CreateDatabaseCache(const Database& database) {
   DatabaseCache::Options options;
   return DatabaseCache::Create(database, options);
+}
+
+std::shared_ptr<DatabaseCache> CreateThreeViewTrackCache(
+    const point2D_t num_tracks) {
+  auto cache = std::make_shared<DatabaseCache>();
+
+  Camera camera = Camera::CreateFromModelId(
+      /*camera_id=*/1, CameraModelId::kSimplePinhole, 1000.0, 1024, 768);
+  const sensor_t camera_sensor = camera.SensorId();
+  cache->AddCamera(std::move(camera));
+
+  Rig rig;
+  rig.SetRigId(1);
+  rig.AddRefSensor(camera_sensor);
+  cache->AddRig(std::move(rig));
+
+  for (image_t image_id = 1; image_id <= 3; ++image_id) {
+    Image image;
+    image.SetImageId(image_id);
+    image.SetName(std::to_string(image_id) + ".jpg");
+    image.SetCameraId(1);
+    image.SetFrameId(image_id);
+
+    std::vector<Eigen::Vector2d> keypoints;
+    keypoints.reserve(num_tracks);
+    for (point2D_t point2D_idx = 0; point2D_idx < num_tracks; ++point2D_idx) {
+      keypoints.emplace_back(100.0 * point2D_idx, 100.0 * point2D_idx);
+    }
+    image.SetPoints2D(keypoints);
+
+    Frame frame;
+    frame.SetFrameId(image_id);
+    frame.SetRigId(1);
+    frame.AddDataId(image.DataId());
+    frame.SetRigFromWorld(Rigid3d());
+    cache->AddFrame(std::move(frame));
+    cache->AddImage(std::move(image));
+  }
+
+  auto add_image_pair = [&](const image_t image_id1, const image_t image_id2) {
+    TwoViewGeometry two_view_geometry;
+    two_view_geometry.config = TwoViewGeometry::CALIBRATED;
+    two_view_geometry.cam2_from_cam1 = Rigid3d();
+    two_view_geometry.inlier_matches.reserve(num_tracks);
+    for (point2D_t point2D_idx = 0; point2D_idx < num_tracks; ++point2D_idx) {
+      two_view_geometry.inlier_matches.emplace_back(point2D_idx, point2D_idx);
+    }
+    cache->CorrespondenceGraph()->AddTwoViewGeometry(
+        image_id1, image_id2, std::move(two_view_geometry));
+  };
+  add_image_pair(1, 2);
+  add_image_pair(1, 3);
+  add_image_pair(2, 3);
+
+  return cache;
 }
 
 TEST(GlobalMapper, WithoutNoise) {
@@ -176,6 +243,19 @@ TEST(GlobalMapper, WithNoiseAndOutliers) {
                                  /*max_proj_center_error=*/1e-1,
                                  /*max_scale_error=*/std::nullopt,
                                  /*num_obs_tolerance=*/0.02));
+}
+
+TEST(GlobalMapper, EstablishTracksAppliesRequiredTracksPerView) {
+  auto reconstruction = std::make_shared<Reconstruction>();
+  GlobalMapper global_mapper(CreateThreeViewTrackCache(/*num_tracks=*/5));
+  global_mapper.BeginReconstruction(reconstruction);
+
+  GlobalMapperOptions options;
+  options.track_required_tracks_per_view = 1;
+  options.track_min_num_views_per_track = 3;
+
+  global_mapper.EstablishTracks(options);
+  EXPECT_EQ(reconstruction->NumPoints3D(), 2);
 }
 
 }  // namespace

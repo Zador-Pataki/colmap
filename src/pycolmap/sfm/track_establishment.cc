@@ -97,8 +97,16 @@ py::dict RunFindTracksForProblem(py::dict images_py,
                                  py::dict tracks_full_py,
                                  const TrackProblemFilterOptions& options) {
   std::unordered_set<image_t> registered_image_ids;
+  std::unordered_map<image_t, std::vector<double>> depth_priors;
+  std::unordered_map<image_t, std::vector<bool>> depth_prior_validity;
   for (auto item : images_py) {
-    registered_image_ids.insert(py::cast<image_t>(item.first));
+    const auto image_id = py::cast<image_t>(item.first);
+    const auto image = py::cast<Image>(item.second);
+    registered_image_ids.insert(image_id);
+    if (options.two_view_depth_gate) {
+      depth_priors.emplace(image_id, image.depth_priors);
+      depth_prior_validity.emplace(image_id, image.depth_prior_validity);
+    }
   }
 
   std::unordered_map<point3D_t, Point3D> tracks_full;
@@ -111,8 +119,11 @@ py::dict RunFindTracksForProblem(py::dict images_py,
   std::unordered_map<point3D_t, Point3D> selected;
   {
     py::gil_scoped_release release;
-    selected =
-        FilterTracksForProblem(options, registered_image_ids, tracks_full);
+    selected = FilterTracksForProblem(options,
+                                      registered_image_ids,
+                                      depth_priors,
+                                      depth_prior_validity,
+                                      tracks_full);
   }
 
   py::dict tracks_out;
@@ -143,7 +154,9 @@ void BindTrackEstablishment(py::module& m) {
           .def_readwrite("min_num_views_per_track",
                          &TrackProblemFilterOptions::min_num_views_per_track)
           .def_readwrite("max_num_views_per_track",
-                         &TrackProblemFilterOptions::max_num_views_per_track);
+                         &TrackProblemFilterOptions::max_num_views_per_track)
+          .def_readwrite("two_view_depth_gate",
+                         &TrackProblemFilterOptions::two_view_depth_gate);
   MakeDataclass(PySubOpts);
 
   m.def("establish_full_tracks",
@@ -166,5 +179,6 @@ void BindTrackEstablishment(py::module& m) {
         "tracks_full"_a,
         "options"_a,
         "Filter ``tracks_full`` for the optimization problem. Reads "
+        "``Image::depth_priors`` / ``Image::depth_prior_validity`` / "
         "registered image ids from the keys of the filtered ``images`` dict.");
 }

@@ -64,6 +64,10 @@ TwoViewSetup MakeTwoView(const std::vector<Eigen::Vector3d>& cam1_points,
     img2.features_undist.push_back(p2.normalized());
     img1.features.emplace_back(p1.x() / p1.z(), p1.y() / p1.z());
     img2.features.emplace_back(p2.x() / p2.z(), p2.y() / p2.z());
+    img1.depth_prior_validity.push_back(true);
+    img2.depth_prior_validity.push_back(true);
+    img1.depth_priors.push_back(p1.z());
+    img2.depth_priors.push_back(p2.z());
   }
 
   Frame frame1;
@@ -132,7 +136,8 @@ TEST(ImagePairInlierCount, AllInliersPassFourGates) {
   auto setup = MakeTwoView(points, DefaultPose());
   ImagePairsInlierCount(
       setup.corr_graph, setup.reconstruction, DefaultOptions(), true);
-  EXPECT_EQ(GetPair(setup).inliers.size(), points.size());
+  const auto& pair = GetPair(setup);
+  EXPECT_EQ(pair.inliers.size(), points.size());
 }
 
 TEST(ImagePairInlierCount, EpipolarGateDrops) {
