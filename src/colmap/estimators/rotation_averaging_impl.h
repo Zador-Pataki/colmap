@@ -1,13 +1,47 @@
 #pragma once
 
 #include "colmap/estimators/rotation_averaging.h"
+#include "colmap/scene/correspondence_graph.h"
 
 #include <optional>
 #include <variant>
 
 #include <Eigen/Sparse>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace colmap {
+
+// True if non-LC inliers >= LC inliers (i.e. the pair is tracking-dominated).
+bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair);
+
+// AutoDiff relative rotation error for the video-Ceres path.
+// Residual = AngleAxis(R2^T * R_rel * R1), all 3-DOF angle-axis.
+struct RelativeRotationError {
+  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa)
+      : rel_rot_aa_(rel_rot_aa) {}
+
+  template <typename T>
+  bool operator()(const T* const r1_aa,
+                  const T* const r2_aa,
+                  T* residuals) const {
+    Eigen::Matrix<T, 3, 3> R1, R2, R_rel;
+    ceres::AngleAxisToRotationMatrix(r1_aa, R1.data());
+    ceres::AngleAxisToRotationMatrix(r2_aa, R2.data());
+    Eigen::Matrix<T, 3, 1> rel_aa_t = rel_rot_aa_.cast<T>();
+    ceres::AngleAxisToRotationMatrix(rel_aa_t.data(), R_rel.data());
+    Eigen::Matrix<T, 3, 3> R_err = R2.transpose() * R_rel * R1;
+    ceres::RotationMatrixToAngleAxis(R_err.data(), residuals);
+    return true;
+  }
+
+  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa) {
+    return new ceres::AutoDiffCostFunction<RelativeRotationError, 3, 3, 3>(
+        new RelativeRotationError(rel_rot_aa));
+  }
+
+  const Eigen::Vector3d rel_rot_aa_;
+};
 
 // Rotation averaging problem formulated as linear system A*x = b where:
 //   x = [rig_from_world rotations, unknown cam_from_rig rotations]
@@ -42,7 +76,9 @@ class RotationAveragingProblem {
                            const std::vector<PosePrior>& pose_priors,
                            const RotationEstimatorOptions& options,
                            const std::unordered_set<image_t>& active_image_ids,
-                           Reconstruction& reconstruction);
+                           Reconstruction& reconstruction,
+                           const CorrespondenceGraph* correspondence_graph =
+                               nullptr);
 
   // Computes residual vector b from current rotation estimates.
   void ComputeResiduals();
@@ -66,6 +102,19 @@ class RotationAveragingProblem {
   const std::unordered_map<image_pair_t, PairConstraint>& PairConstraints()
       const {
     return pair_constraints_;
+  }
+
+  // Accessors for the Ceres solver path (gated on !use_gravity).
+  Eigen::VectorXd& MutableEstimatedRotations() { return estimated_rotations_; }
+  const std::unordered_map<frame_t, int>& FrameIdToParamIdx() const {
+    return frame_id_to_param_idx_;
+  }
+  const std::unordered_map<image_t, frame_t>& ImageIdToFrameId() const {
+    return image_id_to_frame_id_;
+  }
+  frame_t FixedFrameId() const { return fixed_frame_id_; }
+  const CorrespondenceGraph* CorrespondenceGraphPtr() const {
+    return correspondence_graph_;
   }
 
  private:
@@ -115,6 +164,9 @@ class RotationAveragingProblem {
 
   // Active frames for the current solve.
   std::unordered_set<frame_t> active_frame_ids_;
+
+  // For per-pair LC fields (inliers, are_lc) not carried by PoseGraph::Edge.
+  const CorrespondenceGraph* correspondence_graph_ = nullptr;
 };
 
 // Solves the rotation averaging problem using L1 regression followed by IRLS.
@@ -132,6 +184,10 @@ class RotationAveragingSolver {
 
   // Iteratively reweighted least squares phase.
   bool SolveIRLS(RotationAveragingProblem& problem);
+
+  // Ceres solve over per-frame 3-DOF angle-axis: Huber for tracking
+  // pairs, Cauchy for LC pairs. Requires CorrespondenceGraph.
+  bool SolveCeres(RotationAveragingProblem& problem);
 
   // Computes IRLS weights for all constraints.
   // Returns nullopt if any weight is NaN.

@@ -1,10 +1,13 @@
 #include "colmap/image/undistortion.h"
 
+#include "colmap/scene/reconstruction.h"
+
 #include "pycolmap/helpers.h"
 #include "pycolmap/pybind11_extension.h"
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 using namespace colmap;
 using namespace pybind11::literals;
@@ -49,4 +52,18 @@ void BindUndistortion(py::module& m) {
       "distorted_image"_a,
       "distorted_camera"_a,
       "Undistort image and corresponding camera.");
+
+  // FORK-REMOVAL TODO — `undistort_images` binds the fork-only
+  // ``UndistortImageFeatures``. See
+  // `.claude/notes/glomap_audit/fork_removal_todo.md` for the removal plan.
+  m.def(
+      "undistort_images",
+      [](Reconstruction& rec, bool clean_points) {
+        py::gil_scoped_release release;
+        UndistortImageFeatures(rec, clean_points);
+      },
+      "rec"_a,
+      "clean_points"_a = true,
+      "Populate Image.features_undist (normalized 3D bearing rays) for every "
+      "feature in Image.features. Mutates rec in place.");
 }

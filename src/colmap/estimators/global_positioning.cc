@@ -1,10 +1,14 @@
 #include "colmap/estimators/global_positioning.h"
 
+#include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
+#include "colmap/estimators/cost_functions/utils.h"
 #include "colmap/math/random.h"
 #include "colmap/util/cuda.h"
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
+
+#include <cstdlib>
 
 namespace colmap {
 namespace {
@@ -13,6 +17,75 @@ Eigen::Vector3d RandVector3d(double low, double high) {
   return Eigen::Vector3d(RandomUniformReal(low, high),
                          RandomUniformReal(low, high),
                          RandomUniformReal(low, high));
+}
+
+MetricDepthOptions CreateMetricDepthOptions(
+    const GlobalPositionerOptions& options) {
+  MetricDepthOptions metric_depth_options;
+  metric_depth_options.use_log_scale =
+      options.use_log_scale_for_depth_map_scales;
+  metric_depth_options.zero_residual_behind = options.zero_residual_behind;
+  metric_depth_options.log_linear_threshold = options.log_linear_threshold;
+
+  if (options.smooth_log_linear_transition) {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLogLinear;
+  } else if (options.use_log_residual_for_depth) {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLog;
+  } else {
+    metric_depth_options.residual_type = MetricDepthResidualType::kLinear;
+  }
+  return metric_depth_options;
+}
+
+// Per-observation depth outlier check. Returns true when the log-space
+// residual |log(z_est / scaled_prior)| exceeds sigma * sigma_log.
+inline bool DepthOutlierFlag(const Image& image,
+                             point2D_t feature_id,
+                             const Eigen::Vector3d& point3D_xyz,
+                             bool use_log_scale,
+                             const std::map<image_t, double>& dmap_scales,
+                             image_t image_id,
+                             double sigma) {
+  if (feature_id >= image.depth_prior_validity.size() ||
+      !image.depth_prior_validity[feature_id]) {
+    return false;
+  }
+  if (feature_id >= image.depth_priors.size() ||
+      feature_id >= image.depth_prior_stddevs.size()) {
+    return false;
+  }
+  const double depth_prior_raw = image.depth_priors[feature_id];
+  const double stddev_rel = image.depth_prior_stddevs[feature_id];
+  if (depth_prior_raw <= 1e-6 || stddev_rel <= 1e-9) return false;
+
+  // Apply per-image dmap_scale if available (else use raw prior).
+  double depth_prior = depth_prior_raw;
+  auto scale_it = dmap_scales.find(image_id);
+  if (scale_it != dmap_scales.end()) {
+    const double dmap_scale =
+        use_log_scale ? std::exp(scale_it->second) : scale_it->second;
+    depth_prior = dmap_scale * depth_prior_raw;
+  }
+
+  // z_est = (cam_from_world * X_world)[2]
+  const Eigen::Vector3d point_cam = image.CamFromWorld() * point3D_xyz;
+  const double z_est = point_cam[2];
+  if (z_est <= 1e-6) return false;
+
+  const double log_z_est = std::log(std::max(z_est, 1e-6));
+  const double log_depth_prior = std::log(std::max(depth_prior, 1e-6));
+  const double log_diff = std::abs(log_z_est - log_depth_prior);
+  const double threshold = sigma * std::log(1.0 + std::max(stddev_rel, 1e-6));
+  return log_diff >= threshold;
+}
+
+size_t NumRegularObservationsForMinViewGate(const Track& track) {
+  return track.Length();
+}
+
+bool IsLossConfigOverride(const LossConfig& loss_config) {
+  return loss_config.type != LossFunctionType::TRIVIAL ||
+         loss_config.scale != 1.0 || loss_config.weight != 1.0;
 }
 
 }  // namespace
@@ -35,6 +108,21 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     return false;
   }
 
+  // TODO: extend rig branch in AddObservationToProblem to add MetricDepthError
+  // for non-ref images. Until then, fail loud on multi-camera rigs +
+  // use_metric_depth_constraint.
+  if (options_.use_metric_depth_constraint) {
+    for (const auto& [image_id, image] : reconstruction.Images()) {
+      THROW_CHECK(image.IsRefInFrame())
+          << "use_metric_depth_constraint=true is not yet supported with "
+             "multi-camera rigs. Image "
+          << image_id
+          << " is a non-ref sensor in its frame; its depth "
+             "residual would be silently dropped. Either disable "
+             "use_metric_depth_constraint or run on single-camera rigs.";
+    }
+  }
+
   LOG(INFO) << "Setting up the global positioner problem";
 
   // Setup the problem.
@@ -43,6 +131,13 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
   // Initialize camera translations to be random.
   // Also, convert the camera pose translation to be the camera center.
   InitializeRandomPositions(pose_graph, reconstruction);
+
+  // No caller-supplied seed for dmap_scales_; derive one from per-image
+  // median observed z_est/depth_prior.
+  if (options_.use_metric_depth_constraint && options_.use_init &&
+      !options_.initial_dmap_scales.has_value()) {
+    InitializeDepthMapScalesFromObservations(reconstruction);
+  }
 
   // Add the point to camera constraints to the problem.
   AddPointToCameraConstraints(reconstruction);
@@ -83,14 +178,17 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   // Clear temporary storage from previous runs.
   frame_centers_.clear();
   cams_in_rig_.clear();
+  per_image_scale_losses_.clear();
 
-  // Allocate enough memory for the scales. One for each residual.
-  // Due to possibly invalid tracks, the actual number of residuals may be
-  // smaller.
+  // Reserve scales_ for both regular observations and lc_elements.
+  // Underestimating triggers ``vector::push_back`` reallocation mid-build,
+  // which invalidates the ``&scale`` data pointers that earlier residual
+  // blocks already stored.
   scales_.clear();
   size_t total_observations = 0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
     total_observations += point3D.track.Length();
+    total_observations += point3D.track.lc_elements.size();
   }
   scales_.reserve(total_observations);
 }
@@ -106,7 +204,7 @@ void GlobalPositioner::InitializeRandomPositions(
   }
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (point3D.track.Length() <
+    if (NumRegularObservationsForMinViewGate(point3D.track) <
         static_cast<size_t>(options_.min_num_view_per_track)) {
       continue;
     }
@@ -116,6 +214,14 @@ void GlobalPositioner::InitializeRandomPositions(
       if (!image.HasPose()) continue;
       constrained_positions.insert(image.FrameId());
     }
+    if (options_.use_lc_observations) {
+      for (const auto& observation : point3D.track.lc_elements) {
+        if (!reconstruction.ExistsImage(observation.image_id)) continue;
+        const Image& image = reconstruction.Image(observation.image_id);
+        if (!image.HasPose()) continue;
+        constrained_positions.insert(image.FrameId());
+      }
+    }
   }
 
   // Initialize frame centers in temporary storage.
@@ -124,8 +230,10 @@ void GlobalPositioner::InitializeRandomPositions(
     if (constrained_positions.find(frame_id) == constrained_positions.end()) {
       continue;
     }
-    if (options_.generate_random_positions && options_.optimize_positions) {
-      frame_centers_[frame_id] = 100.0 * RandVector3d(-1, 1);
+    if (options_.generate_random_positions && options_.optimize_positions &&
+        !options_.use_init) {
+      frame_centers_[frame_id] =
+          options_.random_init_scale * RandVector3d(-1, 1);
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
@@ -141,131 +249,389 @@ void GlobalPositioner::AddPointToCameraConstraints(
              "estimation problem.";
 
   // Down-weight uncalibrated cameras.
-  loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
-      loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  if (options_.apply_uncalibrated_loss_downweight) {
+    loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
+        loss_function_.get(),
+        options_.uncalibrated_loss_downweight,
+        ceres::DO_NOT_TAKE_OWNERSHIP);
+  } else {
+    loss_function_ptcam_uncalibrated_ = loss_function_;
+  }
   loss_function_ptcam_calibrated_ = loss_function_;
 
+  // Initialize cascade losses.
+  cached_loss_normal_geometry_ =
+      options_.loss_normal_geometry.CreateLossFunction();
+  cached_loss_normal_depth_ = options_.loss_normal_depth.CreateLossFunction();
+  cached_loss_lc_geometry_ =
+      IsLossConfigOverride(options_.loss_lc_geometry)
+          ? options_.loss_lc_geometry.CreateLossFunction()
+          : nullptr;
+  cached_loss_lc_depth_ = options_.loss_lc_depth.CreateLossFunction();
+  cached_loss_normal_geometry_inlier_ =
+      options_.loss_normal_geometry_inlier.CreateLossFunction();
+  cached_loss_normal_depth_inlier_ =
+      options_.loss_normal_depth_inlier.CreateLossFunction();
+  cached_loss_normal_depth_outlier_ =
+      options_.loss_normal_depth_outlier.CreateLossFunction();
+  cached_loss_normal_geometry_trackstart_ =
+      options_.loss_normal_geometry_trackstart.CreateLossFunction();
+  cached_loss_normal_depth_trackstart_ =
+      options_.loss_normal_depth_trackstart.CreateLossFunction();
+  cached_loss_scale_prior_ = options_.loss_scale_prior.CreateLossFunction();
+  soft_outlier_fallback_loss_.reset();
+
+  dmap_scales_.clear();
+  dmap_scale_observation_counts_.clear();
+
+  // Seed dmap_scales_ from initial values before outlier filtering.
+  if (options_.use_metric_depth_constraint &&
+      options_.initial_dmap_scales.has_value()) {
+    for (const auto& [image_id, linear_scale] : *options_.initial_dmap_scales) {
+      const double init_value = options_.use_log_scale_for_depth_map_scales
+                                    ? std::log(std::max(linear_scale, 1e-9))
+                                    : linear_scale;
+      dmap_scales_[image_id] = init_value;
+      dmap_scale_observation_counts_[image_id] = 0;
+    }
+  }
+
+  depth_outliers_.clear();
+  if (options_.use_metric_depth_constraint && options_.filter_depth_outliers) {
+    FilterDepthOutliers(reconstruction);
+  }
+
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (point3D.track.Length() <
+    if (NumRegularObservationsForMinViewGate(point3D.track) <
         static_cast<size_t>(options_.min_num_view_per_track)) {
       continue;
     }
 
     AddPoint3DToProblem(point3D_id, reconstruction);
   }
+
+  // Emit one scale-prior residual per image with depth observations,
+  // weighted by obs_count so dense-depth images get stronger priors.
+  if (options_.use_metric_depth_constraint) {
+    for (auto& [image_id, scale] : dmap_scales_) {
+      auto count_it = dmap_scale_observation_counts_.find(image_id);
+      const double obs_count =
+          (count_it != dmap_scale_observation_counts_.end())
+              ? static_cast<double>(count_it->second)
+              : 1.0;
+
+      // Prior: pulls log_s toward 0 (log-space) or s toward 1 (linear).
+      const Eigen::Matrix<double, 1, 1> prior_vec(
+          options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0);
+      const Eigen::Matrix<double, 1, 1> cov_1x1(options_.scale_prior_stddev *
+                                                options_.scale_prior_stddev);
+      ceres::CostFunction* scale_prior_cost =
+          CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(
+              cov_1x1, prior_vec);
+      if (scale_prior_cost == nullptr) continue;
+
+      ceres::LossFunction* obs_count_scaled_loss = nullptr;
+      if (cached_loss_scale_prior_) {
+        per_image_scale_losses_.push_back(
+            std::make_unique<ceres::ScaledLoss>(cached_loss_scale_prior_.get(),
+                                                obs_count,
+                                                ceres::DO_NOT_TAKE_OWNERSHIP));
+      } else {
+        per_image_scale_losses_.push_back(std::make_unique<ceres::ScaledLoss>(
+            new ceres::TrivialLoss(), obs_count, ceres::TAKE_OWNERSHIP));
+      }
+      obs_count_scaled_loss = per_image_scale_losses_.back().get();
+
+      problem_->AddResidualBlock(
+          scale_prior_cost, obs_count_scaled_loss, &scale);
+    }
+  }
+  VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
+          << ", parameter blocks=" << problem_->NumParameterBlocks()
+          << ", scales=" << scales_.size()
+          << ", frame_centers=" << frame_centers_.size()
+          << ", dmap_scales=" << dmap_scales_.size();
 }
 
 void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
                                            Reconstruction& reconstruction) {
-  const bool random_initialization =
-      options_.optimize_points && options_.generate_random_points;
+  const bool random_initialization = options_.optimize_points &&
+                                     options_.generate_random_points &&
+                                     !options_.use_init;
 
   Point3D& point3D = reconstruction.Point3D(point3D_id);
 
   // Only set the points to be random if they are needed to be optimized
   if (random_initialization) {
-    point3D.xyz = 100.0 * RandVector3d(-1, 1);
+    point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
 
-  // For each view in the track add the point to camera correspondences.
+  // Walk regular elements then LC elements as separate passes — they
+  // share the residual layout but use different loss function groups.
   for (const auto& observation : point3D.track.Elements()) {
-    if (!reconstruction.ExistsImage(observation.image_id)) continue;
-
-    Image& image = reconstruction.Image(observation.image_id);
-    if (!image.HasPose()) continue;
-
-    const std::optional<Eigen::Vector2d> cam_point =
-        image.CameraPtr()->CamFromImg(
-            image.Point2D(observation.point2D_idx).xy);
-    if (!cam_point.has_value()) {
-      LOG(WARNING)
-          << "Ignoring feature because it failed to project: point3D_id="
-          << point3D_id << ", image_id=" << observation.image_id
-          << ", feature_id=" << observation.point2D_idx;
-      continue;
+    AddObservationToProblem(
+        point3D_id, observation, random_initialization, reconstruction);
+  }
+  if (options_.use_lc_observations) {
+    for (const auto& observation : point3D.track.lc_elements) {
+      AddObservationToProblem(point3D_id,
+                              observation,
+                              random_initialization,
+                              reconstruction,
+                              /*is_lc_observation=*/true);
     }
+  }
+}
 
-    const Eigen::Vector3d cam_from_point3D_dir =
-        image.CamFromWorld().rotation().inverse() *
-        cam_point->homogeneous().normalized();
+void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
+                                               const TrackElement& observation,
+                                               bool random_initialization,
+                                               Reconstruction& reconstruction,
+                                               bool is_lc_observation) {
+  Point3D& point3D = reconstruction.Point3D(point3D_id);
+  if (!reconstruction.ExistsImage(observation.image_id)) return;
 
-    CHECK_GE(scales_.capacity(), scales_.size())
-        << "Not enough capacity was reserved for the scales.";
-    double& scale = scales_.emplace_back(1);
+  Image& image = reconstruction.Image(observation.image_id);
+  if (!image.HasPose()) return;
 
-    if (!options_.generate_scales && random_initialization) {
-      const Eigen::Vector3d cam_from_point3D_translation =
-          point3D.xyz - frame_centers_[image.FrameId()];
-      scale = std::max(1e-5,
-                       cam_from_point3D_dir.dot(cam_from_point3D_translation) /
-                           cam_from_point3D_translation.squaredNorm());
+  const std::optional<Eigen::Vector2d> cam_point =
+      image.CameraPtr()->CamFromImg(image.Point2D(observation.point2D_idx).xy);
+  if (!cam_point.has_value()) {
+    LOG(WARNING) << "Ignoring feature because it failed to project: point3D_id="
+                 << point3D_id << ", image_id=" << observation.image_id
+                 << ", feature_id=" << observation.point2D_idx;
+    return;
+  }
+
+  const Eigen::Vector3d cam_from_point3D_dir =
+      image.CamFromWorld().rotation().inverse() *
+      cam_point->homogeneous().normalized();
+
+  CHECK_GE(scales_.capacity(), scales_.size())
+      << "Not enough capacity was reserved for the scales.";
+  double& scale = scales_.emplace_back(1);
+
+  if (!options_.generate_scales &&
+      (random_initialization || options_.initialize_warm_start_scales)) {
+    const Eigen::Vector3d cam_from_point3D_translation =
+        point3D.xyz - frame_centers_[image.FrameId()];
+    scale = std::max(1e-5,
+                     cam_from_point3D_dir.dot(cam_from_point3D_translation) /
+                         cam_from_point3D_translation.squaredNorm());
+  }
+
+  // For calibrated and uncalibrated cameras, use different loss
+  // functions
+  // Down weight the uncalibrated cameras
+  Camera& camera = reconstruction.Camera(image.CameraId());
+  ceres::LossFunction* loss_function =
+      (camera.has_prior_focal_length) ? loss_function_ptcam_calibrated_.get()
+                                      : loss_function_ptcam_uncalibrated_.get();
+
+  // Geometry-loss cascade. Per-observation route:
+  //   is_lc                         -> cached_loss_lc_geometry_
+  //   TrackElement::is_track_anchor -> cached_loss_normal_geometry_trackstart_
+  //   TrackElement::is_inlier       -> cached_loss_normal_geometry_inlier_
+  //   else                          -> cached_loss_normal_geometry_
+  if (is_lc_observation && cached_loss_lc_geometry_) {
+    loss_function = cached_loss_lc_geometry_.get();
+  } else if (options_.use_metric_depth_constraint) {
+    ceres::LossFunction* cascade = nullptr;
+    if (observation.is_track_anchor) {
+      cascade = cached_loss_normal_geometry_trackstart_.get();
+    } else if (observation.is_inlier) {
+      cascade = cached_loss_normal_geometry_inlier_.get();
+    } else {
+      cascade = cached_loss_normal_geometry_.get();
     }
+    if (cascade != nullptr) {
+      loss_function = cascade;
+    }
+  }
 
-    // For calibrated and uncalibrated cameras, use different loss
-    // functions
-    // Down weight the uncalibrated cameras
-    Camera& camera = reconstruction.Camera(image.CameraId());
-    ceres::LossFunction* loss_function =
-        (camera.has_prior_focal_length)
-            ? loss_function_ptcam_calibrated_.get()
-            : loss_function_ptcam_uncalibrated_.get();
-
-    // If the image is not part of a camera rig, use the standard BATA error
-    if (image.IsRefInFrame()) {
-      ceres::CostFunction* cost_function =
+  // If the image is not part of a camera rig, use the standard BATA error
+  if (image.IsRefInFrame()) {
+    // Anisotropic per-keypoint covariance via CovarianceWeightedCostFunctor
+    // when angular_stddevs is populated; otherwise bare BATA functor.
+    // cov_world = R^T diag(sigma^2) R.
+    ceres::CostFunction* cost_function = nullptr;
+    if (observation.point2D_idx < image.angular_stddevs.size()) {
+      const Eigen::Vector2d& angular_std =
+          image.angular_stddevs[observation.point2D_idx];
+      const double sigma_x = std::max(1e-9, angular_std[0]);
+      const double sigma_y = std::max(1e-9, angular_std[1]);
+      const double sigma_z = 0.5 * (sigma_x + sigma_y);
+      const Eigen::Matrix3d R =
+          image.CamFromWorld().rotation().toRotationMatrix();
+      const Eigen::Matrix3d cov_world =
+          R.transpose() *
+          Eigen::Vector3d(
+              sigma_x * sigma_x, sigma_y * sigma_y, sigma_z * sigma_z)
+              .asDiagonal() *
+          R;
+      cost_function = CovarianceWeightedCostFunctor<
+          BATAPairwiseDirectionCostFunctor>::Create(cov_world,
+                                                    cam_from_point3D_dir);
+    }
+    if (cost_function == nullptr) {
+      cost_function =
           BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
+    }
+
+    problem_->AddResidualBlock(cost_function,
+                               loss_function,
+                               frame_centers_[image.FrameId()].data(),
+                               point3D.xyz.data(),
+                               &scale);
+
+    // 1-D MetricDepthError: anchors absolute scale via depth prior.
+    if (options_.use_metric_depth_constraint) {
+      AddMetricDepthResidual(
+          point3D_id, observation, is_lc_observation, reconstruction);
+    }
+  } else {
+    // If the image is part of a camera rig, use the RigBATA error.
+
+    const rig_t rig_id = image.FramePtr()->RigId();
+    Rig& rig = reconstruction.Rig(rig_id);
+    Rigid3d& cam_from_rig = rig.SensorFromRig(image.CameraPtr()->SensorId());
+
+    if (!cam_from_rig.translation().hasNaN()) {
+      const Eigen::Vector3d cam_from_rig_dir =
+          image.CamFromWorld().rotation().inverse() *
+          cam_from_rig.translation();
+
+      ceres::CostFunction* cost_function =
+          RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
+              cam_from_point3D_dir, cam_from_rig_dir);
 
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
-                                 frame_centers_[image.FrameId()].data(),
                                  point3D.xyz.data(),
+                                 frame_centers_[image.FrameId()].data(),
                                  &scale);
     } else {
-      // If the image is part of a camera rig, use the RigBATA error.
+      // If the cam_from_rig contains nan values, it needs to be re-estimated.
+      // Initialize cams_in_rig_ if not already done.
+      const sensor_t sensor_id = image.CameraPtr()->SensorId();
+      if (cams_in_rig_.find(sensor_id) == cams_in_rig_.end()) {
+        // Will be initialized to random values in ParameterizeVariables().
+        cams_in_rig_[sensor_id] = Eigen::Vector3d::Zero();
+      }
 
-      const rig_t rig_id = image.FramePtr()->RigId();
-      Rig& rig = reconstruction.Rig(rig_id);
-      Rigid3d& cam_from_rig = rig.SensorFromRig(image.CameraPtr()->SensorId());
+      ceres::CostFunction* cost_function =
+          RigBATAPairwiseDirectionCostFunctor::Create(
+              cam_from_point3D_dir,
+              image.FramePtr()->RigFromWorld().rotation());
 
-      if (!cam_from_rig.translation().hasNaN()) {
-        const Eigen::Vector3d cam_from_rig_dir =
-            image.CamFromWorld().rotation().inverse() *
-            cam_from_rig.translation();
+      problem_->AddResidualBlock(cost_function,
+                                 loss_function,
+                                 point3D.xyz.data(),
+                                 frame_centers_[image.FrameId()].data(),
+                                 cams_in_rig_[sensor_id].data(),
+                                 &scale);
+    }
+  }
 
-        ceres::CostFunction* cost_function =
-            RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
-                cam_from_point3D_dir, cam_from_rig_dir);
+  problem_->SetParameterLowerBound(&scale, 0, 1e-5);
+}
 
-        problem_->AddResidualBlock(cost_function,
-                                   loss_function,
-                                   point3D.xyz.data(),
-                                   frame_centers_[image.FrameId()].data(),
-                                   &scale);
-      } else {
-        // If the cam_from_rig contains nan values, it needs to be re-estimated.
-        // Initialize cams_in_rig_ if not already done.
-        const sensor_t sensor_id = image.CameraPtr()->SensorId();
-        if (cams_in_rig_.find(sensor_id) == cams_in_rig_.end()) {
-          // Will be initialized to random values in ParameterizeVariables().
-          cams_in_rig_[sensor_id] = Eigen::Vector3d::Zero();
-        }
+void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
+                                              const TrackElement& observation,
+                                              bool is_lc_observation,
+                                              Reconstruction& reconstruction) {
+  if (!reconstruction.ExistsImage(observation.image_id)) return;
+  const Image& image = reconstruction.Image(observation.image_id);
 
-        ceres::CostFunction* cost_function =
-            RigBATAPairwiseDirectionCostFunctor::Create(
-                cam_from_point3D_dir,
-                image.FramePtr()->RigFromWorld().rotation());
+  if (observation.point2D_idx >= image.depth_prior_validity.size() ||
+      !image.depth_prior_validity[observation.point2D_idx]) {
+    return;
+  }
+  THROW_CHECK_LT(observation.point2D_idx, image.depth_priors.size());
+  THROW_CHECK_LT(observation.point2D_idx, image.depth_prior_stddevs.size());
 
-        problem_->AddResidualBlock(cost_function,
-                                   loss_function,
-                                   point3D.xyz.data(),
-                                   frame_centers_[image.FrameId()].data(),
-                                   cams_in_rig_[sensor_id].data(),
-                                   &scale);
+  const double depth_prior = image.depth_priors[observation.point2D_idx];
+  const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];
+
+  if (depth_prior <= 0.0 || depth_sigma <= 1e-9) return;
+
+  // Lazy-insert dmap_scales_ on first valid observation per image.
+  if (dmap_scales_.find(observation.image_id) == dmap_scales_.end()) {
+    double init_value = options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
+    if (options_.initial_dmap_scales.has_value()) {
+      const auto& init_map = *options_.initial_dmap_scales;
+      auto it = init_map.find(observation.image_id);
+      if (it != init_map.end()) {
+        // Convert caller-supplied linear value to log if needed.
+        init_value = options_.use_log_scale_for_depth_map_scales
+                         ? std::log(std::max(it->second, 1e-9))
+                         : it->second;
       }
     }
-
-    problem_->SetParameterLowerBound(&scale, 0, 1e-5);
+    dmap_scales_[observation.image_id] = init_value;
+    dmap_scale_observation_counts_[observation.image_id] = 0;
   }
+  dmap_scale_observation_counts_[observation.image_id]++;
+
+  ceres::CostFunction* metric_depth_cost =
+      MetricDepthError::Create(image.CamFromWorld().rotation(),
+                               depth_prior,
+                               depth_sigma,
+                               CreateMetricDepthOptions(options_));
+
+  if (metric_depth_cost == nullptr) return;
+
+  // Outlier dual routing:
+  //   depth_outliers_ = runtime geometry-driven filter
+  //     (Nσ log-residual, N = filter_depth_outlier_sigma),
+  //     populated by FilterDepthOutliers between BA iterations.
+  //   TrackElement::is_depth_outlier = external annotation
+  //     (MDRP/boundary heuristic), populated by Python pipeline
+  //     pre-solve.
+  //   depth_outliers_ is checked first and is strictly more
+  //   aggressive: LC observations skip the depth residual
+  //   entirely, non-LC get a soft fallback loss.
+  //
+  // 5-way depth-loss cascade:
+  //   pre-pass outlier  -> soft fallback (skip on LC)
+  //   is_lc             -> cached_loss_lc_depth_
+  //   TrackElement::is_track_anchor  -> cached_loss_normal_depth_trackstart_
+  //   TrackElement::is_inlier        -> cached_loss_normal_depth_inlier_
+  //   TrackElement::is_depth_outlier -> cached_loss_normal_depth_outlier_
+  //   else              -> cached_loss_normal_depth_
+  ceres::LossFunction* depth_loss = nullptr;
+  const std::pair<image_t, point2D_t> obs_key{observation.image_id,
+                                              observation.point2D_idx};
+  if (depth_outliers_.count(obs_key) > 0) {
+    if (is_lc_observation) {
+      // LC outlier: skip depth residual entirely.
+      delete metric_depth_cost;
+      return;
+    }
+    // Non-LC outlier: soft fallback (HuberLoss(1)).
+    if (!soft_outlier_fallback_loss_) {
+      soft_outlier_fallback_loss_ =
+          options_.loss_soft_outlier_fallback.CreateLossFunction();
+    }
+    depth_loss = soft_outlier_fallback_loss_.get();
+  } else if (is_lc_observation) {
+    depth_loss = cached_loss_lc_depth_.get();
+  } else if (observation.is_track_anchor) {
+    depth_loss = cached_loss_normal_depth_trackstart_.get();
+  } else if (observation.is_inlier) {
+    depth_loss = cached_loss_normal_depth_inlier_.get();
+  } else if (observation.is_depth_outlier) {
+    depth_loss = cached_loss_normal_depth_outlier_.get();
+  } else {
+    depth_loss = cached_loss_normal_depth_.get();
+  }
+
+  Point3D& point3D = reconstruction.Point3D(point3D_id);
+  problem_->AddResidualBlock(metric_depth_cost,
+                             depth_loss,
+                             frame_centers_[image.FrameId()].data(),
+                             point3D.xyz.data(),
+                             &dmap_scales_[observation.image_id]);
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -302,6 +668,14 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
   for (auto& [sensor_id, center] : cams_in_rig_) {
     if (problem_->HasParameterBlock(center.data())) {
       parameter_ordering->AddElementToGroup(center.data(), group_id);
+    }
+  }
+
+  // dmap_scales_ in own group (1-D vs 3-D frame_centers/cams_in_rig).
+  ++group_id;
+  for (auto& [image_id, scale] : dmap_scales_) {
+    if (problem_->HasParameterBlock(&scale)) {
+      parameter_ordering->AddElementToGroup(&scale, group_id);
     }
   }
 }
@@ -346,11 +720,23 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
       }
     }
   }
-  // Set the first scale to be constant to remove the gauge ambiguity.
-  for (double& scale : scales_) {
-    if (problem_->HasParameterBlock(&scale)) {
-      problem_->SetParameterBlockConstant(&scale);
-      break;
+
+  // Lower-bound dmap_scales_ in linear space (no bound needed in log space).
+  if (!options_.use_log_scale_for_depth_map_scales) {
+    for (auto& [image_id, scale] : dmap_scales_) {
+      if (problem_->HasParameterBlock(&scale)) {
+        problem_->SetParameterLowerBound(&scale, 0, 1e-5);
+      }
+    }
+  }
+  // Pin first scale to remove gauge ambiguity. Skip when metric-depth is
+  // active (depth priors + scale priors already anchor the gauge).
+  if (!options_.use_metric_depth_constraint) {
+    for (double& scale : scales_) {
+      if (problem_->HasParameterBlock(&scale)) {
+        problem_->SetParameterBlockConstant(&scale);
+        break;
+      }
     }
   }
 
@@ -439,6 +825,109 @@ void GlobalPositioner::ConvertBackResults(Reconstruction& reconstruction) {
       break;
     }
   }
+}
+
+void GlobalPositioner::FilterDepthOutliers(
+    const Reconstruction& reconstruction) {
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    // Regular observations
+    for (const auto& observation : point3D.track.Elements()) {
+      if (!reconstruction.ExistsImage(observation.image_id)) continue;
+      const Image& image = reconstruction.Image(observation.image_id);
+      if (!image.HasPose()) continue;
+      if (DepthOutlierFlag(image,
+                           observation.point2D_idx,
+                           point3D.xyz,
+                           options_.use_log_scale_for_depth_map_scales,
+                           dmap_scales_,
+                           observation.image_id,
+                           options_.filter_depth_outlier_sigma)) {
+        depth_outliers_.insert({observation.image_id, observation.point2D_idx});
+      }
+    }
+    if (options_.use_lc_observations) {
+      for (const auto& observation : point3D.track.lc_elements) {
+        if (!reconstruction.ExistsImage(observation.image_id)) continue;
+        const Image& image = reconstruction.Image(observation.image_id);
+        if (!image.HasPose()) continue;
+        if (DepthOutlierFlag(image,
+                             observation.point2D_idx,
+                             point3D.xyz,
+                             options_.use_log_scale_for_depth_map_scales,
+                             dmap_scales_,
+                             observation.image_id,
+                             options_.filter_depth_outlier_sigma)) {
+          depth_outliers_.insert(
+              {observation.image_id, observation.point2D_idx});
+        }
+      }
+    }
+  }
+  VLOG(2) << "FilterDepthOutliers: flagged " << depth_outliers_.size()
+          << " observations as depth outliers.";
+}
+
+void GlobalPositioner::InitializeDepthMapScalesFromObservations(
+    const Reconstruction& reconstruction) {
+  // Per-image scale estimates: scale = z_est / depth_prior.
+  std::map<image_t, std::vector<double>> image_scale_estimates;
+
+  auto consume_observation = [&](image_t image_id,
+                                 point2D_t feature_id,
+                                 const Eigen::Vector3d& point_world) {
+    if (!reconstruction.ExistsImage(image_id)) return;
+    const Image& image = reconstruction.Image(image_id);
+    if (!image.HasPose()) return;
+
+    if (feature_id >= image.depth_prior_validity.size() ||
+        !image.depth_prior_validity[feature_id]) {
+      return;
+    }
+    if (feature_id >= image.depth_priors.size()) return;
+
+    const double depth_prior = image.depth_priors[feature_id];
+    if (depth_prior <= 1e-6) return;
+
+    // z_est = (cam_from_world * X_world)[2]
+    const Eigen::Vector3d point_cam = image.CamFromWorld() * point_world;
+    const double z_est = point_cam[2];
+    if (z_est <= 1e-6) return;
+
+    const double scale_estimate = z_est / depth_prior;
+    if (scale_estimate > 1e-6 && scale_estimate < 1e6) {
+      image_scale_estimates[image_id].push_back(scale_estimate);
+    }
+  };
+
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    for (const auto& observation : point3D.track.Elements()) {
+      consume_observation(
+          observation.image_id, observation.point2D_idx, point3D.xyz);
+    }
+    if (options_.use_lc_observations) {
+      for (const auto& observation : point3D.track.lc_elements) {
+        consume_observation(
+            observation.image_id, observation.point2D_idx, point3D.xyz);
+      }
+    }
+  }
+
+  for (auto& [image_id, scale_estimates] : image_scale_estimates) {
+    if (scale_estimates.empty()) continue;
+
+    std::sort(scale_estimates.begin(), scale_estimates.end());
+    const double median_scale = scale_estimates[scale_estimates.size() / 2];
+
+    const double initial_value = options_.use_log_scale_for_depth_map_scales
+                                     ? std::log(median_scale)
+                                     : median_scale;
+
+    dmap_scales_[image_id] = initial_value;
+    dmap_scale_observation_counts_[image_id] = 0;
+  }
+
+  VLOG(2) << "InitializeDepthMapScalesFromObservations: seeded "
+          << dmap_scales_.size() << " image scales from observations.";
 }
 
 bool RunGlobalPositioning(const GlobalPositionerOptions& options,

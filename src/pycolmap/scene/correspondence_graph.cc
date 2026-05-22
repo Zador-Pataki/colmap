@@ -5,6 +5,7 @@
 #include "colmap/util/types.h"
 
 #include "pycolmap/helpers.h"
+#include "pycolmap/scene/types.h"
 #include "pycolmap/utils.h"
 
 #include <pybind11/eigen.h>
@@ -12,9 +13,61 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include <utility>
+
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
+
+namespace {
+
+using ImagePair = CorrespondenceGraph::ImagePair;
+
+const Eigen::MatrixXi& ImagePairMatches(const ImagePair& image_pair) {
+  return image_pair.matches;
+}
+
+const std::vector<int>& ImagePairInliers(const ImagePair& image_pair) {
+  return image_pair.inliers;
+}
+
+const std::vector<bool>& ImagePairLoopClosureFlags(
+    const ImagePair& image_pair) {
+  return image_pair.are_lc;
+}
+
+void CheckMatches(const Eigen::MatrixXi& matches) {
+  THROW_CHECK_EQ(matches.cols(), 2);
+  for (Eigen::Index row = 0; row < matches.rows(); ++row) {
+    THROW_CHECK_GE(matches(row, 0), 0);
+    THROW_CHECK_GE(matches(row, 1), 0);
+  }
+}
+
+void SetImagePairMatches(ImagePair& image_pair, Eigen::MatrixXi matches) {
+  CheckMatches(matches);
+  image_pair.matches = std::move(matches);
+  image_pair.num_matches = static_cast<point2D_t>(image_pair.matches.rows());
+  image_pair.inliers.clear();
+  image_pair.are_lc.assign(image_pair.matches.rows(), false);
+}
+
+void SetImagePairInliers(ImagePair& image_pair, std::vector<int> inliers) {
+  for (const int idx : inliers) {
+    THROW_CHECK_GE(idx, 0);
+    THROW_CHECK_LT(idx, image_pair.matches.rows());
+  }
+  image_pair.inliers = std::move(inliers);
+}
+
+void SetImagePairLoopClosureFlags(ImagePair& image_pair,
+                                  std::vector<bool> are_lc) {
+  THROW_CHECK_EQ(are_lc.size(),
+                 static_cast<size_t>(image_pair.matches.rows()));
+  image_pair.are_lc = std::move(are_lc);
+}
+
+}  // namespace
 
 void BindCorrespondenceGraph(py::module& m) {
   py::classh<CorrespondenceGraph::Correspondence> PyCorrespondence(
@@ -41,6 +94,25 @@ void BindCorrespondenceGraph(py::module& m) {
           },
           "Convert range to list of correspondences.");
 
+  // Bind the public ImagePair struct.
+  py::classh<CorrespondenceGraph::ImagePair> PyImagePair(m, "ImagePair");
+  PyImagePair.def(py::init<>())
+      .def(py::init<image_t, image_t>(), "image_id1"_a, "image_id2"_a)
+      .def_readwrite("image_id1", &CorrespondenceGraph::ImagePair::image_id1)
+      .def_readwrite("image_id2", &CorrespondenceGraph::ImagePair::image_id2)
+      .def_readwrite("is_valid", &CorrespondenceGraph::ImagePair::is_valid)
+      .def_property("matches", &ImagePairMatches, &SetImagePairMatches)
+      .def_property("inliers", &ImagePairInliers, &SetImagePairInliers)
+      .def_property(
+          "are_lc",
+          &ImagePairLoopClosureFlags,
+          &SetImagePairLoopClosureFlags)
+      .def_readwrite("num_matches",
+                     &CorrespondenceGraph::ImagePair::num_matches)
+      .def_readwrite("two_view_geometry",
+                     &CorrespondenceGraph::ImagePair::two_view_geometry);
+  MakeDataclass(PyImagePair);
+
   auto PyCorrespondenceGraph =
       py::classh<CorrespondenceGraph>(m, "CorrespondenceGraph");
   PyCorrespondenceGraph.def(py::init<>())
@@ -62,7 +134,15 @@ void BindCorrespondenceGraph(py::module& m) {
            py::overload_cast<>(&CorrespondenceGraph::NumMatchesBetweenAllImages,
                                py::const_))
       .def("exists_image", &CorrespondenceGraph::ExistsImage, "image_id"_a)
-      .def("image_pairs", &CorrespondenceGraph::ImagePairs)
+      .def("image_pair_ids", &CorrespondenceGraph::ImagePairs)
+      .def_property_readonly(
+          "image_pairs",
+          [](CorrespondenceGraph& self) -> ImagePairMap& {
+            return self.MutableImagePairs();
+          },
+          py::return_value_policy::reference_internal,
+          "Mutable dictionary of image pairs, keyed by pair_id. "
+          "Allows dict-style access and mutation of ImagePair objects.")
       .def("add_image",
            &CorrespondenceGraph::AddImage,
            "image_id"_a,
@@ -145,6 +225,9 @@ void BindCorrespondenceGraph(py::module& m) {
   DefDeprecation(PyCorrespondenceGraph,
                  "find_correspondences_between_images",
                  "extract_matches_between_images");
+
+  // Bind the ImagePairMap as a Python dict.
+  py::bind_map<ImagePairMap>(m, "ImagePairMap");
 
   m.def(
       "build_correspondence_graph",

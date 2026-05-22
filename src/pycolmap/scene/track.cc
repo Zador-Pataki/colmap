@@ -22,7 +22,10 @@ void BindTrack(py::module& m) {
   PyTrackElement.def(py::init<>())
       .def(py::init<image_t, point2D_t>(), "image_id"_a, "point2D_idx"_a)
       .def_readwrite("image_id", &TrackElement::image_id)
-      .def_readwrite("point2D_idx", &TrackElement::point2D_idx);
+      .def_readwrite("point2D_idx", &TrackElement::point2D_idx)
+      .def_readwrite("is_inlier", &TrackElement::is_inlier)
+      .def_readwrite("is_depth_outlier", &TrackElement::is_depth_outlier)
+      .def_readwrite("is_track_anchor", &TrackElement::is_track_anchor);
   MakeDataclass(PyTrackElement);
 
   py::classh<Track> PyTrack(m, "Track");
@@ -72,6 +75,7 @@ void BindTrack(py::module& m) {
            &Track::Reserve,
            "num_elements"_a,
            "Reserve capacity for elements.")
-      .def("compress", &Track::Compress, "Shrink capacity to fit size.");
+      .def("compress", &Track::Compress, "Shrink capacity to fit size.")
+      .def_readwrite("lc_elements", &Track::lc_elements);
   MakeDataclass(PyTrack);
 }

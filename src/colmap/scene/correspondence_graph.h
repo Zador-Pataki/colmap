@@ -37,6 +37,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <Eigen/Core>
+
 namespace colmap {
 
 // Correspondence graph represents the graph of image to image and feature to
@@ -61,6 +63,41 @@ class CorrespondenceGraph {
   struct CorrespondenceRange {
     const Correspondence* beg = nullptr;
     const Correspondence* end = nullptr;
+  };
+
+  // Two-view image pair with geometry, matches, and metadata.
+  // Extends colmap core with image IDs, validity flags, loop closure markers,
+  // and full match data.
+  struct ImagePair {
+    // Default constructor.
+    ImagePair() = default;
+
+    // Constructor from image IDs.
+    ImagePair(image_t img_id1, image_t img_id2)
+        : image_id1(img_id1), image_id2(img_id2) {}
+
+    // Image identifiers.
+    image_t image_id1 = kInvalidImageId;
+    image_t image_id2 = kInvalidImageId;
+
+    // Indicator whether the image pair is valid.
+    bool is_valid = true;
+
+    // The number of inlier matches between pairs of images.
+    point2D_t num_matches = 0;
+
+    // The two-view geometry of the image pair without matches.
+    struct TwoViewGeometry two_view_geometry;
+
+    // All matches between the two images (not just inliers).
+    // First column is feature index in image1, second column in image2.
+    Eigen::MatrixXi matches;
+
+    // Row indices of inliers in the matches matrix.
+    std::vector<int> inliers;
+
+    // Whether each match is a loop closure match (same size as matches.rows()).
+    std::vector<bool> are_lc;
   };
 
   CorrespondenceGraph() = default;
@@ -149,6 +186,19 @@ class CorrespondenceGraph {
                              image_t image_id2,
                              struct TwoViewGeometry two_view_geometry);
 
+  // Return a mutable reference to the internal image_pairs map.
+  // Used by pybind11 bindings to enable dict-style access from Python.
+  inline std::unordered_map<image_pair_t, ImagePair>& MutableImagePairs() {
+    return image_pairs_;
+  }
+  // Const accessor for the internal image_pairs map. RA's
+  // skip_risky_lc_pairs path uses this to read ImagePair.{inliers, are_lc}
+  // without taking mutable access.
+  inline const std::unordered_map<image_pair_t, ImagePair>& ImagePairsMap()
+      const {
+    return image_pairs_;
+  }
+
   // Check whether the image point has correspondences.
   inline bool HasCorrespondences(image_t image_id, point2D_t point2D_idx) const;
 
@@ -176,13 +226,6 @@ class CorrespondenceGraph {
     // the next point. The length of this vector is num_points2D + 1, where the
     // last element is equivalent to the size of flat_corrs.
     std::vector<point2D_t> flat_corr_begs;
-  };
-
-  struct ImagePair {
-    // The number of inlier matches between pairs of images.
-    point2D_t num_matches = 0;
-    // The two-view geometry of the image pair without matches.
-    struct TwoViewGeometry two_view_geometry;
   };
 
   bool finalized_ = false;

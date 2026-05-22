@@ -154,6 +154,28 @@ class Image {
   inline bool operator==(const Image& other) const;
   inline bool operator!=(const Image& other) const;
 
+  // Per-feature monocular depth priors.
+  std::vector<double> depth_priors;
+  std::vector<double> depth_prior_stddevs;
+  std::vector<bool> depth_prior_validity;
+
+  // Per-feature inlier flag for GP loss routing.
+  std::vector<bool> is_inlier;
+  // Per-feature depth outlier flag for GP loss routing.
+  std::vector<bool> is_depth_outlier;
+  // Per-feature track-anchor flag for GP loss routing.
+  std::vector<bool> is_track_anchor;
+  // Per-feature angular standard deviations (sigma_x, sigma_y) in radians.
+  std::vector<Eigen::Vector2d> angular_stddevs;
+
+  // FORK-REMOVAL TODO: features / features_undist are fork-only.
+  // See .claude/notes/glomap_audit/fork_removal_todo.md.
+
+  // Raw 2D keypoints (xy), separate from points2D_.
+  std::vector<Eigen::Vector2d> features;
+  // Undistorted 3D rays per feature.
+  std::vector<Eigen::Vector3d> features_undist;
+
  private:
   // The name of the image, i.e. the relative path.
   std::string name_;
@@ -310,7 +332,8 @@ bool Image::operator==(const Image& other) const {
                       name_ == other.name_ &&                  //
                       num_points3D_ == other.num_points3D_ &&  //
                       HasPose() == other.HasPose() &&          //
-                      points2D_ == other.points2D_;
+                      points2D_ == other.points2D_ &&          //
+                      pixel_cholesky_xy_ == other.pixel_cholesky_xy_;
   if (!HasPose()) {
     return result;
   } else {

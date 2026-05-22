@@ -179,6 +179,16 @@ void BindBundleAdjuster(py::module& m) {
           .value("HUBER", CeresBAOpts::LossFunctionType::HUBER);
   AddStringToEnumConstructor(PyCeresLossFunctionType);
 
+  // Shared (type, scale, weight) loss config struct used by BA, GP, and
+  // pose-prior options. Bound here in the BA binding because BA runs
+  // before motion-averaging in BindEstimators ordering, and GP / pose
+  // prior options reference this Python class via def_readwrite.
+  py::classh<LossConfig>(m, "LossConfig")
+      .def(py::init<>())
+      .def_readwrite("type", &LossConfig::type)
+      .def_readwrite("scale", &LossConfig::scale)
+      .def_readwrite("weight", &LossConfig::weight);
+
   auto PyCeresBundleAdjustmentOptions =
       py::classh<CeresBAOpts>(m, "CeresBundleAdjustmentOptions")
           .def(py::init<>())
@@ -187,18 +197,10 @@ void BindBundleAdjuster(py::module& m) {
                &CeresBAOpts::CreateSolverOptions,
                "config"_a,
                "problem"_a)
-          .def_readwrite("loss_function_type",
-                         &CeresBAOpts::loss_function_type,
-                         "Loss function types: Trivial (non-robust) and Cauchy "
-                         "(robust) loss.")
-          .def_readwrite("loss_function_scale",
-                         &CeresBAOpts::loss_function_scale,
-                         "Scaling factor determines residual at which "
-                         "robustification takes place.")
-          .def_readwrite("loss_function_weight",
-                         &CeresBAOpts::loss_function_weight,
-                         "Multiplicative weight for loss function "
-                         "(wraps via ScaledLoss).")
+          .def_readwrite("loss",
+                         &CeresBAOpts::loss,
+                         "Robust loss applied to reprojection residuals "
+                         "(LossConfig: type, scale, weight).")
           .def_readwrite("use_gpu",
                          &CeresBAOpts::use_gpu,
                          "Whether to use Ceres' CUDA linear algebra library, "
@@ -300,14 +302,11 @@ void BindBundleAdjuster(py::module& m) {
       py::classh<CeresPosePriorBAOpts>(m,
                                        "CeresPosePriorBundleAdjustmentOptions")
           .def(py::init<>())
-          .def_readwrite(
-              "prior_position_loss_function_type",
-              &CeresPosePriorBAOpts::prior_position_loss_function_type,
-              "Loss function for prior position loss.")
-          .def_readwrite("prior_position_loss_scale",
-                         &CeresPosePriorBAOpts::prior_position_loss_scale,
-                         "Threshold on the residual for the robust loss (chi2 "
-                         "for 3DOF at 95% = 7.815).")
+          .def_readwrite("prior_position_loss",
+                         &CeresPosePriorBAOpts::prior_position_loss,
+                         "Robust loss applied to prior-position residuals "
+                         "(LossConfig: type, scale, weight). Default scale "
+                         "is sqrt(chi2_95_3dof) = sqrt(7.815).")
           .def("check", &CeresPosePriorBAOpts::Check);
   MakeDataclass(PyCeresPosePriorBundleAdjustmentOptions);
 
@@ -348,7 +347,9 @@ void BindBundleAdjuster(py::module& m) {
            }),
            "options"_a,
            "config"_a)
-      .def_property_readonly("problem", &CeresBundleAdjuster::Problem);
+      .def_property_readonly("problem",
+                             &CeresBundleAdjuster::Problem,
+                             py::return_value_policy::reference_internal);
 
   m.def("create_default_bundle_adjuster",
         [](const BundleAdjustmentOptions& options,
@@ -366,7 +367,8 @@ void BindBundleAdjuster(py::module& m) {
         },
         "options"_a,
         "config"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 3>());
 
   m.def("create_default_ceres_bundle_adjuster",
         [](const BundleAdjustmentOptions& options,
@@ -384,7 +386,8 @@ void BindBundleAdjuster(py::module& m) {
         },
         "options"_a,
         "config"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 3>());
 
   m.def("create_pose_prior_bundle_adjuster",
         CreatePosePriorBundleAdjuster,
@@ -392,7 +395,8 @@ void BindBundleAdjuster(py::module& m) {
         "prior_options"_a,
         "config"_a,
         "pose_priors"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 5>());
 
   m.def("create_pose_prior_ceres_bundle_adjuster",
         CreatePosePriorCeresBundleAdjuster,
@@ -400,7 +404,8 @@ void BindBundleAdjuster(py::module& m) {
         "prior_options"_a,
         "config"_a,
         "pose_priors"_a,
-        "reconstruction"_a);
+        "reconstruction"_a,
+        py::keep_alive<0, 5>());
 
   m.def("create_depth_bundle_adjuster",
         [](ceres::Problem* problem,
@@ -445,5 +450,7 @@ void BindBundleAdjuster(py::module& m) {
         "reconstruction"_a,
         "logloss"_a = false,
         "fix_shift"_a = false,
-        "fix_scale"_a = false);
+        "fix_scale"_a = false,
+        py::keep_alive<1, 8>(),
+        py::keep_alive<1, 9>());
 }
