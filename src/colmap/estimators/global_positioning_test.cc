@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <ceres/loss_function.h>
 #include <gtest/gtest.h>
@@ -331,6 +332,12 @@ class TestableGlobalPositioner : public GlobalPositioner {
       return std::abs(scale - 1.0) > eps;
     });
   }
+  void ValidateDebugInitializationOptionsForTest() const {
+    ValidateDebugInitializationOptions();
+  }
+  void ValidateDebugInitializationConsumedForTest() const {
+    ValidateDebugInitializationConsumed();
+  }
   void SetupOnlyForTest(const PoseGraph& pose_graph,
                         Reconstruction& reconstruction) {
     SetupProblem(pose_graph, reconstruction);
@@ -377,6 +384,26 @@ GpTestData BuildGpTestData() {
         Rigid3d(frame.RigFromWorld().rotation(), Eigen::Vector3d::Zero()));
   }
   return data;
+}
+
+std::string GpDebugObservationKey(point3D_t point3D_id,
+                                  const TrackElement& observation,
+                                  bool is_lc_observation) {
+  return std::to_string(point3D_id) + ":" +
+         std::to_string(observation.image_id) + ":" +
+         std::to_string(observation.point2D_idx) + ":" +
+         (is_lc_observation ? "1" : "0");
+}
+
+point3D_t FirstEligiblePoint3DId(const Reconstruction& reconstruction,
+                                 int min_num_view_per_track) {
+  for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+    if (static_cast<int>(point3D.track.Length()) >= min_num_view_per_track) {
+      return point3D_id;
+    }
+  }
+  THROW_CHECK(false) << "No eligible point3D in test reconstruction.";
+  return kInvalidPoint3DId;
 }
 
 GlobalPositionerOptions BaselineGpOptions() {
@@ -559,6 +586,90 @@ TEST(GlobalPositioning, LegacyWarmStartScaleInitializationCanBeReproduced) {
   EXPECT_EQ(positioner.NumNonUnitScales(), 0u)
       << "Legacy warm-started GP behavior should leave BATA scales at 1.0 "
          "when generate_scales=false.";
+}
+
+TEST(GlobalPositioning, DebugGp1InitialStateOverrideIsApplied) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.debug_initialization_stage = "gp1";
+
+  const point3D_t point3D_id = FirstEligiblePoint3DId(
+      data.reconstruction, options.min_num_view_per_track);
+  const TrackElement observation =
+      data.reconstruction.Point3D(point3D_id).track.Elements().front();
+  const frame_t frame_id =
+      data.reconstruction.Image(observation.image_id).FrameId();
+  const std::string scale_key =
+      GpDebugObservationKey(point3D_id, observation, false);
+
+  const Eigen::Vector3d expected_center(10.0, 20.0, 30.0);
+  const Eigen::Vector3d expected_point(-1.0, -2.0, 5.0);
+  const double expected_scale = 7.5;
+  options.debug_initial_frame_centers[frame_id] = expected_center;
+  options.debug_initial_point3D_xyz[point3D_id] = expected_point;
+  options.debug_initial_bata_scales[scale_key] = expected_scale;
+
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(data.pose_graph, data.reconstruction);
+
+  ASSERT_NE(positioner.GetInitialFrameCenters().find(frame_id),
+            positioner.GetInitialFrameCenters().end());
+  ASSERT_NE(positioner.GetInitialPoint3DXYZ().find(point3D_id),
+            positioner.GetInitialPoint3DXYZ().end());
+  ASSERT_NE(positioner.GetInitialBataScales().find(scale_key),
+            positioner.GetInitialBataScales().end());
+  EXPECT_NEAR(
+      (positioner.GetInitialFrameCenters().at(frame_id) - expected_center)
+          .norm(),
+      0.0,
+      1e-12);
+  EXPECT_NEAR(
+      (positioner.GetInitialPoint3DXYZ().at(point3D_id) - expected_point)
+          .norm(),
+      0.0,
+      1e-12);
+  EXPECT_NEAR(
+      positioner.GetInitialBataScales().at(scale_key), expected_scale, 1e-12);
+}
+
+TEST(GlobalPositioning, DebugInitialStateAllowsImplicitGp1Stage) {
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.debug_initial_frame_centers[0] = Eigen::Vector3d::Zero();
+
+  TestableGlobalPositioner positioner(options);
+  EXPECT_NO_THROW(positioner.ValidateDebugInitializationOptionsForTest());
+}
+
+TEST(GlobalPositioning, DebugInitialStateRejectsGp2Stage) {
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.debug_initialization_stage = "gp2";
+
+  TestableGlobalPositioner positioner(options);
+  EXPECT_ANY_THROW(positioner.ValidateDebugInitializationOptionsForTest());
+}
+
+TEST(GlobalPositioning, DebugInitialStateRejectsWarmStartPath) {
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_init = true;
+  options.debug_initial_frame_centers[0] = Eigen::Vector3d::Zero();
+
+  TestableGlobalPositioner positioner(options);
+  EXPECT_ANY_THROW(positioner.ValidateDebugInitializationOptionsForTest());
+}
+
+TEST(GlobalPositioning, DebugInitialStateRejectsUnusedEntries) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.debug_initial_frame_centers[std::numeric_limits<frame_t>::max()] =
+      Eigen::Vector3d::Zero();
+
+  TestableGlobalPositioner positioner(options);
+  positioner.SetupOnlyForTest(data.pose_graph, data.reconstruction);
+  EXPECT_ANY_THROW(positioner.ValidateDebugInitializationConsumedForTest());
 }
 
 TEST(GlobalPositioning, Gate_UseLcObservations_Off_IgnoresLcElements) {

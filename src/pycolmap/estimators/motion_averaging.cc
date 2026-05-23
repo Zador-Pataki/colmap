@@ -162,6 +162,18 @@ void BindGlobalPositioner(py::module& m) {
                      &GlobalPositionerOptions::filter_depth_outliers)
       .def_readwrite("initial_dmap_scales",
                      &GlobalPositionerOptions::initial_dmap_scales)
+      .def_readwrite(
+          "debug_initialization_stage",
+          &GlobalPositionerOptions::debug_initialization_stage,
+          "Debug replay stage for caller-supplied GP initialization maps. "
+          "Use '' or 'gp1' for GP1 replay; 'gp2' raises because GP2 must "
+          "start from GP1 output.")
+      .def_readwrite("debug_initial_frame_centers",
+                     &GlobalPositionerOptions::debug_initial_frame_centers)
+      .def_readwrite("debug_initial_point3D_xyz",
+                     &GlobalPositionerOptions::debug_initial_point3D_xyz)
+      .def_readwrite("debug_initial_bata_scales",
+                     &GlobalPositionerOptions::debug_initial_bata_scales)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -204,6 +216,59 @@ void BindGlobalPositioner(py::module& m) {
         output["dmap_scale_map"] = positioner.GetDmapScales();
         output["dmap_scale_map_nested"] = positioner.GetDmapScales();
         output["dmap_scales"] = positioner.GetDmapScales();
+        output["debug_initial_frame_centers"] =
+            positioner.GetInitialFrameCenters();
+        output["debug_initial_point3D_xyz"] = positioner.GetInitialPoint3DXYZ();
+        output["debug_initial_bata_scales"] = positioner.GetInitialBataScales();
+        output["debug_final_frame_centers"] = positioner.GetFinalFrameCenters();
+        const auto final_point3D_xyz =
+            positioner.GetFinalPoint3DXYZ(reconstruction);
+        output["debug_final_point3D_xyz"] = final_point3D_xyz;
+        const auto final_bata_scales = positioner.GetFinalBataScales();
+        output["debug_final_bata_scales"] = final_bata_scales;
+
+        const GlobalPositionerDiagnostics& diagnostics =
+            positioner.GetDiagnostics();
+        py::dict diagnostics_dict;
+        diagnostics_dict["num_bata_residuals"] = diagnostics.num_bata_residuals;
+        diagnostics_dict["num_metric_depth_residuals"] =
+            diagnostics.num_metric_depth_residuals;
+        diagnostics_dict["num_scale_prior_residuals"] =
+            diagnostics.num_scale_prior_residuals;
+        diagnostics_dict["num_regular_observations_used"] =
+            diagnostics.num_regular_observations_used;
+        diagnostics_dict["num_lc_observations_used"] =
+            diagnostics.num_lc_observations_used;
+        diagnostics_dict["num_bata_scales"] = diagnostics.num_bata_scales;
+        diagnostics_dict["num_dmap_scales"] = diagnostics.num_dmap_scales;
+        diagnostics_dict["num_frame_centers"] = diagnostics.num_frame_centers;
+        diagnostics_dict["num_point3D_xyz"] = diagnostics.num_point3D_xyz;
+        diagnostics_dict["num_residual_blocks"] =
+            diagnostics.num_residual_blocks;
+        diagnostics_dict["num_parameter_blocks"] =
+            diagnostics.num_parameter_blocks;
+        diagnostics_dict["num_parameters"] = diagnostics.num_parameters;
+        diagnostics_dict["num_iterations"] = diagnostics.num_iterations;
+        diagnostics_dict["initial_cost"] = diagnostics.initial_cost;
+        diagnostics_dict["final_cost"] = diagnostics.final_cost;
+        diagnostics_dict["termination_type"] = diagnostics.termination_type;
+        output["debug_diagnostics"] = diagnostics_dict;
+
+        py::dict state_summary;
+        state_summary["debug_initialization_stage"] =
+            options.debug_initialization_stage;
+        state_summary["num_initial_frame_centers"] =
+            positioner.GetInitialFrameCenters().size();
+        state_summary["num_initial_point3D_xyz"] =
+            positioner.GetInitialPoint3DXYZ().size();
+        state_summary["num_initial_bata_scales"] =
+            positioner.GetInitialBataScales().size();
+        state_summary["num_final_frame_centers"] =
+            positioner.GetFinalFrameCenters().size();
+        state_summary["num_final_point3D_xyz"] = final_point3D_xyz.size();
+        state_summary["num_final_bata_scales"] = final_bata_scales.size();
+        state_summary["num_dmap_scales"] = positioner.GetDmapScales().size();
+        output["debug_state_summary"] = state_summary;
         return output;
       },
       "options"_a,

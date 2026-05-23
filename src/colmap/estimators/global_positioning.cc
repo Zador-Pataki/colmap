@@ -8,10 +8,21 @@
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <unordered_map>
+#include <vector>
 
 namespace colmap {
 namespace {
+
+std::string GpObservationKey(point3D_t point3D_id,
+                             image_t image_id,
+                             point2D_t point2D_idx,
+                             bool is_lc_observation) {
+  return std::to_string(point3D_id) + ":" + std::to_string(image_id) + ":" +
+         std::to_string(point2D_idx) + ":" + (is_lc_observation ? "1" : "0");
+}
 
 Eigen::Vector3d RandVector3d(double low, double high) {
   return Eigen::Vector3d(RandomUniformReal(low, high),
@@ -88,6 +99,12 @@ bool IsLossConfigOverride(const LossConfig& loss_config) {
          loss_config.scale != 1.0 || loss_config.weight != 1.0;
 }
 
+bool HasDebugInitialization(const GlobalPositionerOptions& options) {
+  return !options.debug_initial_frame_centers.empty() ||
+         !options.debug_initial_point3D_xyz.empty() ||
+         !options.debug_initial_bata_scales.empty();
+}
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -99,6 +116,8 @@ GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
 
 bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
                              Reconstruction& reconstruction) {
+  ValidateDebugInitializationOptions();
+
   if (reconstruction.NumImages() == 0) {
     LOG(ERROR) << "Number of images = " << reconstruction.NumImages();
     return false;
@@ -141,6 +160,7 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
 
   // Add the point to camera constraints to the problem.
   AddPointToCameraConstraints(reconstruction);
+  ValidateDebugInitializationConsumed();
 
   if (options_.use_parameter_block_ordering) {
     AddCamerasAndPointsToParameterGroups(reconstruction);
@@ -157,6 +177,17 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
       GetEffectiveNumThreads(options_.solver_options.num_threads);
   options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
   ceres::Solve(options_.solver_options, problem_.get(), &summary);
+  diagnostics_.num_bata_scales = static_cast<int>(scales_.size());
+  diagnostics_.num_dmap_scales = static_cast<int>(dmap_scales_.size());
+  diagnostics_.num_frame_centers = static_cast<int>(frame_centers_.size());
+  diagnostics_.num_point3D_xyz = static_cast<int>(initial_point3D_xyz_.size());
+  diagnostics_.num_residual_blocks = summary.num_residual_blocks;
+  diagnostics_.num_parameter_blocks = summary.num_parameter_blocks;
+  diagnostics_.num_parameters = summary.num_parameters;
+  diagnostics_.num_iterations = static_cast<int>(summary.iterations.size());
+  diagnostics_.initial_cost = summary.initial_cost;
+  diagnostics_.final_cost = summary.final_cost;
+  diagnostics_.termination_type = static_cast<int>(summary.termination_type);
 
   if (VLOG_IS_ON(2)) {
     LOG(INFO) << summary.FullReport();
@@ -174,9 +205,14 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
   problem_ = std::make_unique<ceres::Problem>(problem_options);
   loss_function_ = options_.CreateLossFunction();
+  diagnostics_ = GlobalPositionerDiagnostics();
 
   // Clear temporary storage from previous runs.
   frame_centers_.clear();
+  initial_frame_centers_.clear();
+  initial_point3D_xyz_.clear();
+  initial_bata_scales_.clear();
+  bata_scale_indices_.clear();
   cams_in_rig_.clear();
   per_image_scale_losses_.clear();
 
@@ -237,6 +273,11 @@ void GlobalPositioner::InitializeRandomPositions(
     } else {
       frame_centers_[frame_id] = frame.RigFromWorld().TgtOriginInSrc();
     }
+    const auto debug_it = options_.debug_initial_frame_centers.find(frame_id);
+    if (debug_it != options_.debug_initial_frame_centers.end()) {
+      frame_centers_[frame_id] = debug_it->second;
+    }
+    initial_frame_centers_[frame_id] = frame_centers_[frame_id];
   }
 
   VLOG(2) << "Constrained positions: " << constrained_positions.size();
@@ -344,6 +385,7 @@ void GlobalPositioner::AddPointToCameraConstraints(
 
       problem_->AddResidualBlock(
           scale_prior_cost, obs_count_scaled_loss, &scale);
+      ++diagnostics_.num_scale_prior_residuals;
     }
   }
   VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
@@ -365,6 +407,11 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
   if (random_initialization) {
     point3D.xyz = options_.random_init_scale * RandVector3d(-1, 1);
   }
+  const auto debug_it = options_.debug_initial_point3D_xyz.find(point3D_id);
+  if (debug_it != options_.debug_initial_point3D_xyz.end()) {
+    point3D.xyz = debug_it->second;
+  }
+  initial_point3D_xyz_[point3D_id] = point3D.xyz;
 
   // Walk regular elements then LC elements as separate passes — they
   // share the residual layout but use different loss function groups.
@@ -419,6 +466,17 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                      cam_from_point3D_dir.dot(cam_from_point3D_translation) /
                          cam_from_point3D_translation.squaredNorm());
   }
+  const std::string scale_key = GpObservationKey(point3D_id,
+                                                 observation.image_id,
+                                                 observation.point2D_idx,
+                                                 is_lc_observation);
+  const auto debug_scale_it =
+      options_.debug_initial_bata_scales.find(scale_key);
+  if (debug_scale_it != options_.debug_initial_bata_scales.end()) {
+    scale = debug_scale_it->second;
+  }
+  initial_bata_scales_[scale_key] = scale;
+  bata_scale_indices_[scale_key] = scales_.size() - 1;
 
   // For calibrated and uncalibrated cameras, use different loss
   // functions
@@ -483,6 +541,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                frame_centers_[image.FrameId()].data(),
                                point3D.xyz.data(),
                                &scale);
+    ++diagnostics_.num_bata_residuals;
+    if (is_lc_observation) {
+      ++diagnostics_.num_lc_observations_used;
+    } else {
+      ++diagnostics_.num_regular_observations_used;
+    }
 
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint) {
@@ -510,6 +574,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                  point3D.xyz.data(),
                                  frame_centers_[image.FrameId()].data(),
                                  &scale);
+      ++diagnostics_.num_bata_residuals;
+      if (is_lc_observation) {
+        ++diagnostics_.num_lc_observations_used;
+      } else {
+        ++diagnostics_.num_regular_observations_used;
+      }
     } else {
       // If the cam_from_rig contains nan values, it needs to be re-estimated.
       // Initialize cams_in_rig_ if not already done.
@@ -530,6 +600,12 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                  frame_centers_[image.FrameId()].data(),
                                  cams_in_rig_[sensor_id].data(),
                                  &scale);
+      ++diagnostics_.num_bata_residuals;
+      if (is_lc_observation) {
+        ++diagnostics_.num_lc_observations_used;
+      } else {
+        ++diagnostics_.num_regular_observations_used;
+      }
     }
   }
 
@@ -632,6 +708,7 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              frame_centers_[image.FrameId()].data(),
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
+  ++diagnostics_.num_metric_depth_residuals;
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -935,6 +1012,79 @@ bool RunGlobalPositioning(const GlobalPositionerOptions& options,
                           Reconstruction& reconstruction) {
   GlobalPositioner positioner(options);
   return positioner.Solve(pose_graph, reconstruction);
+}
+
+void GlobalPositioner::ValidateDebugInitializationOptions() const {
+  if (options_.debug_initialization_stage == "gp2") {
+    THROW_CHECK(false)
+        << "GP2 replay must not load a separate random initialization. "
+           "Run GP2 from GP1 output plus deterministic GP2 inputs.";
+  }
+  if (!options_.debug_initialization_stage.empty() &&
+      options_.debug_initialization_stage != "gp1") {
+    THROW_CHECK(false)
+        << "Debug GP initialization stage must be empty, 'gp1', or rejected "
+           "'gp2'; got '"
+        << options_.debug_initialization_stage << "'.";
+  }
+  if (HasDebugInitialization(options_) && options_.use_init) {
+    THROW_CHECK(false)
+        << "Debug GP initialization maps are only for GP1 random-init replay. "
+           "Refusing to combine them with use_init=true, which is the normal "
+           "GP2 warm-start path.";
+  }
+}
+
+void GlobalPositioner::ValidateDebugInitializationConsumed() const {
+  for (const auto& [frame_id, _] : options_.debug_initial_frame_centers) {
+    if (initial_frame_centers_.find(frame_id) == initial_frame_centers_.end()) {
+      THROW_CHECK(false)
+          << "Debug GP frame-center init contains unused frame_id=" << frame_id
+          << ". Input graph/reconstruction does not match the "
+          << "recorded GP1 initialization state.";
+    }
+  }
+  for (const auto& [point3D_id, _] : options_.debug_initial_point3D_xyz) {
+    if (initial_point3D_xyz_.find(point3D_id) == initial_point3D_xyz_.end()) {
+      THROW_CHECK(false) << "Debug GP point3D init contains unused point3D_id="
+                         << point3D_id
+                         << ". Input graph/reconstruction does not match the "
+                         << "recorded GP1 initialization state.";
+    }
+  }
+  for (const auto& [scale_key, _] : options_.debug_initial_bata_scales) {
+    if (initial_bata_scales_.find(scale_key) == initial_bata_scales_.end()) {
+      THROW_CHECK(false)
+          << "Debug GP BATA-scale init contains unused observation key="
+          << scale_key << ". Input graph/reconstruction does not match the "
+          << "recorded GP1 initialization state.";
+    }
+  }
+}
+
+std::unordered_map<point3D_t, Eigen::Vector3d>
+GlobalPositioner::GetFinalPoint3DXYZ(
+    const Reconstruction& reconstruction) const {
+  std::unordered_map<point3D_t, Eigen::Vector3d> out;
+  out.reserve(initial_point3D_xyz_.size());
+  for (const auto& [point3D_id, _] : initial_point3D_xyz_) {
+    if (reconstruction.ExistsPoint3D(point3D_id)) {
+      out.emplace(point3D_id, reconstruction.Point3D(point3D_id).xyz);
+    }
+  }
+  return out;
+}
+
+std::unordered_map<std::string, double> GlobalPositioner::GetFinalBataScales()
+    const {
+  std::unordered_map<std::string, double> out;
+  out.reserve(bata_scale_indices_.size());
+  for (const auto& [key, index] : bata_scale_indices_) {
+    if (index < scales_.size()) {
+      out.emplace(key, scales_[index]);
+    }
+  }
+  return out;
 }
 
 }  // namespace colmap
