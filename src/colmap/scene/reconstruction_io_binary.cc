@@ -39,7 +39,10 @@
 #include "colmap/util/file.h"
 #include "colmap/util/types.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
+#include <vector>
 
 namespace colmap {
 
@@ -410,7 +413,11 @@ void WriteImagesBinary(const Reconstruction& reconstruction,
 
   WriteBinaryLittleEndian<uint64_t>(&stream, reconstruction.NumRegImages());
 
-  for (const image_t image_id : reconstruction.RegImageIds()) {
+  std::vector<image_t> image_ids = reconstruction.RegImageIds();
+  if (std::getenv("COLMAP_DETERMINISTIC_WRITE_IMAGES_BINARY") != nullptr) {
+    std::sort(image_ids.begin(), image_ids.end());
+  }
+  for (const image_t image_id : image_ids) {
     const Image& image = reconstruction.Image(image_id);
 
     WriteBinaryLittleEndian<image_t>(&stream, image_id);

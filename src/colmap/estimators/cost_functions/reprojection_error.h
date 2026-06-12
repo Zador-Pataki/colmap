@@ -227,6 +227,86 @@ class ReprojErrorCostFunctor
   const Eigen::Vector2d point2D_;
 };
 
+// Legacy compatibility variant with quaternion and translation in separate
+// parameter blocks. This matches pycolmap3/GLOMAP's Ceres problem layout while
+// still writing back into the same underlying Rigid3d storage.
+template <typename CameraModel>
+class SplitPoseReprojErrorCostFunctor
+    : public AutoDiffCostFunctor<SplitPoseReprojErrorCostFunctor<CameraModel>,
+                                 2,
+                                 4,
+                                 3,
+                                 3,
+                                 CameraModel::num_params> {
+ public:
+  explicit SplitPoseReprojErrorCostFunctor(const Eigen::Vector2d& point2D)
+      : observed_x_(point2D(0)), observed_y_(point2D(1)) {}
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_q,
+                  const T* const cam_from_world_t,
+                  const T* const point3D_in_world,
+                  const T* const camera_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 3, 1> point3D_in_cam =
+        EigenQuaternionMap<T>(cam_from_world_q) *
+            EigenVector3Map<T>(point3D_in_world) +
+        EigenVector3Map<T>(cam_from_world_t);
+    Eigen::Map<Eigen::Matrix<T, 2, 1>> residuals_vec(residuals);
+    if (CameraModel::ImgFromCam(camera_params,
+                                point3D_in_cam[0],
+                                point3D_in_cam[1],
+                                point3D_in_cam[2],
+                                &residuals[0],
+                                &residuals[1])) {
+      residuals[0] -= T(observed_x_);
+      residuals[1] -= T(observed_y_);
+    } else {
+      residuals_vec.setZero();
+    }
+    return true;
+  }
+
+ private:
+  const double observed_x_;
+  const double observed_y_;
+};
+
+// Legacy compatibility variant for a fixed camera pose. The fixed pose is
+// stored as separate quaternion/translation values and evaluated through the
+// same split-pose reprojection functor as pycolmap3/GLOMAP.
+template <typename CameraModel>
+class SplitPoseReprojErrorConstantPoseCostFunctor
+    : public AutoDiffCostFunctor<
+          SplitPoseReprojErrorConstantPoseCostFunctor<CameraModel>,
+          2,
+          3,
+          CameraModel::num_params> {
+ public:
+  SplitPoseReprojErrorConstantPoseCostFunctor(const Eigen::Vector2d& point2D,
+                                              const Rigid3d& cam_from_world)
+      : cam_from_world_(cam_from_world), reproj_cost_(point2D) {}
+
+  template <typename T>
+  bool operator()(const T* const point3D_in_world,
+                  const T* const camera_params,
+                  T* residuals) const {
+    const Eigen::Quaternion<T> cam_from_world_rotation =
+        cam_from_world_.rotation().cast<T>();
+    const Eigen::Matrix<T, 3, 1> cam_from_world_translation =
+        cam_from_world_.translation().cast<T>();
+    return reproj_cost_(cam_from_world_rotation.coeffs().data(),
+                        cam_from_world_translation.data(),
+                        point3D_in_world,
+                        camera_params,
+                        residuals);
+  }
+
+ private:
+  const Rigid3d cam_from_world_;
+  const SplitPoseReprojErrorCostFunctor<CameraModel> reproj_cost_;
+};
+
 // Bundle adjustment cost function for variable
 // camera calibration and point parameters, and fixed camera pose.
 

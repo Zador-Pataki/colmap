@@ -61,6 +61,34 @@ struct ScaledDepthErrorCostFunctor
   const double depth_;
 };
 
+// Same residual as ScaledDepthErrorCostFunctor, but with pose split into
+// separate quaternion and translation parameter blocks for legacy parity.
+struct SplitPoseScaledDepthErrorCostFunctor
+    : public AutoDiffCostFunctor<SplitPoseScaledDepthErrorCostFunctor,
+                                 1,
+                                 4,
+                                 3,
+                                 3,
+                                 2> {
+  explicit SplitPoseScaledDepthErrorCostFunctor(double depth) : depth_(depth) {}
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_q,
+                  const T* const cam_from_world_t,
+                  const T* const point3D,
+                  const T* const shift_scale,
+                  T* residuals) const {
+    *residuals = (EigenQuaternionMap<T>(cam_from_world_q) *
+                  EigenVector3Map<T>(point3D))[2] +
+                 cam_from_world_t[2] - shift_scale[0] -
+                 T(depth_) * exp(shift_scale[1]);
+    return true;
+  }
+
+ private:
+  const double depth_;
+};
+
 // Constant-pose variant: bakes in a fixed camera pose.
 // Params: point3D[3], shift_scale[2]
 struct ScaledDepthErrorConstantPoseCostFunctor
@@ -104,6 +132,39 @@ struct LogScaledDepthErrorCostFunctor
     T d_pred = (EigenQuaternionMap<T>(cam_from_world) *
                 EigenVector3Map<T>(point3D))[2] +
                cam_from_world[6];
+    if (d_pred <= T(0)) {
+      *residuals = T(0);
+      return true;
+    }
+    *residuals =
+        ceres::log(d_pred) - (ceres::log(T(depth_)) + shift_scale[1]);
+    return true;
+  }
+
+ private:
+  const double depth_;
+};
+
+struct SplitPoseLogScaledDepthErrorCostFunctor
+    : public AutoDiffCostFunctor<SplitPoseLogScaledDepthErrorCostFunctor,
+                                 1,
+                                 4,
+                                 3,
+                                 3,
+                                 2> {
+  explicit SplitPoseLogScaledDepthErrorCostFunctor(double depth)
+      : depth_(depth) {
+  }
+
+  template <typename T>
+  bool operator()(const T* const cam_from_world_q,
+                  const T* const cam_from_world_t,
+                  const T* const point3D,
+                  const T* const shift_scale,
+                  T* residuals) const {
+    T d_pred = (EigenQuaternionMap<T>(cam_from_world_q) *
+                EigenVector3Map<T>(point3D))[2] +
+               cam_from_world_t[2];
     if (d_pred <= T(0)) {
       *residuals = T(0);
       return true;

@@ -147,6 +147,7 @@ void DepthPriorBundleAdjuster(
     Reconstruction& reconstruction,
     bool logloss = false,
     bool fix_shift = false,
-    bool fix_scale = false);
+    bool fix_scale = false,
+    bool legacy_split_image_pose_blocks = false);
 
 }  // namespace colmap
