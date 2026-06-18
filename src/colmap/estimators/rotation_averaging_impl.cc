@@ -29,20 +29,37 @@ bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair) {
 namespace {
 
 template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrderPasses(std::vector<IdT> ids,
+                                              int num_passes) {
+  num_passes = std::max(1, num_passes);
+  for (int pass = 0; pass < num_passes; ++pass) {
+    std::unordered_map<IdT, char> legacy_map;
+    legacy_map.reserve(ids.size());
+    for (const IdT id : ids) {
+      legacy_map.emplace(id, 0);
+    }
+
+    std::vector<IdT> ordered_ids;
+    ordered_ids.reserve(ids.size());
+    for (const auto& [id, _] : legacy_map) {
+      ordered_ids.push_back(id);
+    }
+    ids = std::move(ordered_ids);
+  }
+  return ids;
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapSortedMapOrderPasses(std::vector<IdT> ids,
+                                                    int num_passes) {
+  std::sort(ids.begin(), ids.end());
+  return LegacyPyglomapMapOrderPasses(std::move(ids), num_passes);
+}
+
+template <typename IdT>
 std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
   std::sort(ids.begin(), ids.end());
-  std::unordered_map<IdT, char> legacy_map;
-  legacy_map.reserve(ids.size());
-  for (const IdT id : ids) {
-    legacy_map.emplace(id, 0);
-  }
-
-  std::vector<IdT> ordered_ids;
-  ordered_ids.reserve(ids.size());
-  for (const auto& [id, _] : legacy_map) {
-    ordered_ids.push_back(id);
-  }
-  return ordered_ids;
+  return LegacyPyglomapMapOrderPasses(std::move(ids), 1);
 }
 
 std::vector<image_pair_t> LegacyOrderedValidPairIds(
@@ -164,8 +181,9 @@ size_t RotationAveragingProblem::AllocateParameters(
       ordered_active_image_ids.push_back(image_id);
     }
   }
-  ordered_active_image_ids =
-      LegacyPyglomapMapOrder(std::move(ordered_active_image_ids));
+  ordered_active_image_ids = LegacyPyglomapSortedMapOrderPasses(
+      std::move(ordered_active_image_ids),
+      options_.legacy_image_map_order_passes);
 
   std::vector<frame_t> ordered_active_frame_ids;
   ordered_active_frame_ids.reserve(active_frame_ids_.size());

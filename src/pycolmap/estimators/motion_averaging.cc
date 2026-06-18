@@ -288,6 +288,10 @@ void BindRotationEstimator(py::module& m) {
           .def_readwrite("skip_initialization",
                          &RotationEstimatorOptions::skip_initialization,
                          "Skip maximum spanning tree initialization.")
+          .def_readwrite(
+              "legacy_image_map_order_passes",
+              &RotationEstimatorOptions::legacy_image_map_order_passes,
+              "Number of legacy pyglomap image-map ordering passes to emulate.")
           .def_readwrite("use_gravity",
                          &RotationEstimatorOptions::use_gravity,
                          "Use gravity priors for rotation averaging.")

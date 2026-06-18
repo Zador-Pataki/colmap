@@ -43,23 +43,40 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
 }
 
 template <typename IdT>
-std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
-  // pyglomap's Python bindings materialized Python dicts as std::unordered_map:
-  // reserve(final_size), insert sorted ids, then iterate buckets. Mirror that
-  // order for parity where legacy code consumed unordered_map iteration.
-  std::sort(ids.begin(), ids.end());
-  std::unordered_map<IdT, char> legacy_map;
-  legacy_map.reserve(ids.size());
-  for (const IdT id : ids) {
-    legacy_map.emplace(id, 0);
-  }
+std::vector<IdT> LegacyPyglomapMapOrderPasses(std::vector<IdT> ids,
+                                              int num_passes) {
+  // pyglomap's Python bindings materialized Python dicts as std::unordered_map
+  // and returned unordered maps back to Python. Calling pyglomap twice therefore
+  // applies this bucket-order transform twice to image maps.
+  num_passes = std::max(1, num_passes);
+  for (int pass = 0; pass < num_passes; ++pass) {
+    std::unordered_map<IdT, char> legacy_map;
+    legacy_map.reserve(ids.size());
+    for (const IdT id : ids) {
+      legacy_map.emplace(id, 0);
+    }
 
-  std::vector<IdT> ordered_ids;
-  ordered_ids.reserve(ids.size());
-  for (const auto& [id, _] : legacy_map) {
-    ordered_ids.push_back(id);
+    std::vector<IdT> ordered_ids;
+    ordered_ids.reserve(ids.size());
+    for (const auto& [id, _] : legacy_map) {
+      ordered_ids.push_back(id);
+    }
+    ids = std::move(ordered_ids);
   }
-  return ordered_ids;
+  return ids;
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapSortedMapOrderPasses(std::vector<IdT> ids,
+                                                    int num_passes) {
+  std::sort(ids.begin(), ids.end());
+  return LegacyPyglomapMapOrderPasses(std::move(ids), num_passes);
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
+  std::sort(ids.begin(), ids.end());
+  return LegacyPyglomapMapOrderPasses(std::move(ids), 1);
 }
 
 }  // namespace
@@ -70,6 +87,21 @@ image_t ComputeMaximumPoseGraphSpanningTree(
     std::unordered_map<image_t, image_t>& parents,
     bool prioritize_tracking,
     const CorrespondenceGraph* correspondence_graph) {
+  return ComputeMaximumPoseGraphSpanningTree(pose_graph,
+                                             image_ids,
+                                             parents,
+                                             prioritize_tracking,
+                                             1,
+                                             correspondence_graph);
+}
+
+image_t ComputeMaximumPoseGraphSpanningTree(
+    const PoseGraph& pose_graph,
+    const std::unordered_set<image_t>& image_ids,
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    int image_map_order_passes,
+    const CorrespondenceGraph* correspondence_graph) {
   // Build mapping between image_id and contiguous indices.
   std::unordered_map<image_t, int> image_id_to_idx;
   std::vector<image_t> idx_to_image_id;
@@ -77,7 +109,8 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   idx_to_image_id.reserve(image_ids.size());
 
   std::vector<image_t> ordered_image_ids(image_ids.begin(), image_ids.end());
-  ordered_image_ids = LegacyPyglomapMapOrder(std::move(ordered_image_ids));
+  ordered_image_ids = LegacyPyglomapSortedMapOrderPasses(
+      std::move(ordered_image_ids), image_map_order_passes);
   for (const image_t image_id : ordered_image_ids) {
     image_id_to_idx[image_id] = static_cast<int>(idx_to_image_id.size());
     idx_to_image_id.push_back(image_id);
@@ -509,6 +542,7 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
       active_image_ids,
       parents,
       /*prioritize_tracking=*/options_.use_video_constraints,
+      options_.legacy_image_map_order_passes,
       correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
@@ -528,6 +562,10 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
   indexes.push(root);
 
   std::unordered_map<image_t, Rigid3d> cams_from_world;
+  const Image& root_image = reconstruction.Image(root);
+  if (root_image.HasPose()) {
+    cams_from_world[root] = root_image.CamFromWorld();
+  }
   while (!indexes.empty()) {
     image_t curr = indexes.front();
     indexes.pop();

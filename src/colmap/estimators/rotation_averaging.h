@@ -53,6 +53,13 @@ struct RotationEstimatorOptions {
   // Flag to skip maximum spanning tree initialization.
   bool skip_initialization = false;
 
+  // Number of legacy pyglomap Python-dict -> std::unordered_map materialization
+  // passes to emulate when ordering image/frame parameters. The base VideosFM
+  // RA path calls pyglomap twice; the second call receives the unordered map
+  // returned by the first call, so image iteration order has been transformed
+  // twice.
+  int legacy_image_map_order_passes = 1;
+
   // Flag to use gravity priors for rotation averaging.
   bool use_gravity = false;
 
@@ -166,6 +173,14 @@ image_t ComputeMaximumPoseGraphSpanningTree(
     const std::unordered_set<image_t>& image_ids,
     std::unordered_map<image_t, image_t>& parents,
     bool prioritize_tracking,
+    const class CorrespondenceGraph* correspondence_graph);
+
+image_t ComputeMaximumPoseGraphSpanningTree(
+    const PoseGraph& pose_graph,
+    const std::unordered_set<image_t>& image_ids,
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    int image_map_order_passes,
     const class CorrespondenceGraph* correspondence_graph);
 
 }  // namespace colmap
