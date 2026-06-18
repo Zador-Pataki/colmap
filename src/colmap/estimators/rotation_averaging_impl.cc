@@ -6,7 +6,13 @@
 #include "colmap/optim/least_absolute_deviations.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 #include <Eigen/CholmodSupport>
 #include <ceres/ceres.h>
@@ -28,21 +34,79 @@ bool IsTrackingPair(const CorrespondenceGraph::ImagePair& image_pair) {
 
 namespace {
 
+std::string FormatDouble(const double value) {
+  std::ostringstream stream;
+  stream << std::setprecision(17) << value;
+  return stream.str();
+}
+
+std::filesystem::path NextRaTracePath(const std::string& label) {
+  const char* trace_dir = std::getenv("VIDEOSFM_NATIVE_RA_TRACE_DIR");
+  if (trace_dir == nullptr || trace_dir[0] == '\0') {
+    return {};
+  }
+  static std::atomic<int> counter{0};
+  std::filesystem::path dir(trace_dir);
+  std::filesystem::create_directories(dir);
+  std::ostringstream filename;
+  filename << "current_" << std::setw(3) << std::setfill('0')
+           << counter.fetch_add(1) << "_" << label << ".json";
+  return dir / filename.str();
+}
+
+void WriteVectorJson(std::ofstream& out, const Eigen::VectorXd& values) {
+  out << "[";
+  for (Eigen::Index i = 0; i < values.size(); ++i) {
+    if (i > 0) out << ",";
+    out << FormatDouble(values[i]);
+  }
+  out << "]";
+}
+
+void WriteFrameParamJson(
+    std::ofstream& out,
+    const std::vector<std::pair<frame_t, int>>& ordered_frame_params) {
+  out << "[";
+  for (size_t i = 0; i < ordered_frame_params.size(); ++i) {
+    if (i > 0) out << ",";
+    out << "{\"frame_id\":" << ordered_frame_params[i].first
+        << ",\"param_idx\":" << ordered_frame_params[i].second << "}";
+  }
+  out << "]";
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrderPasses(std::vector<IdT> ids,
+                                              int num_passes) {
+  num_passes = std::max(1, num_passes);
+  for (int pass = 0; pass < num_passes; ++pass) {
+    std::unordered_map<IdT, char> legacy_map;
+    legacy_map.reserve(ids.size());
+    for (const IdT id : ids) {
+      legacy_map.emplace(id, 0);
+    }
+
+    std::vector<IdT> ordered_ids;
+    ordered_ids.reserve(ids.size());
+    for (const auto& [id, _] : legacy_map) {
+      ordered_ids.push_back(id);
+    }
+    ids = std::move(ordered_ids);
+  }
+  return ids;
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapSortedMapOrderPasses(std::vector<IdT> ids,
+                                                    int num_passes) {
+  std::sort(ids.begin(), ids.end());
+  return LegacyPyglomapMapOrderPasses(std::move(ids), num_passes);
+}
+
 template <typename IdT>
 std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
   std::sort(ids.begin(), ids.end());
-  std::unordered_map<IdT, char> legacy_map;
-  legacy_map.reserve(ids.size());
-  for (const IdT id : ids) {
-    legacy_map.emplace(id, 0);
-  }
-
-  std::vector<IdT> ordered_ids;
-  ordered_ids.reserve(ids.size());
-  for (const auto& [id, _] : legacy_map) {
-    ordered_ids.push_back(id);
-  }
-  return ordered_ids;
+  return LegacyPyglomapMapOrderPasses(std::move(ids), 1);
 }
 
 std::vector<image_pair_t> LegacyOrderedValidPairIds(
@@ -53,6 +117,23 @@ std::vector<image_pair_t> LegacyOrderedValidPairIds(
     pair_ids.push_back(pair_id);
   }
   return LegacyPyglomapMapOrder(std::move(pair_ids));
+}
+
+std::vector<image_pair_t> OrderedValidPairIds(
+    const PoseGraph& pose_graph,
+    const CorrespondenceGraph* correspondence_graph) {
+  if (correspondence_graph != nullptr) {
+    std::vector<image_pair_t> pair_ids;
+    pair_ids.reserve(correspondence_graph->NumImagePairs());
+    for (const auto& [pair_id, _] : correspondence_graph->ImagePairsMap()) {
+      const auto edge_it = pose_graph.Edges().find(pair_id);
+      if (edge_it != pose_graph.Edges().end() && edge_it->second.valid) {
+        pair_ids.push_back(pair_id);
+      }
+    }
+    return pair_ids;
+  }
+  return LegacyOrderedValidPairIds(pose_graph);
 }
 
 // Computes the 1-DOF residual for gravity-aligned rotation constraints.
@@ -164,8 +245,9 @@ size_t RotationAveragingProblem::AllocateParameters(
       ordered_active_image_ids.push_back(image_id);
     }
   }
-  ordered_active_image_ids =
-      LegacyPyglomapMapOrder(std::move(ordered_active_image_ids));
+  ordered_active_image_ids = LegacyPyglomapSortedMapOrderPasses(
+      std::move(ordered_active_image_ids),
+      options_.legacy_image_map_order_passes);
 
   std::vector<frame_t> ordered_active_frame_ids;
   ordered_active_frame_ids.reserve(active_frame_ids_.size());
@@ -295,8 +377,9 @@ size_t RotationAveragingProblem::AllocateParameters(
 void RotationAveragingProblem::BuildPairConstraints(
     const PoseGraph& pose_graph, const Reconstruction& reconstruction) {
   int gravity_aligned_count = 0;
+  ordered_pair_ids_ = OrderedValidPairIds(pose_graph, correspondence_graph_);
 
-  for (const image_pair_t pair_id : LegacyOrderedValidPairIds(pose_graph)) {
+  for (const image_pair_t pair_id : ordered_pair_ids_) {
     const auto& edge = pose_graph.Edges().at(pair_id);
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
 
@@ -418,7 +501,7 @@ void RotationAveragingProblem::BuildConstraintMatrix(
 
   size_t curr_row = 0;
 
-  for (const image_pair_t pair_id : LegacyOrderedValidPairIds(pose_graph)) {
+  for (const image_pair_t pair_id : ordered_pair_ids_) {
     if (pair_constraints_.find(pair_id) == pair_constraints_.end()) continue;
 
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
@@ -670,6 +753,7 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
   const Eigen::Vector3d kUnknownTranslation =
       Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
 
+  const Eigen::VectorXd estimated_rotations_before_apply = estimated_rotations_;
   for (const auto& [frame_id, frame_param_idx] : frame_id_to_param_idx_) {
     const Eigen::Vector3d* frame_gravity =
         GetFrameGravityOrNull(frame_to_pose_prior_, frame_id);
@@ -703,6 +787,39 @@ void RotationAveragingProblem::ApplyResultsToReconstruction(
           std::numeric_limits<double>::quiet_NaN());  // No translation yet.
       reconstruction.Rig(rig_id).SetSensorFromRig(sensor_id, cam_from_rig);
     }
+  }
+
+  const std::filesystem::path trace_path = NextRaTracePath("apply_results");
+  if (!trace_path.empty()) {
+    std::vector<std::pair<frame_t, int>> ordered_frame_params(
+        frame_id_to_param_idx_.begin(), frame_id_to_param_idx_.end());
+    std::sort(ordered_frame_params.begin(),
+              ordered_frame_params.end(),
+              [](const auto& lhs, const auto& rhs) {
+                return lhs.second < rhs.second;
+              });
+
+    std::ofstream out(trace_path);
+    out << "{\n";
+    out << "\"impl\":\"current\",\n";
+    out << "\"fixed_frame_id\":" << fixed_frame_id_ << ",\n";
+    out << "\"frame_params\":";
+    WriteFrameParamJson(out, ordered_frame_params);
+    out << ",\n";
+    out << "\"estimated_rotations\":";
+    WriteVectorJson(out, estimated_rotations_before_apply);
+    out << ",\n";
+    out << "\"frames\":[";
+    for (size_t i = 0; i < ordered_frame_params.size(); ++i) {
+      if (i > 0) out << ",";
+      const frame_t frame_id = ordered_frame_params[i].first;
+      const auto& q = reconstruction.Frame(frame_id).RigFromWorld().rotation();
+      out << "{\"frame_id\":" << frame_id << ",\"quat\":["
+          << FormatDouble(q.w()) << "," << FormatDouble(q.x()) << ","
+          << FormatDouble(q.y()) << "," << FormatDouble(q.z()) << "]}";
+    }
+    out << "]\n";
+    out << "}\n";
   }
 }
 
@@ -945,6 +1062,7 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
             [](const auto& lhs, const auto& rhs) {
               return lhs.second < rhs.second;
             });
+  const Eigen::VectorXd estimated_rotations_before = estimated_rotations;
   for (const auto& [frame_id, param_idx] : ordered_frame_params) {
     double* param = estimated_rotations.data() + param_idx;
     ceres_problem.AddParameterBlock(param, 3);
@@ -954,14 +1072,13 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   }
 
   // Add residual blocks for each pair_constraint.
-  std::vector<image_pair_t> ordered_pair_ids;
-  ordered_pair_ids.reserve(problem.PairConstraints().size());
-  for (const auto& [pair_id, constraint] : problem.PairConstraints()) {
-    ordered_pair_ids.push_back(pair_id);
-  }
-  ordered_pair_ids = LegacyPyglomapMapOrder(std::move(ordered_pair_ids));
-  for (const image_pair_t pair_id : ordered_pair_ids) {
-    const auto& constraint = problem.PairConstraints().at(pair_id);
+  std::vector<std::pair<image_pair_t, bool>> ordered_residuals;
+  for (const image_pair_t pair_id : problem.OrderedPairIds()) {
+    const auto constraint_it = problem.PairConstraints().find(pair_id);
+    if (constraint_it == problem.PairConstraints().end()) {
+      continue;
+    }
+    const auto& constraint = constraint_it->second;
     const auto* full_3dof =
         std::get_if<RotationAveragingProblem::Full3DOF>(&constraint.constraint);
     if (full_3dof == nullptr) {
@@ -982,9 +1099,8 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
       continue;
     }
 
-    Eigen::Vector3d rel_aa;
-    ceres::RotationMatrixToAngleAxis(full_3dof->R_cam2_from_cam1.data(),
-                                     rel_aa.data());
+    const Eigen::Vector3d rel_aa =
+        RotationMatrixToAngleAxis(full_3dof->R_cam2_from_cam1);
 
     bool is_tracking = true;  // Default: Huber (tracking).
     if (cg != nullptr) {
@@ -993,6 +1109,7 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
         is_tracking = IsTrackingPair(cg_pair_it->second);
       }
     }
+    ordered_residuals.emplace_back(pair_id, is_tracking);
     ceres::LossFunction* loss =
         is_tracking
             ? static_cast<ceres::LossFunction*>(
@@ -1012,6 +1129,45 @@ bool RotationAveragingSolver::SolveCeres(RotationAveragingProblem& problem) {
   solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
   ceres::Solver::Summary summary;
   ceres::Solve(solver_options, &ceres_problem, &summary);
+  const std::filesystem::path trace_path = NextRaTracePath("solve_ceres");
+  if (!trace_path.empty()) {
+    std::ofstream out(trace_path);
+    out << "{\n";
+    out << "\"impl\":\"current\",\n";
+    out << "\"fixed_frame_id\":" << fixed_frame_id << ",\n";
+    out << "\"frame_params\":";
+    WriteFrameParamJson(out, ordered_frame_params);
+    out << ",\n";
+    out << "\"ordered_pair_ids\":[";
+    for (size_t i = 0; i < problem.OrderedPairIds().size(); ++i) {
+      if (i > 0) out << ",";
+      out << problem.OrderedPairIds()[i];
+    }
+    out << "],\n";
+    out << "\"ordered_residuals\":[";
+    for (size_t i = 0; i < ordered_residuals.size(); ++i) {
+      if (i > 0) out << ",";
+      out << "{\"pair_id\":" << ordered_residuals[i].first
+          << ",\"is_tracking\":"
+          << (ordered_residuals[i].second ? "true" : "false") << "}";
+    }
+    out << "],\n";
+    out << "\"estimated_rotations_before\":";
+    WriteVectorJson(out, estimated_rotations_before);
+    out << ",\n";
+    out << "\"estimated_rotations_after\":";
+    WriteVectorJson(out, estimated_rotations);
+    out << ",\n";
+    out << "\"ceres\":{\"num_threads\":" << solver_options.num_threads
+        << ",\"usable\":"
+        << (summary.IsSolutionUsable() ? "true" : "false")
+        << ",\"num_successful_steps\":" << summary.num_successful_steps
+        << ",\"num_unsuccessful_steps\":" << summary.num_unsuccessful_steps
+        << ",\"num_iterations\":" << summary.iterations.size()
+        << ",\"initial_cost\":" << FormatDouble(summary.initial_cost)
+        << ",\"final_cost\":" << FormatDouble(summary.final_cost) << "}\n";
+    out << "}\n";
+  }
   if (VLOG_IS_ON(2)) {
     LOG(INFO) << summary.FullReport();
   } else {

@@ -49,6 +49,58 @@ struct BATAPairwiseDirectionCostFunctor {
   const Eigen::Vector3d pos2_from_pos1_dir_;
 };
 
+struct WeightedBATAPairwiseDirectionCostFunctor {
+  explicit WeightedBATAPairwiseDirectionCostFunctor(
+      const Eigen::Vector3d& pos2_from_pos1_dir,
+      const Eigen::Quaterniond& rotation,
+      double sigma_x,
+      double sigma_y,
+      double sigma_z)
+      : pos2_from_pos1_dir_(pos2_from_pos1_dir),
+        rotation_(rotation),
+        inv_sigma_x_(1.0 / sigma_x),
+        inv_sigma_y_(1.0 / sigma_y),
+        inv_sigma_z_(1.0 / sigma_z) {}
+
+  template <typename T>
+  bool operator()(const T* pos1,
+                  const T* pos2,
+                  const T* scale,
+                  T* residuals) const {
+    using Vec3T = Eigen::Matrix<T, 3, 1>;
+    const Vec3T r_world =
+        pos2_from_pos1_dir_.cast<T>() -
+        scale[0] * (Eigen::Map<const Vec3T>(pos2) -
+                    Eigen::Map<const Vec3T>(pos1));
+    const Vec3T r_cam = rotation_.cast<T>() * r_world;
+    residuals[0] = T(inv_sigma_x_) * r_cam[0];
+    residuals[1] = T(inv_sigma_y_) * r_cam[1];
+    residuals[2] = T(inv_sigma_z_) * r_cam[2];
+    return true;
+  }
+
+  static ceres::CostFunction* Create(
+      const Eigen::Vector3d& pos2_from_pos1_dir,
+      const Eigen::Quaterniond& rotation,
+      double sigma_x,
+      double sigma_y,
+      double sigma_z) {
+    return (new ceres::AutoDiffCostFunction<
+            WeightedBATAPairwiseDirectionCostFunctor,
+            3,
+            3,
+            3,
+            1>(new WeightedBATAPairwiseDirectionCostFunctor(
+        pos2_from_pos1_dir, rotation, sigma_x, sigma_y, sigma_z)));
+  }
+
+  const Eigen::Vector3d pos2_from_pos1_dir_;
+  const Eigen::Quaterniond rotation_;
+  const double inv_sigma_x_;
+  const double inv_sigma_y_;
+  const double inv_sigma_z_;
+};
+
 // Computes the error between a translation direction and the direction formed
 // from a camera (c) and 3D point (p) with constant rig extrinsics, such that:
 // t_ij - scale * (p - c + t_rig) is minimized.

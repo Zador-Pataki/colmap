@@ -274,6 +274,12 @@ void BindBundleAdjuster(py::module& m) {
                          "Whether to keep the rotation component of "
                          "rig_from_world constant. Only takes effect when "
                          "refine_rig_from_world is true.")
+          .def_readwrite(
+              "legacy_split_image_pose_blocks",
+              &BAOpts::legacy_split_image_pose_blocks,
+              "Reproducibility-only compatibility mode that exposes trivial "
+              "image poses as separate quaternion and translation parameter "
+              "blocks instead of one 7D frame pose block.")
           .def_readwrite("refine_points3D",
                          &BAOpts::refine_points3D,
                          "Whether to refine 3D points.")
@@ -420,7 +426,8 @@ void BindBundleAdjuster(py::module& m) {
            Reconstruction& reconstruction,
            bool logloss,
            bool fix_shift,
-           bool fix_scale) {
+           bool fix_scale,
+           bool legacy_split_image_pose_blocks) {
           auto buf = shift_scale.request();
           if (buf.ndim != 1 || buf.shape[0] != 2)
             throw std::runtime_error(
@@ -437,7 +444,8 @@ void BindBundleAdjuster(py::module& m) {
                                    reconstruction,
                                    logloss,
                                    fix_shift,
-                                   fix_scale);
+                                   fix_scale,
+                                   legacy_split_image_pose_blocks);
         },
         "problem"_a,
         "image_id"_a,
@@ -451,6 +459,7 @@ void BindBundleAdjuster(py::module& m) {
         "logloss"_a = false,
         "fix_shift"_a = false,
         "fix_scale"_a = false,
+        "legacy_split_image_pose_blocks"_a = false,
         py::keep_alive<1, 8>(),
         py::keep_alive<1, 9>());
 }

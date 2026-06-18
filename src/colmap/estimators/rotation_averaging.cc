@@ -43,23 +43,62 @@ bool AllSensorsFromRigKnown(const std::unordered_map<rig_t, Rig>& rigs) {
 }
 
 template <typename IdT>
-std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
-  // pyglomap's Python bindings materialized Python dicts as std::unordered_map:
-  // reserve(final_size), insert sorted ids, then iterate buckets. Mirror that
-  // order for parity where legacy code consumed unordered_map iteration.
+std::vector<IdT> LegacyPyglomapMapOrderPasses(std::vector<IdT> ids,
+                                              int num_passes) {
+  // pyglomap's Python bindings materialized Python dicts as std::unordered_map
+  // and returned unordered maps back to Python. Calling pyglomap twice therefore
+  // applies this bucket-order transform twice to image maps.
+  num_passes = std::max(1, num_passes);
+  for (int pass = 0; pass < num_passes; ++pass) {
+    std::unordered_map<IdT, char> legacy_map;
+    legacy_map.reserve(ids.size());
+    for (const IdT id : ids) {
+      legacy_map.emplace(id, 0);
+    }
+
+    std::vector<IdT> ordered_ids;
+    ordered_ids.reserve(ids.size());
+    for (const auto& [id, _] : legacy_map) {
+      ordered_ids.push_back(id);
+    }
+    ids = std::move(ordered_ids);
+  }
+  return ids;
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapSortedMapOrderPasses(std::vector<IdT> ids,
+                                                    int num_passes) {
   std::sort(ids.begin(), ids.end());
-  std::unordered_map<IdT, char> legacy_map;
-  legacy_map.reserve(ids.size());
-  for (const IdT id : ids) {
-    legacy_map.emplace(id, 0);
+  return LegacyPyglomapMapOrderPasses(std::move(ids), num_passes);
+}
+
+template <typename IdT>
+std::vector<IdT> LegacyPyglomapMapOrder(std::vector<IdT> ids) {
+  std::sort(ids.begin(), ids.end());
+  return LegacyPyglomapMapOrderPasses(std::move(ids), 1);
+}
+
+std::vector<image_pair_t> OrderedValidPairIds(
+    const PoseGraph& pose_graph,
+    const CorrespondenceGraph* correspondence_graph) {
+  std::vector<image_pair_t> ordered_pair_ids;
+  if (correspondence_graph != nullptr) {
+    ordered_pair_ids.reserve(correspondence_graph->NumImagePairs());
+    for (const auto& [pair_id, _] : correspondence_graph->ImagePairsMap()) {
+      const auto edge_it = pose_graph.Edges().find(pair_id);
+      if (edge_it != pose_graph.Edges().end() && edge_it->second.valid) {
+        ordered_pair_ids.push_back(pair_id);
+      }
+    }
+    return ordered_pair_ids;
   }
 
-  std::vector<IdT> ordered_ids;
-  ordered_ids.reserve(ids.size());
-  for (const auto& [id, _] : legacy_map) {
-    ordered_ids.push_back(id);
+  ordered_pair_ids.reserve(pose_graph.NumEdges());
+  for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
+    ordered_pair_ids.push_back(pair_id);
   }
-  return ordered_ids;
+  return LegacyPyglomapMapOrder(std::move(ordered_pair_ids));
 }
 
 }  // namespace
@@ -70,6 +109,21 @@ image_t ComputeMaximumPoseGraphSpanningTree(
     std::unordered_map<image_t, image_t>& parents,
     bool prioritize_tracking,
     const CorrespondenceGraph* correspondence_graph) {
+  return ComputeMaximumPoseGraphSpanningTree(pose_graph,
+                                             image_ids,
+                                             parents,
+                                             prioritize_tracking,
+                                             1,
+                                             correspondence_graph);
+}
+
+image_t ComputeMaximumPoseGraphSpanningTree(
+    const PoseGraph& pose_graph,
+    const std::unordered_set<image_t>& image_ids,
+    std::unordered_map<image_t, image_t>& parents,
+    bool prioritize_tracking,
+    int image_map_order_passes,
+    const CorrespondenceGraph* correspondence_graph) {
   // Build mapping between image_id and contiguous indices.
   std::unordered_map<image_t, int> image_id_to_idx;
   std::vector<image_t> idx_to_image_id;
@@ -77,7 +131,8 @@ image_t ComputeMaximumPoseGraphSpanningTree(
   idx_to_image_id.reserve(image_ids.size());
 
   std::vector<image_t> ordered_image_ids(image_ids.begin(), image_ids.end());
-  ordered_image_ids = LegacyPyglomapMapOrder(std::move(ordered_image_ids));
+  ordered_image_ids = LegacyPyglomapSortedMapOrderPasses(
+      std::move(ordered_image_ids), image_map_order_passes);
   for (const image_t image_id : ordered_image_ids) {
     image_id_to_idx[image_id] = static_cast<int>(idx_to_image_id.size());
     idx_to_image_id.push_back(image_id);
@@ -102,12 +157,8 @@ image_t ComputeMaximumPoseGraphSpanningTree(
                                ? &correspondence_graph->ImagePairsMap()
                                : nullptr;
 
-  std::vector<image_pair_t> ordered_pair_ids;
-  ordered_pair_ids.reserve(pose_graph.NumEdges());
-  for (const auto& [pair_id, edge] : pose_graph.ValidEdges()) {
-    ordered_pair_ids.push_back(pair_id);
-  }
-  ordered_pair_ids = LegacyPyglomapMapOrder(std::move(ordered_pair_ids));
+  std::vector<image_pair_t> ordered_pair_ids =
+      OrderedValidPairIds(pose_graph, correspondence_graph);
   for (const image_pair_t pair_id : ordered_pair_ids) {
     const auto& edge = pose_graph.Edges().at(pair_id);
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
@@ -509,6 +560,7 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
       active_image_ids,
       parents,
       /*prioritize_tracking=*/options_.use_video_constraints,
+      options_.legacy_image_map_order_passes,
       correspondence_graph);
   THROW_CHECK(active_image_ids.count(root));
 
@@ -528,6 +580,10 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
   indexes.push(root);
 
   std::unordered_map<image_t, Rigid3d> cams_from_world;
+  const Image& root_image = reconstruction.Image(root);
+  if (root_image.HasPose()) {
+    cams_from_world[root] = root_image.CamFromWorld();
+  }
   while (!indexes.empty()) {
     image_t curr = indexes.front();
     indexes.pop();
@@ -537,11 +593,20 @@ void RotationEstimator::InitializeFromMaximumSpanningTree(
     // If it is root, then fix it to be the original estimation.
     if (curr == root) continue;
 
-    // Directly use the relative pose for estimation rotation.
-    // GetEdge(parent, curr) returns curr_from_parent
-    const PoseGraph::Edge edge = pose_graph.GetEdge(parents[curr], curr);
-    cams_from_world[curr].rotation() =
-        (edge.cam2_from_cam1 * cams_from_world[parents[curr]]).rotation();
+    // Directly use the relative pose for estimation rotation. Mirror legacy
+    // pyglomap's explicit orientation branch instead of using GetEdge, since
+    // both paths are mathematically equivalent but not necessarily bitwise
+    // identical.
+    const image_t parent = parents[curr];
+    const PoseGraph::Edge& edge =
+        pose_graph.Edges().at(ImagePairToPairId(curr, parent));
+    if (!ShouldSwapImagePair(curr, parent)) {
+      cams_from_world[curr].rotation() =
+          (Inverse(edge.cam2_from_cam1) * cams_from_world[parent]).rotation();
+    } else {
+      cams_from_world[curr].rotation() =
+          (edge.cam2_from_cam1 * cams_from_world[parent]).rotation();
+    }
   }
 
   InitializeRigRotationsFromImages(cams_from_world, reconstruction);
@@ -609,9 +674,11 @@ bool InitializeRigRotationsFromImages(
           sensor_id, Rigid3d(existing->rotation(), kUnknownTranslation));
       continue;
     }
-    weights.resize(samples.size(), 1.0);
     const Eigen::Quaterniond cam_from_rig =
-        AverageQuaternions(samples, weights);
+        samples.size() == 1 ? samples.front()
+                            : AverageQuaternions(
+                                  samples,
+                                  std::vector<double>(samples.size(), 1.0));
     reconstruction.Rig(rig_id).SetSensorFromRig(
         sensor_id, Rigid3d(cam_from_rig, kUnknownTranslation));
   }
@@ -648,9 +715,12 @@ bool InitializeRigRotationsFromImages(
     }
 
     if (!rig_from_world_samples.empty()) {
-      weights.resize(rig_from_world_samples.size(), 1.0);
       const Eigen::Quaterniond rig_from_world =
-          AverageQuaternions(rig_from_world_samples, weights);
+          rig_from_world_samples.size() == 1
+              ? rig_from_world_samples.front()
+              : AverageQuaternions(
+                    rig_from_world_samples,
+                    std::vector<double>(rig_from_world_samples.size(), 1.0));
       reconstruction.Frame(frame_id).SetRigFromWorld(
           Rigid3d(rig_from_world, kUnknownTranslation));
     }

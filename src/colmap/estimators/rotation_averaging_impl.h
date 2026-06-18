@@ -103,6 +103,9 @@ class RotationAveragingProblem {
       const {
     return pair_constraints_;
   }
+  const std::vector<image_pair_t>& OrderedPairIds() const {
+    return ordered_pair_ids_;
+  }
 
   // Accessors for the Ceres solver path (gated on !use_gravity).
   Eigen::VectorXd& MutableEstimatedRotations() { return estimated_rotations_; }
@@ -151,6 +154,7 @@ class RotationAveragingProblem {
 
   // Preprocessed constraints for each image pair.
   std::unordered_map<image_pair_t, PairConstraint> pair_constraints_;
+  std::vector<image_pair_t> ordered_pair_ids_;
 
   // Gauge fixing (removes rotational ambiguity).
   frame_t fixed_frame_id_ = kInvalidFrameId;

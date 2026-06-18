@@ -162,6 +162,12 @@ void BindGlobalPositioner(py::module& m) {
                      &GlobalPositionerOptions::filter_depth_outliers)
       .def_readwrite("initial_dmap_scales",
                      &GlobalPositionerOptions::initial_dmap_scales)
+      .def_readwrite("debug_initial_frame_centers",
+                     &GlobalPositionerOptions::debug_initial_frame_centers)
+      .def_readwrite("debug_initial_point3D_xyz",
+                     &GlobalPositionerOptions::debug_initial_point3D_xyz)
+      .def_readwrite("debug_initial_bata_scales",
+                     &GlobalPositionerOptions::debug_initial_bata_scales)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -204,6 +210,41 @@ void BindGlobalPositioner(py::module& m) {
         output["dmap_scale_map"] = positioner.GetDmapScales();
         output["dmap_scale_map_nested"] = positioner.GetDmapScales();
         output["dmap_scales"] = positioner.GetDmapScales();
+        output["debug_initial_frame_centers"] =
+            positioner.GetInitialFrameCenters();
+        output["debug_initial_point3D_xyz"] =
+            positioner.GetInitialPoint3DXYZ();
+        output["debug_initial_bata_scales"] =
+            positioner.GetInitialBataScales();
+        output["debug_final_bata_scales"] =
+            positioner.GetFinalBataScales();
+        const GlobalPositionerDiagnostics& diagnostics =
+            positioner.GetDiagnostics();
+        py::dict diagnostics_dict;
+        diagnostics_dict["num_bata_residuals"] =
+            diagnostics.num_bata_residuals;
+        diagnostics_dict["num_metric_depth_residuals"] =
+            diagnostics.num_metric_depth_residuals;
+        diagnostics_dict["num_scale_prior_residuals"] =
+            diagnostics.num_scale_prior_residuals;
+        diagnostics_dict["num_regular_observations_used"] =
+            diagnostics.num_regular_observations_used;
+        diagnostics_dict["num_lc_observations_used"] =
+            diagnostics.num_lc_observations_used;
+        diagnostics_dict["num_bata_scales"] = diagnostics.num_bata_scales;
+        diagnostics_dict["num_dmap_scales"] = diagnostics.num_dmap_scales;
+        diagnostics_dict["num_frame_centers"] = diagnostics.num_frame_centers;
+        diagnostics_dict["num_point3D_xyz"] = diagnostics.num_point3D_xyz;
+        diagnostics_dict["num_residual_blocks"] =
+            diagnostics.num_residual_blocks;
+        diagnostics_dict["num_parameter_blocks"] =
+            diagnostics.num_parameter_blocks;
+        diagnostics_dict["num_parameters"] = diagnostics.num_parameters;
+        diagnostics_dict["num_iterations"] = diagnostics.num_iterations;
+        diagnostics_dict["initial_cost"] = diagnostics.initial_cost;
+        diagnostics_dict["final_cost"] = diagnostics.final_cost;
+        diagnostics_dict["termination_type"] = diagnostics.termination_type;
+        output["debug_diagnostics"] = diagnostics_dict;
         return output;
       },
       "options"_a,
@@ -288,6 +329,10 @@ void BindRotationEstimator(py::module& m) {
           .def_readwrite("skip_initialization",
                          &RotationEstimatorOptions::skip_initialization,
                          "Skip maximum spanning tree initialization.")
+          .def_readwrite(
+              "legacy_image_map_order_passes",
+              &RotationEstimatorOptions::legacy_image_map_order_passes,
+              "Number of legacy pyglomap image-map ordering passes to emulate.")
           .def_readwrite("use_gravity",
                          &RotationEstimatorOptions::use_gravity,
                          "Use gravity priors for rotation averaging.")

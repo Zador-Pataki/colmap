@@ -194,6 +194,11 @@ struct BundleAdjustmentOptions : public BundleAdjustmentBackendOptions {
   // When true, only translation is refined.
   bool constant_rig_from_world_rotation = false;
 
+  // Reproducibility-only compatibility mode for legacy pycolmap3/GLOMAP
+  // problems, where image poses were exposed to Ceres as separate quaternion
+  // and translation parameter blocks instead of one 7D frame pose block.
+  bool legacy_split_image_pose_blocks = false;
+
   // Use per-keypoint pixel covariances for Mahalanobis weighting.
   // Requires Image::pixel_cholesky_xy_ to be populated.
   bool use_keypoint_covariances = false;

@@ -81,7 +81,7 @@ struct GlobalPositionerOptions {
   bool zero_residual_behind = false;
   // Selects the log-linear residual shape and implies log residuals.
   bool smooth_log_linear_transition = false;
-  double log_linear_threshold = 1.0;
+  double log_linear_threshold = 0.1;
   double scale_prior_stddev = 1.0;
 
   // Pre-Solve log-space depth-residual filter. Flagged observations
@@ -92,6 +92,12 @@ struct GlobalPositionerOptions {
 
   // Caller-supplied initial dmap_scales (linear space). nullopt = auto.
   std::optional<std::unordered_map<image_t, double>> initial_dmap_scales;
+
+  // Debug-only initialization hooks for parity testing. Empty maps are ignored.
+  // BATA scale keys use "point3D_id:image_id:point2D_idx:lcflag".
+  std::unordered_map<frame_t, Eigen::Vector3d> debug_initial_frame_centers;
+  std::unordered_map<point3D_t, Eigen::Vector3d> debug_initial_point3D_xyz;
+  std::unordered_map<std::string, double> debug_initial_bata_scales;
 
   // Soft fallback loss for depth outliers flagged by FilterDepthOutliers.
   LossConfig loss_soft_outlier_fallback = {LossFunctionType::HUBER, 1.0, 1.0};
@@ -121,6 +127,25 @@ struct GlobalPositionerOptions {
   }
 };
 
+struct GlobalPositionerDiagnostics {
+  int num_bata_residuals = 0;
+  int num_metric_depth_residuals = 0;
+  int num_scale_prior_residuals = 0;
+  int num_regular_observations_used = 0;
+  int num_lc_observations_used = 0;
+  int num_bata_scales = 0;
+  int num_dmap_scales = 0;
+  int num_frame_centers = 0;
+  int num_point3D_xyz = 0;
+  int num_residual_blocks = 0;
+  int num_parameter_blocks = 0;
+  int num_parameters = 0;
+  int num_iterations = 0;
+  double initial_cost = 0.0;
+  double final_cost = 0.0;
+  int termination_type = 0;
+};
+
 class GlobalPositioner {
  public:
   explicit GlobalPositioner(const GlobalPositionerOptions& options);
@@ -135,6 +160,21 @@ class GlobalPositioner {
   // Per-image dmap_scales_ after Solve() (log or linear per options).
   const std::map<image_t, double>& GetDmapScales() const {
     return dmap_scales_;
+  }
+  const std::unordered_map<frame_t, Eigen::Vector3d>& GetInitialFrameCenters()
+      const {
+    return initial_frame_centers_;
+  }
+  const std::unordered_map<point3D_t, Eigen::Vector3d>& GetInitialPoint3DXYZ()
+      const {
+    return initial_point3D_xyz_;
+  }
+  const std::unordered_map<std::string, double>& GetInitialBataScales() const {
+    return initial_bata_scales_;
+  }
+  std::unordered_map<std::string, double> GetFinalBataScales() const;
+  const GlobalPositionerDiagnostics& GetDiagnostics() const {
+    return diagnostics_;
   }
 
  protected:
@@ -177,6 +217,12 @@ class GlobalPositioner {
   // Parameterize the variables, set some variables to be constant if desired
   void ParameterizeVariables(Reconstruction& reconstruction);
 
+  bool UseImageCenterBlocks() const;
+  bool UseFrameInplaceCenterBlocks() const;
+  Eigen::Vector3d& MutableCenterForImage(const Image& image);
+  double* MutableCenterDataForImage(const Image& image);
+  Eigen::Vector3d CenterForImage(const Image& image) const;
+
   // During the optimization, the camera translation is set to be the camera
   // center Convert the results back to camera poses
   void ConvertBackResults(Reconstruction& reconstruction);
@@ -192,11 +238,17 @@ class GlobalPositioner {
 
   // Auxiliary scale variables.
   std::vector<double> scales_;
+  std::unordered_map<std::string, size_t> bata_scale_indices_;
 
   // Temporary storage for frame centers (world coordinates) during
   // optimization. This allows keeping RigFromWorld().translation() in
   // cam_from_world convention.
   std::unordered_map<frame_t, Eigen::Vector3d> frame_centers_;
+  std::unordered_map<image_t, Eigen::Vector3d> image_centers_;
+  std::unordered_map<frame_t, Eigen::Vector3d> initial_frame_centers_;
+  std::unordered_map<point3D_t, Eigen::Vector3d> initial_point3D_xyz_;
+  std::unordered_map<std::string, double> initial_bata_scales_;
+  uint64_t residual_order_hash_ = 1469598103934665603ULL;
 
   // Temporary storage for camera-in-rig positions when cam_from_rig is unknown
   // and needs to be estimated.
@@ -228,6 +280,8 @@ class GlobalPositioner {
   // Per-image ScaledLoss wrappers created in the scale-prior loop.
   // Owned here because problem_ uses DO_NOT_TAKE_OWNERSHIP.
   std::vector<std::unique_ptr<ceres::LossFunction>> per_image_scale_losses_;
+
+  GlobalPositionerDiagnostics diagnostics_;
 };
 
 // Solve global positioning using point-to-camera constraints.

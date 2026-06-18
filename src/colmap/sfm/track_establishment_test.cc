@@ -64,6 +64,11 @@ std::vector<image_pair_t> CollectPairIds(const CorrespondenceGraph& g) {
   return ids;
 }
 
+point3D_t EncodeTrackObservation(image_t image_id, point2D_t point2D_idx) {
+  return (static_cast<point3D_t>(image_id) << 32) |
+         static_cast<point3D_t>(point2D_idx);
+}
+
 // 3 images, 3 valid pairs (1-2, 1-3, 2-3), 5 inlier matches per pair, all
 // pointing to the same 5 underlying 3D points (feature index i corresponds
 // to point i on every image). Expect 5 tracks of length 3.
@@ -669,11 +674,8 @@ TEST(ProcessLoopClosurePairs, NeitherExistingTrack) {
   }
   ASSERT_NE(tid_for_4_2, kInvalid);
   ASSERT_NE(tid_for_5_3, kInvalid);
-  EXPECT_GE(tid_for_4_2, 5u);
-  EXPECT_GE(tid_for_5_3, 5u);
-  const point3D_t lo = std::min(tid_for_4_2, tid_for_5_3);
-  const point3D_t hi = std::max(tid_for_4_2, tid_for_5_3);
-  EXPECT_EQ(hi, lo + 1);
+  EXPECT_EQ(tid_for_4_2, EncodeTrackObservation(4, 2));
+  EXPECT_EQ(tid_for_5_3, EncodeTrackObservation(5, 3));
 
   EXPECT_EQ(tracks.at(tid_for_4_2).track.Length(), 1u);
   EXPECT_EQ(tracks.at(tid_for_4_2).track.lc_elements.size(), 1u);

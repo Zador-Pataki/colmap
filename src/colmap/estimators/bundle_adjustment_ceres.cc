@@ -511,6 +511,43 @@ void ParameterizeRigsAndFrames(const BundleAdjustmentOptions& options,
   }
 }
 
+void ParameterizeLegacySplitImagePoses(const BundleAdjustmentOptions& options,
+                                       const BundleAdjustmentConfig& config,
+                                       const std::set<image_t>& image_ids,
+                                       Reconstruction& reconstruction,
+                                       ceres::Problem& problem) {
+  std::unordered_set<frame_t> parameterized_frame_ids;
+  for (const image_t image_id : image_ids) {
+    Image& image = reconstruction.Image(image_id);
+    THROW_CHECK(image.IsRefInFrame())
+        << "legacy_split_image_pose_blocks only supports trivial/ref frames.";
+
+    if (!parameterized_frame_ids.insert(image.FrameId()).second) {
+      continue;
+    }
+
+    Rigid3d& rig_from_world = image.FramePtr()->RigFromWorld();
+    rig_from_world.rotation().normalize();
+
+    double* qvec = rig_from_world.params.data();
+    double* tvec = rig_from_world.params.data() + 4;
+    if (!problem.HasParameterBlock(qvec)) {
+      continue;
+    }
+
+    SetManifold(&problem, qvec, CreateEigenQuaternionManifold());
+    if (!options.refine_rig_from_world ||
+        config.HasConstantRigFromWorldPose(image.FrameId())) {
+      problem.SetParameterBlockConstant(qvec);
+      if (problem.HasParameterBlock(tvec)) {
+        problem.SetParameterBlockConstant(tvec);
+      }
+    } else if (options.constant_rig_from_world_rotation) {
+      problem.SetParameterBlockConstant(qvec);
+    }
+  }
+}
+
 void ParameterizePoints(
     const BundleAdjustmentOptions& options,
     const BundleAdjustmentConfig& config,
@@ -601,8 +638,16 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
                         parameterized_camera_ids_,
                         reconstruction,
                         *problem_);
-    ParameterizeRigsAndFrames(
-        options_, config_, parameterized_image_ids_, reconstruction, *problem_);
+    if (options_.legacy_split_image_pose_blocks) {
+      ParameterizeLegacySplitImagePoses(
+          options_, config_, parameterized_image_ids_, reconstruction, *problem_);
+    } else {
+      ParameterizeRigsAndFrames(options_,
+                                config_,
+                                parameterized_image_ids_,
+                                reconstruction,
+                                *problem_);
+    }
     ParameterizePoints(options_,
                        config_,
                        point3D_num_observations_,
@@ -675,6 +720,9 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
     // Add residuals to bundle adjustment problem.
     const bool use_covariances = options_.use_keypoint_covariances &&
                                  image.HasPixelCovariances();
+    THROW_CHECK(!options_.legacy_split_image_pose_blocks || !use_covariances)
+        << "legacy_split_image_pose_blocks does not support weighted "
+           "reprojection residuals.";
     size_t num_observations = 0;
     point2D_t point2D_idx = 0;
     for (const Point2D& point2D : image.Points2D()) {
@@ -737,13 +785,24 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
               point3D.xyz.data(),
               camera.params.data());
         } else {
-          problem_->AddResidualBlock(
-              CreateCameraCostFunction<ReprojErrorCostFunctor>(
-                  camera.model_id, point2D.xy),
-              loss_function_.get(),
-              point3D.xyz.data(),
-              rig_from_world.params.data(),
-              camera.params.data());
+          if (options_.legacy_split_image_pose_blocks) {
+            problem_->AddResidualBlock(
+                CreateCameraCostFunction<SplitPoseReprojErrorCostFunctor>(
+                    camera.model_id, point2D.xy),
+                loss_function_.get(),
+                point3D.xyz.data(),
+                rig_from_world.params.data(),
+                rig_from_world.params.data() + 4,
+                camera.params.data());
+          } else {
+            problem_->AddResidualBlock(
+                CreateCameraCostFunction<ReprojErrorCostFunctor>(
+                    camera.model_id, point2D.xy),
+                loss_function_.get(),
+                point3D.xyz.data(),
+                rig_from_world.params.data(),
+                camera.params.data());
+          }
         }
       }
       ++point2D_idx;
@@ -757,6 +816,9 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
 
   void AddImageWithNonTrivialFrame(Image& image,
                                    Reconstruction& reconstruction) {
+    THROW_CHECK(!options_.legacy_split_image_pose_blocks)
+        << "legacy_split_image_pose_blocks only supports trivial/ref frames.";
+
     Camera& camera = *image.CameraPtr();
     const sensor_t sensor_id = camera.SensorId();
 
@@ -1174,14 +1236,20 @@ void DepthPriorBundleAdjuster(
     Reconstruction& reconstruction,
     bool logloss,
     bool fix_shift,
-    bool fix_scale) {
+    bool fix_scale,
+    bool legacy_split_image_pose_blocks) {
   THROW_CHECK_EQ(point3D_ids.size(), depths.size());
   THROW_CHECK_EQ(point3D_ids.size(), loss_magnitudes.size());
   THROW_CHECK_EQ(point3D_ids.size(), loss_params.size());
   THROW_CHECK_EQ(point3D_ids.size(), loss_types.size());
 
   Image& image = reconstruction.Image(image_id);
-  double* pose_params = image.FramePtr()->RigFromWorld().params.data();
+  THROW_CHECK(!legacy_split_image_pose_blocks || image.IsRefInFrame())
+      << "legacy_split_image_pose_blocks only supports trivial/ref frames.";
+  Rigid3d& rig_from_world = image.FramePtr()->RigFromWorld();
+  double* pose_params = rig_from_world.params.data();
+  double* pose_qvec = rig_from_world.params.data();
+  double* pose_tvec = rig_from_world.params.data() + 4;
   if (!problem->HasParameterBlock(shift_scale_ptr)) {
     problem->AddParameterBlock(shift_scale_ptr, 2);
   }
@@ -1189,9 +1257,15 @@ void DepthPriorBundleAdjuster(
   for (size_t i = 0; i < point3D_ids.size(); ++i) {
     Point3D& point3D = reconstruction.Point3D(point3D_ids[i]);
 
-    ceres::CostFunction* cost_function =
-        logloss ? LogScaledDepthErrorCostFunctor::Create(depths[i])
-                : ScaledDepthErrorCostFunctor::Create(depths[i]);
+    ceres::CostFunction* cost_function = nullptr;
+    if (legacy_split_image_pose_blocks) {
+      cost_function =
+          logloss ? SplitPoseLogScaledDepthErrorCostFunctor::Create(depths[i])
+                  : SplitPoseScaledDepthErrorCostFunctor::Create(depths[i]);
+    } else {
+      cost_function = logloss ? LogScaledDepthErrorCostFunctor::Create(depths[i])
+                              : ScaledDepthErrorCostFunctor::Create(depths[i]);
+    }
 
     CeresBundleAdjustmentOptions loss_opts;
     loss_opts.loss.type = loss_types[i];
@@ -1206,9 +1280,18 @@ void DepthPriorBundleAdjuster(
           final_loss, loss_magnitudes[i], ceres::TAKE_OWNERSHIP);
     }
 
-    problem->AddResidualBlock(
-        cost_function, final_loss, pose_params, point3D.xyz.data(),
-        shift_scale_ptr);
+    if (legacy_split_image_pose_blocks) {
+      problem->AddResidualBlock(cost_function,
+                                final_loss,
+                                pose_qvec,
+                                pose_tvec,
+                                point3D.xyz.data(),
+                                shift_scale_ptr);
+    } else {
+      problem->AddResidualBlock(
+          cost_function, final_loss, pose_params, point3D.xyz.data(),
+          shift_scale_ptr);
+    }
   }
 
   if (fix_shift && fix_scale) {

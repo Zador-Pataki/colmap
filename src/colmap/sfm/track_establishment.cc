@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <set>
+#include <unordered_set>
 #include <utility>
 
 namespace colmap {
@@ -96,15 +97,14 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
         image_id_to_keypoints,
     const TrackEstablishmentOptions& options,
     const MatchPredicate& ignore_match) {
-  using Observation = std::pair<image_t, point2D_t>;
-
   // Union all matching observations. Iterate ImagePair metadata directly:
   // VideoSfM populates matches/inliers on ImagePair without always using the
   // flat correspondence graph storage behind ExtractMatchesBetweenImages.
   // Fall back to the native correspondence storage for vanilla COLMAP pairs.
-  UnionFind<Observation> uf;
+  UnionFind<uint64_t> uf;
   FeatureMatches extracted_matches;
-  for (const image_pair_t pair_id : valid_pair_ids) {
+  std::vector<image_pair_t> ordered_pair_ids = valid_pair_ids;
+  for (const image_pair_t pair_id : ordered_pair_ids) {
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     THROW_CHECK(image_id_to_keypoints.count(image_id1))
         << "Missing keypoints for image " << image_id1;
@@ -116,8 +116,8 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
       if (ignore_match && ignore_match(image_id1, p2d1, image_id2, p2d2)) {
         return;
       }
-      const Observation obs1(image_id1, p2d1);
-      const Observation obs2(image_id2, p2d2);
+      const uint64_t obs1 = EncodeObservationKey(image_id1, p2d1);
+      const uint64_t obs2 = EncodeObservationKey(image_id2, p2d2);
       if (obs2 < obs1) {
         uf.Union(obs1, obs2);
       } else {
@@ -142,11 +142,44 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     }
   }
 
-  // Group observations by their root.
-  uf.Compress();
-  std::unordered_map<Observation, std::vector<Observation>> track_map;
-  for (const auto& [obs, root] : uf.Parents()) {
-    track_map[root].push_back(obs);
+  // Collect tracks the same way legacy GLOMAP did: walk image pairs in the
+  // legacy unordered-map order and insert observations into an unordered_set
+  // keyed by the current union-find root.
+  std::unordered_map<uint64_t, std::unordered_set<uint64_t>> track_map;
+  for (const image_pair_t pair_id : ordered_pair_ids) {
+    const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
+    const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
+    const Eigen::MatrixXi& matches = image_pair.matches;
+    const auto add_to_track = [&](const point2D_t p2d1,
+                                  const point2D_t p2d2) {
+      if (ignore_match && ignore_match(image_id1, p2d1, image_id2, p2d2)) {
+        return;
+      }
+      const uint64_t obs1 = EncodeObservationKey(image_id1, p2d1);
+      const uint64_t obs2 = EncodeObservationKey(image_id2, p2d2);
+      const uint64_t track_id = uf.Find(obs1);
+      const uint64_t track_id2 = uf.Find(obs2);
+      if (track_id == track_id2) {
+        track_map[track_id].insert(obs1);
+        track_map[track_id].insert(obs2);
+      }
+    };
+    if (matches.rows() > 0 || !image_pair.inliers.empty()) {
+      for (const int idx : image_pair.inliers) {
+        THROW_CHECK_GE(idx, 0)
+            << "Negative inlier index for image pair " << pair_id;
+        THROW_CHECK_LT(idx, matches.rows())
+            << "Inlier index outside matches.rows() for image pair " << pair_id;
+        add_to_track(static_cast<point2D_t>(matches(idx, 0)),
+                     static_cast<point2D_t>(matches(idx, 1)));
+      }
+    } else {
+      corr_graph.ExtractMatchesBetweenImages(
+          image_id1, image_id2, extracted_matches);
+      for (const auto& match : extracted_matches) {
+        add_to_track(match.point2D_idx1, match.point2D_idx2);
+      }
+    }
   }
   LOG(INFO) << "Established " << track_map.size() << " tracks from "
             << uf.Parents().size() << " observations";
@@ -155,14 +188,16 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
   std::unordered_map<point3D_t, Point3D> candidate_points3D;
   std::vector<std::pair<size_t, point3D_t>> track_lengths;
   size_t discarded_counter = 0;
-  point3D_t next_point3D_id = 0;
 
   for (const auto& [track_id, observations] : track_map) {
     std::unordered_map<image_t, std::vector<Eigen::Vector2d>> image_id_set;
     Point3D point3D;
     bool is_consistent = true;
 
-    for (const auto& [image_id, feature_id] : observations) {
+    for (const uint64_t observation : observations) {
+      const image_t image_id = static_cast<image_t>(observation >> 32);
+      const point2D_t feature_id =
+          static_cast<point2D_t>(observation & 0xFFFFFFFF);
       const Eigen::Vector2d& xy =
           image_id_to_keypoints.at(image_id).at(feature_id);
 
@@ -194,7 +229,7 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     if (num_images < static_cast<size_t>(options.min_num_views_per_track))
       continue;
 
-    const point3D_t point3D_id = next_point3D_id++;
+    const point3D_t point3D_id = track_id;
     track_lengths.emplace_back(point3D.track.Length(), point3D_id);
     candidate_points3D.emplace(point3D_id, std::move(point3D));
   }
@@ -244,9 +279,8 @@ void AppendLoopClosureObservations(
     const CorrespondenceGraph& corr_graph,
     std::unordered_map<point3D_t, Point3D>& tracks) {
   // Build the lookup from observation -> track_id, and find the next
-  // free track id (max + 1) so newly-minted LC-only tracks never
-  // collide with the dense [0, N) ids written by
-  // EstablishTracksFromCorrGraph.
+  // free track id (max + 1) so newly-minted LC-only tracks never collide with
+  // the root-observation ids written by EstablishTracksFromCorrGraph.
   std::unordered_map<uint64_t, point3D_t> obs_to_track;
   point3D_t next_id = 0;
   for (const auto& [track_id, point3D] : tracks) {
@@ -257,7 +291,8 @@ void AppendLoopClosureObservations(
     }
   }
 
-  for (const image_pair_t pair_id : valid_pair_ids) {
+  std::vector<image_pair_t> ordered_pair_ids = valid_pair_ids;
+  for (const image_pair_t pair_id : ordered_pair_ids) {
     const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
     ValidateLoopClosureImagePairMetadata(pair_id, image_pair);
     const Eigen::MatrixXi& matches = image_pair.matches;
@@ -294,8 +329,10 @@ void AppendLoopClosureObservations(
         // Mint two reciprocal LC-only tracks. Each gets the regular
         // observation as a Track::Element and the other side as
         // lc_elements.
-        const point3D_t tid_a = next_id++;
-        const point3D_t tid_b = next_id++;
+        const point3D_t tid_a = key1;
+        const point3D_t tid_b = key2;
+        next_id = std::max(next_id, static_cast<point3D_t>(tid_a + 1));
+        next_id = std::max(next_id, static_cast<point3D_t>(tid_b + 1));
         Point3D track_a;
         track_a.track.AddElement(image_id1, p1);
         track_a.track.lc_elements.emplace_back(image_id2, p2);
