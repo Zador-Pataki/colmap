@@ -1,9 +1,12 @@
 #pragma once
 
 #include "colmap/estimators/ceres_loss.h"
+#include "colmap/estimators/global_positioning_trace.h"
+#include "colmap/estimators/global_positioning_tracer.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -11,6 +14,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <ceres/ceres.h>
 
@@ -61,6 +65,9 @@ struct GlobalPositionerOptions {
 
   // The options for the solver
   ceres::Solver::Options solver_options;
+
+  // Optional file-backed diagnostics for global positioning.
+  GlobalPositioningTraceOptions trace;
 
   // Add per-observation MetricDepthError residual alongside BATA.
   bool use_metric_depth_constraint = false;
@@ -228,6 +235,7 @@ class GlobalPositioner {
   void ConvertBackResults(Reconstruction& reconstruction);
 
   GlobalPositionerOptions options_;
+  bool use_gpu_effective_ = false;
 
   std::unique_ptr<ceres::Problem> problem_;
 
@@ -282,6 +290,11 @@ class GlobalPositioner {
   std::vector<std::unique_ptr<ceres::LossFunction>> per_image_scale_losses_;
 
   GlobalPositionerDiagnostics diagnostics_;
+
+  const std::vector<GlobalPositioningResidualReplayEntry>&
+  ResidualReplayEntriesForTest() const;
+
+  std::unique_ptr<GlobalPositioningTracer> tracer_;
 };
 
 // Solve global positioning using point-to-camera constraints.

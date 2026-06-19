@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CMAKE_C_COMPILER_LAUNCHER=ccache \
 CMAKE_CXX_COMPILER_LAUNCHER=ccache \
 CMAKE_PREFIX_PATH="$ROOT/local" \
-CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc" \
+CMAKE_ARGS="-Dcolmap_DIR=$ROOT/local/share/colmap -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc" \
     pip install \
         -Cbuild-dir="$ROOT/pybuild" \
         --no-build-isolation \

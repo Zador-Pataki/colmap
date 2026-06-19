@@ -51,11 +51,13 @@ try:
     from . import _core
 except ImportError as e:
     raise RuntimeError(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
         Cannot import the C++ backend pycolmap._core.
         Make sure that you successfully install the package with
           $ python -m pip install pycolmap/
-        """)
+        """
+        )
     ) from e
 
 # Type checkers cannot deal with dynamic manipulation of globals.
@@ -66,7 +68,36 @@ if TYPE_CHECKING:
 __all__ = import_module_symbols(
     globals(), _core, exclude={"cost_functions", "pyceres"}
 )
-__all__.extend(["__version__", "__ceres_version__"])
+
+from .global_positioning_trace import (  # noqa: E402,F401,I001
+    GlobalPositioningParameterSnapshot,
+    GlobalPositioningReplayEvaluation,
+    GlobalPositioningReplayJacobianBlock,
+    GlobalPositioningReplayResidualBlock,
+    GlobalPositioningResidualLedgerBlock,
+    GlobalPositioningResidualLedgerLoss,
+    GlobalPositioningResidualLedgerParameterBlock,
+    GlobalPositioningSnapshotArray,
+    GlobalPositioningTrace,
+    GlobalPositioningTraceReplay,
+)
+
+__all__.extend(
+    [
+        "__version__",
+        "__ceres_version__",
+        "GlobalPositioningParameterSnapshot",
+        "GlobalPositioningReplayEvaluation",
+        "GlobalPositioningReplayJacobianBlock",
+        "GlobalPositioningReplayResidualBlock",
+        "GlobalPositioningResidualLedgerBlock",
+        "GlobalPositioningResidualLedgerLoss",
+        "GlobalPositioningResidualLedgerParameterBlock",
+        "GlobalPositioningSnapshotArray",
+        "GlobalPositioningTrace",
+        "GlobalPositioningTraceReplay",
+    ]
+)
 
 __version__ = _core.__version__ + "+zador"
 __ceres_version__ = _core.__ceres_version__
