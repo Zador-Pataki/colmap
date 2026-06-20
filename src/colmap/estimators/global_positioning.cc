@@ -25,8 +25,7 @@ std::string GpObservationKey(point3D_t point3D_id,
                              point2D_t point2D_idx,
                              bool is_lc_observation) {
   return std::to_string(point3D_id) + ":" + std::to_string(image_id) + ":" +
-         std::to_string(point2D_idx) + ":" +
-         (is_lc_observation ? "1" : "0");
+         std::to_string(point2D_idx) + ":" + (is_lc_observation ? "1" : "0");
 }
 
 Eigen::Vector3d RandVector3d(double low, double high) {
@@ -95,15 +94,14 @@ void GpObsDumpObservation(const char* tag,
   FILE* f = GpObsDumpFile();
   if (f == nullptr) return;
   const point2D_t feature_id = observation.point2D_idx;
-  const Eigen::Vector2d angular_std =
-      feature_id < image.angular_stddevs.size()
-          ? image.angular_stddevs[feature_id]
-          : Eigen::Vector2d::Constant(-1.0);
+  const Eigen::Vector2d angular_std = feature_id < image.angular_stddevs.size()
+                                          ? image.angular_stddevs[feature_id]
+                                          : Eigen::Vector2d::Constant(-1.0);
   const bool depth_valid = feature_id < image.depth_prior_validity.size() &&
                            image.depth_prior_validity[feature_id];
-  const double depth_prior =
-      feature_id < image.depth_priors.size() ? image.depth_priors[feature_id]
-                                             : -1.0;
+  const double depth_prior = feature_id < image.depth_priors.size()
+                                 ? image.depth_priors[feature_id]
+                                 : -1.0;
   const double depth_sigma = feature_id < image.depth_prior_stddevs.size()
                                  ? image.depth_prior_stddevs[feature_id]
                                  : -1.0;
@@ -174,28 +172,26 @@ void GpStateDump(
   for (const image_t image_id : image_ids) {
     const Image& image = reconstruction.Image(image_id);
     const auto frame_center_it = frame_centers.find(image.FrameId());
-    const Eigen::Vector3d center =
-        frame_center_it == frame_centers.end()
-            ? image.CamFromWorld().TgtOriginInSrc()
-            : frame_center_it->second;
+    const Eigen::Vector3d center = frame_center_it == frame_centers.end()
+                                       ? image.CamFromWorld().TgtOriginInSrc()
+                                       : frame_center_it->second;
     const Eigen::Vector4d q = image.CamFromWorld().rotation().coeffs();
-    std::fprintf(
-        f,
-        "%s|image|%llu|t=%.17g,%.17g,%.17g|q=%.17g,%.17g,%.17g,%.17g|"
-        "nfeat=%llu|ndepth=%llu|reg=%d|frame=%llu\n",
-        tag,
-        static_cast<unsigned long long>(image_id),
-        center(0),
-        center(1),
-        center(2),
-        q(0),
-        q(1),
-        q(2),
-        q(3),
-        static_cast<unsigned long long>(image.NumPoints2D()),
-        static_cast<unsigned long long>(image.depth_priors.size()),
-        image.HasPose() ? 1 : 0,
-        static_cast<unsigned long long>(image.FrameId()));
+    std::fprintf(f,
+                 "%s|image|%llu|t=%.17g,%.17g,%.17g|q=%.17g,%.17g,%.17g,%.17g|"
+                 "nfeat=%llu|ndepth=%llu|reg=%d|frame=%llu\n",
+                 tag,
+                 static_cast<unsigned long long>(image_id),
+                 center(0),
+                 center(1),
+                 center(2),
+                 q(0),
+                 q(1),
+                 q(2),
+                 q(3),
+                 static_cast<unsigned long long>(image.NumPoints2D()),
+                 static_cast<unsigned long long>(image.depth_priors.size()),
+                 image.HasPose() ? 1 : 0,
+                 static_cast<unsigned long long>(image.FrameId()));
   }
 
   std::vector<point3D_t> point3D_ids;
@@ -228,11 +224,8 @@ void GpStateDump(
   for (const std::string& key : scale_keys) {
     const size_t index = bata_scale_indices.at(key);
     if (index >= scales.size()) continue;
-    std::fprintf(f,
-                 "%s|bata_scale|%s|value=%.17g\n",
-                 tag,
-                 key.c_str(),
-                 scales[index]);
+    std::fprintf(
+        f, "%s|bata_scale|%s|value=%.17g\n", tag, key.c_str(), scales[index]);
   }
 
   for (const auto& [image_id, scale] : dmap_scales) {
@@ -250,24 +243,6 @@ uint64_t StableHashAppendDouble(uint64_t hash, const double value) {
   static_assert(sizeof(bits) == sizeof(value));
   std::memcpy(&bits, &value, sizeof(value));
   return StableHashAppend(hash, bits);
-}
-
-MetricDepthOptions CreateMetricDepthOptions(
-    const GlobalPositionerOptions& options) {
-  MetricDepthOptions metric_depth_options;
-  metric_depth_options.use_log_scale =
-      options.use_log_scale_for_depth_map_scales;
-  metric_depth_options.zero_residual_behind = options.zero_residual_behind;
-  metric_depth_options.log_linear_threshold = options.log_linear_threshold;
-
-  if (options.smooth_log_linear_transition) {
-    metric_depth_options.residual_type = MetricDepthResidualType::kLogLinear;
-  } else if (options.use_log_residual_for_depth) {
-    metric_depth_options.residual_type = MetricDepthResidualType::kLog;
-  } else {
-    metric_depth_options.residual_type = MetricDepthResidualType::kLinear;
-  }
-  return metric_depth_options;
 }
 
 // Per-observation depth outlier check. Returns true when the log-space
@@ -405,7 +380,8 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
       }
       uint64_t parameter_value_hash = kFnvOffset;
       for (const double scale : scales_) {
-        parameter_value_hash = StableHashAppendDouble(parameter_value_hash, scale);
+        parameter_value_hash =
+            StableHashAppendDouble(parameter_value_hash, scale);
       }
       std::vector<point3D_t> point3D_ids;
       point3D_ids.reserve(reconstruction.NumPoints3D());
@@ -433,7 +409,8 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
       for (const frame_t frame_id : frame_ids) {
         Eigen::Vector3d& center = frame_centers_.at(frame_id);
         if (problem_->HasParameterBlock(center.data())) {
-          parameter_value_hash = StableHashAppend(parameter_value_hash, frame_id);
+          parameter_value_hash =
+              StableHashAppend(parameter_value_hash, frame_id);
           for (int i = 0; i < 3; ++i) {
             parameter_value_hash =
                 StableHashAppendDouble(parameter_value_hash, center[i]);
@@ -493,8 +470,7 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
           << " MKL_NUM_THREADS=" << EnvValue("MKL_NUM_THREADS")
           << " BLIS_NUM_THREADS=" << EnvValue("BLIS_NUM_THREADS")
           << " VECLIB_MAXIMUM_THREADS=" << EnvValue("VECLIB_MAXIMUM_THREADS")
-          << " NUMEXPR_NUM_THREADS=" << EnvValue("NUMEXPR_NUM_THREADS")
-          << "\n";
+          << " NUMEXPR_NUM_THREADS=" << EnvValue("NUMEXPR_NUM_THREADS") << "\n";
     }
   }
   GpStateDump("pre_ceres_solve",
@@ -507,20 +483,21 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
   if (const char* path = GpStateDumpPath()) {
     FILE* f = std::fopen(path, "a");
     if (f != nullptr) {
-      std::fprintf(f,
-                   "ceres_summary|init=%.17g|final=%.17g|iters=%d|term=%d|"
-                   "linear_solver=%d|preconditioner=%d|threading=%d|"
-                   "n_resid_blocks=%d|n_param_blocks=%d|n_params=%d\n",
-                   summary.initial_cost,
-                   summary.final_cost,
-                   static_cast<int>(summary.iterations.size()),
-                   static_cast<int>(summary.termination_type),
-                   static_cast<int>(options_.solver_options.linear_solver_type),
-                   static_cast<int>(options_.solver_options.preconditioner_type),
-                   options_.solver_options.num_threads,
-                   summary.num_residual_blocks,
-                   summary.num_parameter_blocks,
-                   summary.num_parameters);
+      std::fprintf(
+          f,
+          "ceres_summary|init=%.17g|final=%.17g|iters=%d|term=%d|"
+          "linear_solver=%d|preconditioner=%d|threading=%d|"
+          "n_resid_blocks=%d|n_param_blocks=%d|n_params=%d\n",
+          summary.initial_cost,
+          summary.final_cost,
+          static_cast<int>(summary.iterations.size()),
+          static_cast<int>(summary.termination_type),
+          static_cast<int>(options_.solver_options.linear_solver_type),
+          static_cast<int>(options_.solver_options.preconditioner_type),
+          options_.solver_options.num_threads,
+          summary.num_residual_blocks,
+          summary.num_parameter_blocks,
+          summary.num_parameters);
       for (size_t i = 0; i < summary.iterations.size() && i < 50; ++i) {
         std::fprintf(f,
                      "ceres_iter|%zu|cost=%.17g|step_size=%.17g|tr=%.17g\n",
@@ -877,7 +854,8 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     feature_undist = image.features_undist[observation.point2D_idx];
   } else {
     const std::optional<Eigen::Vector2d> cam_point =
-        image.CameraPtr()->CamFromImg(image.Point2D(observation.point2D_idx).xy);
+        image.CameraPtr()->CamFromImg(
+            image.Point2D(observation.point2D_idx).xy);
     if (!cam_point.has_value()) {
       LOG(WARNING)
           << "Ignoring feature because it failed to project: point3D_id="
@@ -898,8 +876,10 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   const Eigen::Vector3d cam_from_point3D_dir =
       image.CamFromWorld().rotation().inverse() * feature_undist;
 
-  const std::string scale_key = GpObservationKey(
-      point3D_id, observation.image_id, observation.point2D_idx, is_lc_observation);
+  const std::string scale_key = GpObservationKey(point3D_id,
+                                                 observation.image_id,
+                                                 observation.point2D_idx,
+                                                 is_lc_observation);
   if (!options_.debug_initial_bata_scales.empty() &&
       options_.debug_initial_bata_scales.find(scale_key) ==
           options_.debug_initial_bata_scales.end()) {
@@ -938,8 +918,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   const bool image_is_track_anchor =
       observation.point2D_idx < image.is_track_anchor.size() &&
       image.is_track_anchor[observation.point2D_idx];
-  const bool image_is_inlier = observation.point2D_idx < image.is_inlier.size() &&
-                               image.is_inlier[observation.point2D_idx];
+  const bool image_is_inlier =
+      observation.point2D_idx < image.is_inlier.size() &&
+      image.is_inlier[observation.point2D_idx];
 
   // Match the pyglomap GP loss cascade: per-observation labels are stored on
   // Image masks, not on COLMAP TrackElement flags.
@@ -1149,7 +1130,10 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
       MetricDepthError::Create(image.CamFromWorld().rotation(),
                                depth_prior,
                                depth_sigma,
-                               CreateMetricDepthOptions(options_));
+                               options_.use_log_scale_for_depth_map_scales,
+                               options_.metric_depth_residual_type,
+                               options_.zero_residual_behind,
+                               options_.log_linear_threshold);
 
   if (metric_depth_cost == nullptr) return;
 
@@ -1177,8 +1161,9 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   const bool image_is_track_anchor =
       observation.point2D_idx < image.is_track_anchor.size() &&
       image.is_track_anchor[observation.point2D_idx];
-  const bool image_is_inlier = observation.point2D_idx < image.is_inlier.size() &&
-                               image.is_inlier[observation.point2D_idx];
+  const bool image_is_inlier =
+      observation.point2D_idx < image.is_inlier.size() &&
+      image.is_inlier[observation.point2D_idx];
   const bool image_is_depth_outlier =
       observation.point2D_idx < image.is_depth_outlier.size() &&
       image.is_depth_outlier[observation.point2D_idx];
@@ -1213,9 +1198,8 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                              point3D.xyz.data(),
                              &dmap_scales_[observation.image_id]);
   if (!options_.use_log_scale_for_depth_map_scales) {
-    problem_->SetParameterLowerBound(&dmap_scales_[observation.image_id],
-                                     0,
-                                     1e-5);
+    problem_->SetParameterLowerBound(
+        &dmap_scales_[observation.image_id], 0, 1e-5);
   }
   residual_order_hash_ = StableHashAppend(residual_order_hash_, 2);
   residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
@@ -1238,12 +1222,12 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
 
   const std::string ordering_mode = EnvValue("MPSFM_GP_ORDERING_MODE");
   const bool split_scales = ordering_mode == "per_block_all";
-  const bool split_points =
-      split_scales || ordering_mode == "per_block_non_scales" ||
-      ordering_mode == "per_block_points";
-  const bool split_camera_like =
-      split_scales || ordering_mode == "per_block_non_scales" ||
-      ordering_mode == "per_block_camera_like";
+  const bool split_points = split_scales ||
+                            ordering_mode == "per_block_non_scales" ||
+                            ordering_mode == "per_block_points";
+  const bool split_camera_like = split_scales ||
+                                 ordering_mode == "per_block_non_scales" ||
+                                 ordering_mode == "per_block_camera_like";
   const bool legacy_unordered = ordering_mode == "legacy_unordered";
 
   // Add scale parameters first. In the default mode, keep legacy coarse
@@ -1394,9 +1378,9 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
         dmap_order_hash = StableHashAppend(dmap_order_hash, image_id);
       }
       log << "gp_parameter_ordering"
-          << " mode=" << (ordering_mode.empty() ? "legacy_coarse" : ordering_mode)
-          << " scales=" << scales_.size()
-          << " points=" << point3D_ids.size()
+          << " mode="
+          << (ordering_mode.empty() ? "legacy_coarse" : ordering_mode)
+          << " scales=" << scales_.size() << " points=" << point3D_ids.size()
           << " frame_centers=" << frame_ids.size()
           << " image_centers=" << image_ids.size()
           << " cams_in_rig=" << sensor_ids.size()
@@ -1404,8 +1388,7 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
           << " point_order_hash=" << point_order_hash
           << " frame_order_hash=" << frame_order_hash
           << " sensor_order_hash=" << sensor_order_hash
-          << " dmap_order_hash=" << dmap_order_hash
-          << "\n";
+          << " dmap_order_hash=" << dmap_order_hash << "\n";
     }
   }
 }
