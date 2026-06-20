@@ -1,6 +1,7 @@
 #pragma once
 
 #include "colmap/estimators/ceres_loss.h"
+#include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/estimators/global_positioning_trace.h"
 #include "colmap/estimators/global_positioning_tracer.h"
 #include "colmap/scene/pose_graph.h"
@@ -105,6 +106,7 @@ struct GlobalPositionerOptions {
   std::unordered_map<frame_t, Eigen::Vector3d> debug_initial_frame_centers;
   std::unordered_map<point3D_t, Eigen::Vector3d> debug_initial_point3D_xyz;
   std::unordered_map<std::string, double> debug_initial_bata_scales;
+  bool record_debug_bata_scales = false;
 
   // Soft fallback loss for depth outliers flagged by FilterDepthOutliers.
   LossConfig loss_soft_outlier_fallback = {LossFunctionType::HUBER, 1.0, 1.0};
@@ -151,6 +153,29 @@ struct GlobalPositionerDiagnostics {
   double initial_cost = 0.0;
   double final_cost = 0.0;
   int termination_type = 0;
+  double time_setup_problem = 0.0;
+  double time_initialize_random_positions = 0.0;
+  double time_initialize_dmap_scales = 0.0;
+  double time_add_point_to_camera_constraints = 0.0;
+  double time_add_ptcam_setup = 0.0;
+  double time_add_ptcam_filter_depth_outliers = 0.0;
+  double time_add_ptcam_collect_sort_points = 0.0;
+  double time_add_ptcam_point_loop = 0.0;
+  double time_add_ptcam_scale_priors = 0.0;
+  double time_add_ptcam_bucket_summaries = 0.0;
+  double time_add_point3D_init = 0.0;
+  double time_add_point3D_regular_observations = 0.0;
+  double time_add_point3D_lc_observations = 0.0;
+  double time_add_observation_total = 0.0;
+  double time_add_observation_bata_residual = 0.0;
+  double time_add_observation_record_residual = 0.0;
+  double time_add_metric_depth_total = 0.0;
+  double time_add_metric_depth_residual = 0.0;
+  double time_add_metric_depth_record_residual = 0.0;
+  double time_add_parameter_groups = 0.0;
+  double time_parameterize_variables = 0.0;
+  double time_ceres_solve = 0.0;
+  double time_convert_back_results = 0.0;
 };
 
 class GlobalPositioner {
@@ -197,19 +222,25 @@ class GlobalPositioner {
 
   // Add a single point3D to the problem
   void AddPoint3DToProblem(point3D_t point3D_id,
-                           Reconstruction& reconstruction);
+                           Reconstruction& reconstruction,
+                           const MetricDepthOptions& metric_depth_options);
 
   void AddObservationToProblem(point3D_t point3D_id,
                                const TrackElement& observation,
                                bool random_initialization,
                                Reconstruction& reconstruction,
+                               const MetricDepthOptions& metric_depth_options,
                                bool is_lc_observation = false);
 
   // Add a MetricDepthError residual for a single observation.
   void AddMetricDepthResidual(point3D_t point3D_id,
+                              Point3D& point3D,
+                              const Image& image,
+                              const Eigen::Quaterniond& camera_rotation,
+                              double* center_data,
                               const TrackElement& observation,
                               bool is_lc_observation,
-                              Reconstruction& reconstruction);
+                              const MetricDepthOptions& metric_depth_options);
 
   // Seed dmap_scales_ from per-image median z_est / depth_prior.
   void InitializeDepthMapScalesFromObservations(

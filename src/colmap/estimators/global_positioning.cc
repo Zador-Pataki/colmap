@@ -9,12 +9,14 @@
 #include "colmap/util/threading.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <optional>
 #include <random>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -27,8 +29,7 @@ std::string GpObservationKey(point3D_t point3D_id,
                              point2D_t point2D_idx,
                              bool is_lc_observation) {
   return std::to_string(point3D_id) + ":" + std::to_string(image_id) + ":" +
-         std::to_string(point2D_idx) + ":" +
-         (is_lc_observation ? "1" : "0");
+         std::to_string(point2D_idx) + ":" + (is_lc_observation ? "1" : "0");
 }
 
 Eigen::Vector3d RandVector3d(double low, double high) {
@@ -45,6 +46,31 @@ uint64_t StableHashAppend(uint64_t hash, const uint64_t value) {
   }
   return hash;
 }
+
+std::chrono::steady_clock::time_point NowForTiming() {
+  return std::chrono::steady_clock::now();
+}
+
+double SecondsSince(const std::chrono::steady_clock::time_point& start) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+class ScopedAccumulatedTimer {
+ public:
+  explicit ScopedAccumulatedTimer(double* target)
+      : target_(target), start_(NowForTiming()) {}
+
+  ~ScopedAccumulatedTimer() {
+    if (target_ != nullptr) {
+      *target_ += SecondsSince(start_);
+    }
+  }
+
+ private:
+  double* target_;
+  std::chrono::steady_clock::time_point start_;
+};
 
 template <typename MapT>
 std::vector<typename MapT::key_type> SortedKeys(const MapT& values) {
@@ -97,15 +123,14 @@ void GpObsDumpObservation(const char* tag,
   FILE* f = GpObsDumpFile();
   if (f == nullptr) return;
   const point2D_t feature_id = observation.point2D_idx;
-  const Eigen::Vector2d angular_std =
-      feature_id < image.angular_stddevs.size()
-          ? image.angular_stddevs[feature_id]
-          : Eigen::Vector2d::Constant(-1.0);
+  const Eigen::Vector2d angular_std = feature_id < image.angular_stddevs.size()
+                                          ? image.angular_stddevs[feature_id]
+                                          : Eigen::Vector2d::Constant(-1.0);
   const bool depth_valid = feature_id < image.depth_prior_validity.size() &&
                            image.depth_prior_validity[feature_id];
-  const double depth_prior =
-      feature_id < image.depth_priors.size() ? image.depth_priors[feature_id]
-                                             : -1.0;
+  const double depth_prior = feature_id < image.depth_priors.size()
+                                 ? image.depth_priors[feature_id]
+                                 : -1.0;
   const double depth_sigma = feature_id < image.depth_prior_stddevs.size()
                                  ? image.depth_prior_stddevs[feature_id]
                                  : -1.0;
@@ -176,28 +201,26 @@ void GpStateDump(
   for (const image_t image_id : image_ids) {
     const Image& image = reconstruction.Image(image_id);
     const auto frame_center_it = frame_centers.find(image.FrameId());
-    const Eigen::Vector3d center =
-        frame_center_it == frame_centers.end()
-            ? image.CamFromWorld().TgtOriginInSrc()
-            : frame_center_it->second;
+    const Eigen::Vector3d center = frame_center_it == frame_centers.end()
+                                       ? image.CamFromWorld().TgtOriginInSrc()
+                                       : frame_center_it->second;
     const Eigen::Vector4d q = image.CamFromWorld().rotation().coeffs();
-    std::fprintf(
-        f,
-        "%s|image|%llu|t=%.17g,%.17g,%.17g|q=%.17g,%.17g,%.17g,%.17g|"
-        "nfeat=%llu|ndepth=%llu|reg=%d|frame=%llu\n",
-        tag,
-        static_cast<unsigned long long>(image_id),
-        center(0),
-        center(1),
-        center(2),
-        q(0),
-        q(1),
-        q(2),
-        q(3),
-        static_cast<unsigned long long>(image.NumPoints2D()),
-        static_cast<unsigned long long>(image.depth_priors.size()),
-        image.HasPose() ? 1 : 0,
-        static_cast<unsigned long long>(image.FrameId()));
+    std::fprintf(f,
+                 "%s|image|%llu|t=%.17g,%.17g,%.17g|q=%.17g,%.17g,%.17g,%.17g|"
+                 "nfeat=%llu|ndepth=%llu|reg=%d|frame=%llu\n",
+                 tag,
+                 static_cast<unsigned long long>(image_id),
+                 center(0),
+                 center(1),
+                 center(2),
+                 q(0),
+                 q(1),
+                 q(2),
+                 q(3),
+                 static_cast<unsigned long long>(image.NumPoints2D()),
+                 static_cast<unsigned long long>(image.depth_priors.size()),
+                 image.HasPose() ? 1 : 0,
+                 static_cast<unsigned long long>(image.FrameId()));
   }
 
   std::vector<point3D_t> point3D_ids;
@@ -230,11 +253,8 @@ void GpStateDump(
   for (const std::string& key : scale_keys) {
     const size_t index = bata_scale_indices.at(key);
     if (index >= scales.size()) continue;
-    std::fprintf(f,
-                 "%s|bata_scale|%s|value=%.17g\n",
-                 tag,
-                 key.c_str(),
-                 scales[index]);
+    std::fprintf(
+        f, "%s|bata_scale|%s|value=%.17g\n", tag, key.c_str(), scales[index]);
   }
 
   for (const auto& [image_id, scale] : dmap_scales) {
@@ -293,13 +313,13 @@ std::string TraceLossFunctionType(const LossFunctionType type) {
 }
 
 GlobalPositioningTraceLossConfig TraceLossConfig(
-    const std::string& bucket,
+    std::string_view bucket,
     const LossConfig& loss,
     std::string source,
     const double extra_weight = 1.0,
     const std::optional<double> observation_count_weight = std::nullopt) {
   GlobalPositioningTraceLossConfig trace_loss;
-  trace_loss.bucket = bucket;
+  trace_loss.bucket = std::string(bucket);
   trace_loss.type = TraceLossFunctionType(loss.type);
   trace_loss.scale = loss.scale;
   trace_loss.weight = loss.weight * extra_weight;
@@ -476,7 +496,7 @@ bool HasValidDepthPriorMetadata(const Image& image,
 }
 
 GlobalPositioningTraceLossConfig GeometryTraceLossConfig(
-    const GlobalPositionerOptions& options, const std::string& bucket) {
+    const GlobalPositionerOptions& options, std::string_view bucket) {
   if (bucket == "geometry_uncalibrated_downweighted") {
     return TraceLossConfig(bucket,
                            options.loss,
@@ -511,7 +531,7 @@ GlobalPositioningTraceLossConfig GeometryTraceLossConfig(
 }
 
 GlobalPositioningTraceLossConfig DepthTraceLossConfig(
-    const GlobalPositionerOptions& options, const std::string& bucket) {
+    const GlobalPositionerOptions& options, std::string_view bucket) {
   if (bucket == "depth_runtime_outlier_soft_fallback") {
     return TraceLossConfig(bucket,
                            options.loss_soft_outlier_fallback,
@@ -600,7 +620,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     tracer_->WriteEvent("problem_setup_started", "setup_problem");
 
     // Setup the problem.
+    auto timing_start = NowForTiming();
     SetupProblem(pose_graph, reconstruction);
+    diagnostics_.time_setup_problem = SecondsSince(timing_start);
 
     tracer_->WriteEvent(
         "problem_setup_finished",
@@ -609,7 +631,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
 
     // Initialize camera translations to be random.
     // Also, convert the camera pose translation to be the camera center.
+    timing_start = NowForTiming();
     InitializeRandomPositions(pose_graph, reconstruction);
+    diagnostics_.time_initialize_random_positions = SecondsSince(timing_start);
 
     tracer_->WriteEvent(
         "initialization_finished",
@@ -628,7 +652,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
         !options_.initial_dmap_scales.has_value();
     std::string dmap_scale_skip_reason;
     if (initialize_dmap_scales) {
+      timing_start = NowForTiming();
       InitializeDepthMapScalesFromObservations(reconstruction);
+      diagnostics_.time_initialize_dmap_scales = SecondsSince(timing_start);
     } else if (!options_.use_metric_depth_constraint) {
       dmap_scale_skip_reason = "metric_depth_disabled";
     } else if (!options_.use_init) {
@@ -646,7 +672,10 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
     tracer_->WriteEvent("residual_build_started", "problem_build");
 
     // Add the point to camera constraints to the problem.
+    timing_start = NowForTiming();
     AddPointToCameraConstraints(reconstruction);
+    diagnostics_.time_add_point_to_camera_constraints =
+        SecondsSince(timing_start);
 
     tracer_->WriteEvent(
         "problem_built",
@@ -660,12 +689,16 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
          {"num_dmap_scales", TraceValue::UInt(dmap_scales_.size())}});
 
     if (options_.use_parameter_block_ordering) {
+      timing_start = NowForTiming();
       AddCamerasAndPointsToParameterGroups(reconstruction);
+      diagnostics_.time_add_parameter_groups = SecondsSince(timing_start);
     }
 
     // Parameterize the variables, set image poses / tracks / scales to be
     // constant if desired.
+    timing_start = NowForTiming();
     ParameterizeVariables(reconstruction);
+    diagnostics_.time_parameterize_variables = SecondsSince(timing_start);
 
     tracer_->WriteEvent(
         "parameterization_finished",
@@ -723,7 +756,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
                 scales_,
                 bata_scale_indices_,
                 dmap_scales_);
+    timing_start = NowForTiming();
     ceres::Solve(solver_options, problem_.get(), &summary);
+    diagnostics_.time_ceres_solve = SecondsSince(timing_start);
     if (const char* path = GpStateDumpPath()) {
       FILE* f = std::fopen(path, "a");
       if (f != nullptr) {
@@ -796,7 +831,9 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
                 scales_,
                 bata_scale_indices_,
                 dmap_scales_);
+    timing_start = NowForTiming();
     ConvertBackResults(reconstruction);
+    diagnostics_.time_convert_back_results = SecondsSince(timing_start);
     tracer_->WriteEvent(
         "results_converted",
         "convert_results",
@@ -958,6 +995,8 @@ void GlobalPositioner::AddPointToCameraConstraints(
           << " point to camera constraints were added to the position "
              "estimation problem.";
 
+  auto timing_start = NowForTiming();
+
   // Down-weight uncalibrated cameras.
   if (options_.apply_uncalibrated_loss_downweight) {
     loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
@@ -1005,28 +1044,40 @@ void GlobalPositioner::AddPointToCameraConstraints(
       dmap_scale_observation_counts_[image_id] = 0;
     }
   }
+  diagnostics_.time_add_ptcam_setup += SecondsSince(timing_start);
 
   depth_outliers_.clear();
   if (options_.use_metric_depth_constraint && options_.filter_depth_outliers) {
+    timing_start = NowForTiming();
     FilterDepthOutliers(reconstruction);
+    diagnostics_.time_add_ptcam_filter_depth_outliers +=
+        SecondsSince(timing_start);
   }
+  const MetricDepthOptions metric_depth_options =
+      CreateMetricDepthOptions(options_);
 
   if (EnvValue("MPSFM_GP_RESIDUAL_ORDER_MODE") == "legacy_unordered") {
+    timing_start = NowForTiming();
     for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
       if (NumRegularObservationsForMinViewGate(point3D.track) <
           static_cast<size_t>(options_.min_num_view_per_track)) {
         continue;
       }
-      AddPoint3DToProblem(point3D_id, reconstruction);
+      AddPoint3DToProblem(point3D_id, reconstruction, metric_depth_options);
     }
+    diagnostics_.time_add_ptcam_point_loop += SecondsSince(timing_start);
   } else {
+    timing_start = NowForTiming();
     std::vector<point3D_t> point3D_ids;
     point3D_ids.reserve(reconstruction.NumPoints3D());
     for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
       point3D_ids.push_back(point3D_id);
     }
     std::sort(point3D_ids.begin(), point3D_ids.end());
+    diagnostics_.time_add_ptcam_collect_sort_points +=
+        SecondsSince(timing_start);
 
+    timing_start = NowForTiming();
     for (const point3D_t point3D_id : point3D_ids) {
       const Point3D& point3D = reconstruction.Point3D(point3D_id);
       if (NumRegularObservationsForMinViewGate(point3D.track) <
@@ -1051,9 +1102,9 @@ void GlobalPositioner::AddPointToCameraConstraints(
             skip.image_id = observation.image_id;
             skip.point2D_idx = observation.point2D_idx;
             skip.is_lc_observation = true;
-            const std::string skip_reason =
-                options_.use_lc_observations ? "track_min_view_gate"
-                                             : "lc_observation_disabled";
+            const std::string skip_reason = options_.use_lc_observations
+                                                ? "track_min_view_gate"
+                                                : "lc_observation_disabled";
             tracer_->RecordSkip(skip, skip_reason);
             if (options_.use_metric_depth_constraint) {
               skip.residual_type = "metric_depth";
@@ -1063,13 +1114,15 @@ void GlobalPositioner::AddPointToCameraConstraints(
         }
         continue;
       }
-      AddPoint3DToProblem(point3D_id, reconstruction);
+      AddPoint3DToProblem(point3D_id, reconstruction, metric_depth_options);
     }
+    diagnostics_.time_add_ptcam_point_loop += SecondsSince(timing_start);
   }
 
   // Emit one scale-prior residual per image with depth observations,
   // weighted by obs_count so dense-depth images get stronger priors.
   if (options_.use_metric_depth_constraint) {
+    timing_start = NowForTiming();
     for (const image_t image_id : SortedKeys(dmap_scales_)) {
       double& scale = dmap_scales_.at(image_id);
       auto count_it = dmap_scale_observation_counts_.find(image_id);
@@ -1087,12 +1140,14 @@ void GlobalPositioner::AddPointToCameraConstraints(
           CovarianceWeightedCostFunctor<NormalPriorCostFunctor<1>>::Create(
               cov_1x1, prior_vec);
       if (scale_prior_cost == nullptr) {
-        GlobalPositioningResidualDescriptor skip;
-        skip.residual_type = "scale_prior";
-        skip.image_id = image_id;
-        skip.dmap_scale_image_id = image_id;
-        skip.loss_bucket = "scale_prior";
-        tracer_->RecordSkip(skip, "scale_prior_cost_create_failed");
+        if (tracer_->ResidualLedgerEnabled()) {
+          GlobalPositioningResidualDescriptor skip;
+          skip.residual_type = "scale_prior";
+          skip.image_id = image_id;
+          skip.dmap_scale_image_id = image_id;
+          skip.loss_bucket = "scale_prior";
+          tracer_->RecordSkip(skip, "scale_prior_cost_create_failed");
+        }
         continue;
       }
 
@@ -1114,29 +1169,36 @@ void GlobalPositioner::AddPointToCameraConstraints(
       residual_order_hash_ = StableHashAppend(residual_order_hash_, image_id);
       ++diagnostics_.num_scale_prior_residuals;
 
-      GlobalPositioningResidualDescriptor residual;
-      residual.residual_type = "scale_prior";
-      residual.image_id = image_id;
-      residual.dmap_scale_image_id = image_id;
-      residual.loss_bucket = "scale_prior";
-      residual.loss = TraceLossConfig("scale_prior",
-                                      options_.loss_scale_prior,
-                                      "GlobalPositionerOptions."
-                                      "loss_scale_prior+observation_count",
-                                      obs_count,
-                                      obs_count);
-      residual.fixed_parameters = TraceScalePriorFixedParameters(
-          options_.use_log_scale_for_depth_map_scales,
-          options_.scale_prior_stddev);
-      tracer_->RecordResidual(
-          residual,
-          scale_prior_cost,
-          obs_count_scaled_loss,
-          {&scale},
-          {TraceParameterBlock("dmap_scale", "dmap_scale", image_id)});
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor residual;
+        residual.residual_type = "scale_prior";
+        residual.image_id = image_id;
+        residual.dmap_scale_image_id = image_id;
+        residual.loss_bucket = "scale_prior";
+        residual.loss = TraceLossConfig("scale_prior",
+                                        options_.loss_scale_prior,
+                                        "GlobalPositionerOptions."
+                                        "loss_scale_prior+observation_count",
+                                        obs_count,
+                                        obs_count);
+        residual.fixed_parameters = TraceScalePriorFixedParameters(
+            options_.use_log_scale_for_depth_map_scales,
+            options_.scale_prior_stddev);
+        tracer_->RecordResidual(
+            residual,
+            scale_prior_cost,
+            obs_count_scaled_loss,
+            {&scale},
+            {TraceParameterBlock("dmap_scale", "dmap_scale", image_id)});
+      }
     }
+    diagnostics_.time_add_ptcam_scale_priors += SecondsSince(timing_start);
   }
-  tracer_->RecordBucketSummaries();
+  if (tracer_->ResidualLedgerEnabled()) {
+    timing_start = NowForTiming();
+    tracer_->RecordBucketSummaries();
+    diagnostics_.time_add_ptcam_bucket_summaries += SecondsSince(timing_start);
+  }
   VLOG(2) << "GP: residual blocks=" << problem_->NumResidualBlocks()
           << ", parameter blocks=" << problem_->NumParameterBlocks()
           << ", scales=" << scales_.size()
@@ -1144,8 +1206,11 @@ void GlobalPositioner::AddPointToCameraConstraints(
           << ", dmap_scales=" << dmap_scales_.size();
 }
 
-void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
-                                           Reconstruction& reconstruction) {
+void GlobalPositioner::AddPoint3DToProblem(
+    point3D_t point3D_id,
+    Reconstruction& reconstruction,
+    const MetricDepthOptions& metric_depth_options) {
+  auto timing_start = NowForTiming();
   const bool random_initialization = options_.optimize_points &&
                                      options_.generate_random_points &&
                                      !options_.use_init;
@@ -1161,22 +1226,33 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
     point3D.xyz = debug_it->second;
   }
   initial_point3D_xyz_[point3D_id] = point3D.xyz;
+  diagnostics_.time_add_point3D_init += SecondsSince(timing_start);
 
   // Walk regular elements then LC elements as separate passes — they
   // share the residual layout but use different loss function groups.
+  timing_start = NowForTiming();
   for (const auto& observation : point3D.track.Elements()) {
-    AddObservationToProblem(
-        point3D_id, observation, random_initialization, reconstruction);
+    AddObservationToProblem(point3D_id,
+                            observation,
+                            random_initialization,
+                            reconstruction,
+                            metric_depth_options);
   }
+  diagnostics_.time_add_point3D_regular_observations +=
+      SecondsSince(timing_start);
   if (options_.use_lc_observations) {
+    timing_start = NowForTiming();
     for (const auto& observation : point3D.track.lc_elements) {
       AddObservationToProblem(point3D_id,
                               observation,
                               random_initialization,
                               reconstruction,
+                              metric_depth_options,
                               /*is_lc_observation=*/true);
     }
+    diagnostics_.time_add_point3D_lc_observations += SecondsSince(timing_start);
   } else if (tracer_->ResidualLedgerEnabled()) {
+    timing_start = NowForTiming();
     for (const auto& observation : point3D.track.lc_elements) {
       GlobalPositioningResidualDescriptor skip;
       skip.residual_type = "bata_ref_frame";
@@ -1190,26 +1266,33 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
         tracer_->RecordSkip(skip, "lc_observation_disabled");
       }
     }
+    diagnostics_.time_add_point3D_lc_observations += SecondsSince(timing_start);
   }
 }
 
-void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
-                                               const TrackElement& observation,
-                                               bool random_initialization,
-                                               Reconstruction& reconstruction,
-                                               bool is_lc_observation) {
+void GlobalPositioner::AddObservationToProblem(
+    point3D_t point3D_id,
+    const TrackElement& observation,
+    bool random_initialization,
+    Reconstruction& reconstruction,
+    const MetricDepthOptions& metric_depth_options,
+    bool is_lc_observation) {
+  ScopedAccumulatedTimer total_timer(&diagnostics_.time_add_observation_total);
   Point3D& point3D = reconstruction.Point3D(point3D_id);
+  const bool trace_residual_ledger = tracer_->ResidualLedgerEnabled();
   if (!reconstruction.ExistsImage(observation.image_id)) {
-    GlobalPositioningResidualDescriptor skip;
-    skip.residual_type = "bata_ref_frame";
-    skip.point3D_id = point3D_id;
-    skip.image_id = observation.image_id;
-    skip.point2D_idx = observation.point2D_idx;
-    skip.is_lc_observation = is_lc_observation;
-    tracer_->RecordSkip(skip, "missing_image");
-    if (options_.use_metric_depth_constraint) {
-      skip.residual_type = "metric_depth";
+    if (trace_residual_ledger) {
+      GlobalPositioningResidualDescriptor skip;
+      skip.residual_type = "bata_ref_frame";
+      skip.point3D_id = point3D_id;
+      skip.image_id = observation.image_id;
+      skip.point2D_idx = observation.point2D_idx;
+      skip.is_lc_observation = is_lc_observation;
       tracer_->RecordSkip(skip, "missing_image");
+      if (options_.use_metric_depth_constraint) {
+        skip.residual_type = "metric_depth";
+        tracer_->RecordSkip(skip, "missing_image");
+      }
     }
     return;
   }
@@ -1217,37 +1300,41 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   Image& image = reconstruction.Image(observation.image_id);
   Camera& camera = reconstruction.Camera(image.CameraId());
   GlobalPositioningResidualDescriptor observation_record;
-  observation_record.point3D_id = point3D_id;
-  observation_record.image_id = observation.image_id;
-  observation_record.point2D_idx = observation.point2D_idx;
-  observation_record.frame_id = image.FrameId();
-  observation_record.camera_id = image.CameraId();
-  observation_record.sensor_id = camera.SensorId();
-  observation_record.is_lc_observation = is_lc_observation;
-  observation_record.is_ref_in_frame = image.IsRefInFrame();
-  observation_record.camera_has_prior_focal_length =
-      camera.has_prior_focal_length;
-  observation_record.has_depth_prior =
-      HasValidDepthPriorMetadata(image, observation);
-  if (observation_record.has_depth_prior) {
-    observation_record.depth_prior =
-        image.depth_priors[observation.point2D_idx];
-    observation_record.depth_sigma =
-        image.depth_prior_stddevs[observation.point2D_idx];
-  }
-  observation_record.depth_outlier_source =
-      DepthOutlierSource(depth_outliers_, image, observation);
-  if (options_.use_metric_depth_constraint) {
-    observation_record.dmap_scale_image_id = observation.image_id;
+  if (trace_residual_ledger) {
+    observation_record.point3D_id = point3D_id;
+    observation_record.image_id = observation.image_id;
+    observation_record.point2D_idx = observation.point2D_idx;
+    observation_record.frame_id = image.FrameId();
+    observation_record.camera_id = image.CameraId();
+    observation_record.sensor_id = camera.SensorId();
+    observation_record.is_lc_observation = is_lc_observation;
+    observation_record.is_ref_in_frame = image.IsRefInFrame();
+    observation_record.camera_has_prior_focal_length =
+        camera.has_prior_focal_length;
+    observation_record.has_depth_prior =
+        HasValidDepthPriorMetadata(image, observation);
+    if (observation_record.has_depth_prior) {
+      observation_record.depth_prior =
+          image.depth_priors[observation.point2D_idx];
+      observation_record.depth_sigma =
+          image.depth_prior_stddevs[observation.point2D_idx];
+    }
+    observation_record.depth_outlier_source =
+        DepthOutlierSource(depth_outliers_, image, observation);
+    if (options_.use_metric_depth_constraint) {
+      observation_record.dmap_scale_image_id = observation.image_id;
+    }
   }
 
   if (!image.HasPose()) {
-    observation_record.residual_type =
-        image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
-    tracer_->RecordSkip(observation_record, "image_without_pose");
-    if (options_.use_metric_depth_constraint) {
-      observation_record.residual_type = "metric_depth";
+    if (trace_residual_ledger) {
+      observation_record.residual_type =
+          image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
       tracer_->RecordSkip(observation_record, "image_without_pose");
+      if (options_.use_metric_depth_constraint) {
+        observation_record.residual_type = "metric_depth";
+        tracer_->RecordSkip(observation_record, "image_without_pose");
+      }
     }
     return;
   }
@@ -1257,14 +1344,18 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     feature_undist = image.features_undist[observation.point2D_idx];
   } else {
     const std::optional<Eigen::Vector2d> cam_point =
-        image.CameraPtr()->CamFromImg(image.Point2D(observation.point2D_idx).xy);
+        image.CameraPtr()->CamFromImg(
+            image.Point2D(observation.point2D_idx).xy);
     if (!cam_point.has_value()) {
-      observation_record.residual_type =
-          image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
-      tracer_->RecordSkip(observation_record, "invalid_keypoint_projection");
-      if (options_.use_metric_depth_constraint) {
-        observation_record.residual_type = "metric_depth";
+      if (trace_residual_ledger) {
+        observation_record.residual_type =
+            image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
         tracer_->RecordSkip(observation_record, "invalid_keypoint_projection");
+        if (options_.use_metric_depth_constraint) {
+          observation_record.residual_type = "metric_depth";
+          tracer_->RecordSkip(observation_record,
+                              "invalid_keypoint_projection");
+        }
       }
       LOG(WARNING)
           << "Ignoring feature because it failed to project: point3D_id="
@@ -1275,12 +1366,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
     feature_undist = cam_point->homogeneous().normalized();
   }
   if (feature_undist.array().isNaN().any()) {
-    observation_record.residual_type =
-        image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
-    tracer_->RecordSkip(observation_record, "invalid_keypoint_projection");
-    if (options_.use_metric_depth_constraint) {
-      observation_record.residual_type = "metric_depth";
+    if (trace_residual_ledger) {
+      observation_record.residual_type =
+          image.IsRefInFrame() ? "bata_ref_frame" : "bata_variable_rig";
       tracer_->RecordSkip(observation_record, "invalid_keypoint_projection");
+      if (options_.use_metric_depth_constraint) {
+        observation_record.residual_type = "metric_depth";
+        tracer_->RecordSkip(observation_record, "invalid_keypoint_projection");
+      }
     }
     LOG(WARNING)
         << "Ignoring feature because it failed to undistort: point3D_id="
@@ -1292,20 +1385,29 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   const Eigen::Vector3d cam_from_point3D_dir =
       image.CamFromWorld().rotation().inverse() * feature_undist;
 
-  const std::string scale_key = GpObservationKey(
-      point3D_id, observation.image_id, observation.point2D_idx, is_lc_observation);
-  if (!options_.debug_initial_bata_scales.empty() &&
-      options_.debug_initial_bata_scales.find(scale_key) ==
-          options_.debug_initial_bata_scales.end()) {
-    return;
+  const bool needs_bata_scale_key = options_.record_debug_bata_scales ||
+                                    !options_.debug_initial_bata_scales.empty();
+  std::string scale_key;
+  if (needs_bata_scale_key) {
+    scale_key = GpObservationKey(point3D_id,
+                                 observation.image_id,
+                                 observation.point2D_idx,
+                                 is_lc_observation);
+    if (!options_.debug_initial_bata_scales.empty() &&
+        options_.debug_initial_bata_scales.find(scale_key) ==
+            options_.debug_initial_bata_scales.end()) {
+      return;
+    }
   }
 
   CHECK_GE(scales_.capacity(), scales_.size())
       << "Not enough capacity was reserved for the scales.";
   double& scale = scales_.emplace_back(1);
   const size_t scale_index = scales_.size() - 1;
-  tracer_->RecordScaleObservation(
-      scale_index, point3D_id, observation, is_lc_observation);
+  if (trace_residual_ledger) {
+    tracer_->RecordScaleObservation(
+        scale_index, point3D_id, observation, is_lc_observation);
+  }
 
   if (!options_.generate_scales &&
       (random_initialization || options_.initialize_warm_start_scales)) {
@@ -1315,14 +1417,17 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                      cam_from_point3D_dir.dot(cam_from_point3D_translation) /
                          cam_from_point3D_translation.squaredNorm());
   }
-  const auto debug_scale_it =
-      options_.debug_initial_bata_scales.find(scale_key);
-  if (debug_scale_it != options_.debug_initial_bata_scales.end()) {
-    scale = debug_scale_it->second;
+  if (!options_.debug_initial_bata_scales.empty()) {
+    const auto debug_scale_it =
+        options_.debug_initial_bata_scales.find(scale_key);
+    if (debug_scale_it != options_.debug_initial_bata_scales.end()) {
+      scale = debug_scale_it->second;
+    }
   }
-  initial_bata_scales_[scale_key] = scale;
-  bata_scale_indices_[scale_key] = scales_.size() - 1;
-  double debug_dmap_scale = -1.0;
+  if (options_.record_debug_bata_scales) {
+    initial_bata_scales_[scale_key] = scale;
+    bata_scale_indices_[scale_key] = scales_.size() - 1;
+  }
 
   // For calibrated and uncalibrated cameras, use different loss
   // functions
@@ -1330,7 +1435,7 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   ceres::LossFunction* loss_function =
       (camera.has_prior_focal_length) ? loss_function_ptcam_calibrated_.get()
                                       : loss_function_ptcam_uncalibrated_.get();
-  std::string geometry_loss_bucket =
+  std::string_view geometry_loss_bucket =
       camera.has_prior_focal_length
           ? "geometry_calibrated"
           : (options_.apply_uncalibrated_loss_downweight
@@ -1340,8 +1445,9 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
   const bool image_is_track_anchor =
       observation.point2D_idx < image.is_track_anchor.size() &&
       image.is_track_anchor[observation.point2D_idx];
-  const bool image_is_inlier = observation.point2D_idx < image.is_inlier.size() &&
-                               image.is_inlier[observation.point2D_idx];
+  const bool image_is_inlier =
+      observation.point2D_idx < image.is_inlier.size() &&
+      image.is_inlier[observation.point2D_idx];
 
   // Match the pyglomap GP loss cascade: per-observation labels are stored on
   // Image masks, not on COLMAP TrackElement flags.
@@ -1392,11 +1498,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
     }
 
+    auto timing_start = NowForTiming();
     problem_->AddResidualBlock(cost_function,
                                loss_function,
                                MutableCenterDataForImage(image),
                                point3D.xyz.data(),
                                &scale);
+    diagnostics_.time_add_observation_bata_residual +=
+        SecondsSince(timing_start);
     residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
     residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
     residual_order_hash_ =
@@ -1412,56 +1521,73 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
       ++diagnostics_.num_regular_observations_used;
     }
 
-    GlobalPositioningResidualDescriptor residual = observation_record;
-    residual.residual_type = "bata_ref_frame";
-    residual.loss_bucket = geometry_loss_bucket;
-    residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
-    residual.uses_keypoint_covariance = uses_keypoint_covariance;
-    residual.fixed_parameters = TraceBataRefFrameFixedParameters(
-        cam_from_point3D_dir, keypoint_covariance_world);
-    tracer_->RecordResidual(
-        residual,
-        cost_function,
-        loss_function,
-        {MutableCenterDataForImage(image), point3D.xyz.data(), &scale},
-        {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
-         TraceParameterBlock("point3D", "point3D", point3D_id),
-         TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+    if (trace_residual_ledger) {
+      GlobalPositioningResidualDescriptor residual = observation_record;
+      residual.residual_type = "bata_ref_frame";
+      residual.loss_bucket = std::string(geometry_loss_bucket);
+      residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
+      residual.uses_keypoint_covariance = uses_keypoint_covariance;
+      residual.fixed_parameters = TraceBataRefFrameFixedParameters(
+          cam_from_point3D_dir, keypoint_covariance_world);
+      timing_start = NowForTiming();
+      tracer_->RecordResidual(
+          residual,
+          cost_function,
+          loss_function,
+          {MutableCenterDataForImage(image), point3D.xyz.data(), &scale},
+          {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+           TraceParameterBlock("point3D", "point3D", point3D_id),
+           TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+      diagnostics_.time_add_observation_record_residual +=
+          SecondsSince(timing_start);
+    }
 
     // 1-D MetricDepthError: anchors absolute scale via depth prior.
     if (options_.use_metric_depth_constraint) {
-      AddMetricDepthResidual(
-          point3D_id, observation, is_lc_observation, reconstruction);
+      AddMetricDepthResidual(point3D_id,
+                             point3D,
+                             image,
+                             image.CamFromWorld().rotation(),
+                             MutableCenterDataForImage(image),
+                             observation,
+                             is_lc_observation,
+                             metric_depth_options);
+    } else {
+      if (trace_residual_ledger) {
+        GlobalPositioningResidualDescriptor skip = observation_record;
+        skip.residual_type = "metric_depth";
+        tracer_->RecordSkip(skip, "metric_depth_disabled");
+      }
+    }
+    if (GpObsDumpFile() != nullptr) {
+      double debug_dmap_scale = -1.0;
       const auto dmap_scale_it = dmap_scales_.find(observation.image_id);
       if (dmap_scale_it != dmap_scales_.end()) {
         debug_dmap_scale = dmap_scale_it->second;
       }
-    } else {
-      GlobalPositioningResidualDescriptor skip = observation_record;
-      skip.residual_type = "metric_depth";
-      tracer_->RecordSkip(skip, "metric_depth_disabled");
+      const bool depth_valid =
+          observation.point2D_idx < image.depth_prior_validity.size() &&
+          image.depth_prior_validity[observation.point2D_idx];
+      const std::pair<image_t, point2D_t> obs_key{observation.image_id,
+                                                  observation.point2D_idx};
+      const bool is_runtime_depth_outlier = depth_outliers_.count(obs_key) > 0;
+      GpObsDumpObservation("obs",
+                           point3D_id,
+                           observation,
+                           is_lc_observation,
+                           feature_undist,
+                           cam_from_point3D_dir,
+                           image,
+                           point3D,
+                           CenterForImage(image),
+                           options_.use_metric_depth_constraint &&
+                               depth_valid &&
+                               !(is_runtime_depth_outlier && is_lc_observation),
+                           is_runtime_depth_outlier && !is_lc_observation,
+                           is_runtime_depth_outlier,
+                           scale,
+                           debug_dmap_scale);
     }
-    const bool depth_valid =
-        observation.point2D_idx < image.depth_prior_validity.size() &&
-        image.depth_prior_validity[observation.point2D_idx];
-    const std::pair<image_t, point2D_t> obs_key{observation.image_id,
-                                                observation.point2D_idx};
-    const bool is_runtime_depth_outlier = depth_outliers_.count(obs_key) > 0;
-    GpObsDumpObservation("obs",
-                         point3D_id,
-                         observation,
-                         is_lc_observation,
-                         feature_undist,
-                         cam_from_point3D_dir,
-                         image,
-                         point3D,
-                         CenterForImage(image),
-                         options_.use_metric_depth_constraint && depth_valid &&
-                             !(is_runtime_depth_outlier && is_lc_observation),
-                         is_runtime_depth_outlier && !is_lc_observation,
-                         is_runtime_depth_outlier,
-                         scale,
-                         debug_dmap_scale);
   } else {
     // If the image is part of a camera rig, use the RigBATA error.
 
@@ -1478,11 +1604,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
               cam_from_point3D_dir, cam_from_rig_dir);
 
+      auto timing_start = NowForTiming();
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
                                  point3D.xyz.data(),
                                  MutableCenterDataForImage(image),
                                  &scale);
+      diagnostics_.time_add_observation_bata_residual +=
+          SecondsSince(timing_start);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
       residual_order_hash_ =
@@ -1498,20 +1627,26 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
         ++diagnostics_.num_regular_observations_used;
       }
 
-      GlobalPositioningResidualDescriptor residual = observation_record;
-      residual.residual_type = "bata_constant_rig";
-      residual.loss_bucket = geometry_loss_bucket;
-      residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
-      residual.fixed_parameters = TraceBataConstantRigFixedParameters(
-          cam_from_point3D_dir, cam_from_rig_dir);
-      tracer_->RecordResidual(
-          residual,
-          cost_function,
-          loss_function,
-          {point3D.xyz.data(), MutableCenterDataForImage(image), &scale},
-          {TraceParameterBlock("point3D", "point3D", point3D_id),
-           TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
-           TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+      if (trace_residual_ledger) {
+        GlobalPositioningResidualDescriptor residual = observation_record;
+        residual.residual_type = "bata_constant_rig";
+        residual.loss_bucket = std::string(geometry_loss_bucket);
+        residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
+        residual.fixed_parameters = TraceBataConstantRigFixedParameters(
+            cam_from_point3D_dir, cam_from_rig_dir);
+        timing_start = NowForTiming();
+        tracer_->RecordResidual(
+            residual,
+            cost_function,
+            loss_function,
+            {point3D.xyz.data(), MutableCenterDataForImage(image), &scale},
+            {TraceParameterBlock("point3D", "point3D", point3D_id),
+             TraceParameterBlock(
+                 "frame_center", "frame_center", image.FrameId()),
+             TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+        diagnostics_.time_add_observation_record_residual +=
+            SecondsSince(timing_start);
+      }
     } else {
       // If the cam_from_rig contains nan values, it needs to be re-estimated.
       // Initialize cams_in_rig_ if not already done.
@@ -1527,12 +1662,15 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           RigBATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir,
                                                       rig_from_world_rotation);
 
+      auto timing_start = NowForTiming();
       problem_->AddResidualBlock(cost_function,
                                  loss_function,
                                  point3D.xyz.data(),
                                  MutableCenterDataForImage(image),
                                  cams_in_rig_[sensor_id].data(),
                                  &scale);
+      diagnostics_.time_add_observation_bata_residual +=
+          SecondsSince(timing_start);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
       residual_order_hash_ =
@@ -1548,70 +1686,78 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
         ++diagnostics_.num_regular_observations_used;
       }
 
-      GlobalPositioningResidualDescriptor residual = observation_record;
-      residual.residual_type = "bata_variable_rig";
-      residual.loss_bucket = geometry_loss_bucket;
-      residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
-      residual.fixed_parameters = TraceBataVariableRigFixedParameters(
-          cam_from_point3D_dir, rig_from_world_rotation);
-      tracer_->RecordResidual(
-          residual,
-          cost_function,
-          loss_function,
-          {point3D.xyz.data(),
-           MutableCenterDataForImage(image),
-           cams_in_rig_[sensor_id].data(),
-           &scale},
-          {TraceParameterBlock("point3D", "point3D", point3D_id),
-           TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
-           TraceParameterBlock("cam_in_rig", "cam_in_rig", sensor_id.id),
-           TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+      if (trace_residual_ledger) {
+        GlobalPositioningResidualDescriptor residual = observation_record;
+        residual.residual_type = "bata_variable_rig";
+        residual.loss_bucket = std::string(geometry_loss_bucket);
+        residual.loss = GeometryTraceLossConfig(options_, geometry_loss_bucket);
+        residual.fixed_parameters = TraceBataVariableRigFixedParameters(
+            cam_from_point3D_dir, rig_from_world_rotation);
+        timing_start = NowForTiming();
+        tracer_->RecordResidual(
+            residual,
+            cost_function,
+            loss_function,
+            {point3D.xyz.data(),
+             MutableCenterDataForImage(image),
+             cams_in_rig_[sensor_id].data(),
+             &scale},
+            {TraceParameterBlock("point3D", "point3D", point3D_id),
+             TraceParameterBlock(
+                 "frame_center", "frame_center", image.FrameId()),
+             TraceParameterBlock("cam_in_rig", "cam_in_rig", sensor_id.id),
+             TraceParameterBlock("bata_scale", "bata_scale", scale_index)});
+        diagnostics_.time_add_observation_record_residual +=
+            SecondsSince(timing_start);
+      }
     }
     if (!options_.use_metric_depth_constraint) {
-      GlobalPositioningResidualDescriptor skip = observation_record;
-      skip.residual_type = "metric_depth";
-      tracer_->RecordSkip(skip, "metric_depth_disabled");
+      if (trace_residual_ledger) {
+        GlobalPositioningResidualDescriptor skip = observation_record;
+        skip.residual_type = "metric_depth";
+        tracer_->RecordSkip(skip, "metric_depth_disabled");
+      }
     }
   }
 
   problem_->SetParameterLowerBound(&scale, 0, 1e-5);
 }
 
-void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
-                                              const TrackElement& observation,
-                                              bool is_lc_observation,
-                                              Reconstruction& reconstruction) {
-  if (!reconstruction.ExistsImage(observation.image_id)) {
-    GlobalPositioningResidualDescriptor skip;
-    skip.residual_type = "metric_depth";
-    skip.point3D_id = point3D_id;
-    skip.image_id = observation.image_id;
-    skip.point2D_idx = observation.point2D_idx;
-    skip.is_lc_observation = is_lc_observation;
-    tracer_->RecordSkip(skip, "missing_image");
-    return;
-  }
-  const Image& image = reconstruction.Image(observation.image_id);
-  const Camera& camera = reconstruction.Camera(image.CameraId());
+void GlobalPositioner::AddMetricDepthResidual(
+    point3D_t point3D_id,
+    Point3D& point3D,
+    const Image& image,
+    const Eigen::Quaterniond& camera_rotation,
+    double* const center_data,
+    const TrackElement& observation,
+    bool is_lc_observation,
+    const MetricDepthOptions& metric_depth_options) {
+  ScopedAccumulatedTimer total_timer(&diagnostics_.time_add_metric_depth_total);
+  const bool trace_residual_ledger = tracer_->ResidualLedgerEnabled();
 
   GlobalPositioningResidualDescriptor residual;
-  residual.residual_type = "metric_depth";
-  residual.point3D_id = point3D_id;
-  residual.image_id = observation.image_id;
-  residual.point2D_idx = observation.point2D_idx;
-  residual.frame_id = image.FrameId();
-  residual.camera_id = image.CameraId();
-  residual.sensor_id = camera.SensorId();
-  residual.is_lc_observation = is_lc_observation;
-  residual.is_ref_in_frame = image.IsRefInFrame();
-  residual.camera_has_prior_focal_length = camera.has_prior_focal_length;
-  residual.dmap_scale_image_id = observation.image_id;
-  residual.depth_outlier_source =
-      DepthOutlierSource(depth_outliers_, image, observation);
+  if (trace_residual_ledger) {
+    const Camera& camera = *image.CameraPtr();
+    residual.residual_type = "metric_depth";
+    residual.point3D_id = point3D_id;
+    residual.image_id = observation.image_id;
+    residual.point2D_idx = observation.point2D_idx;
+    residual.frame_id = image.FrameId();
+    residual.camera_id = image.CameraId();
+    residual.sensor_id = camera.SensorId();
+    residual.is_lc_observation = is_lc_observation;
+    residual.is_ref_in_frame = image.IsRefInFrame();
+    residual.camera_has_prior_focal_length = camera.has_prior_focal_length;
+    residual.dmap_scale_image_id = observation.image_id;
+    residual.depth_outlier_source =
+        DepthOutlierSource(depth_outliers_, image, observation);
+  }
 
   if (observation.point2D_idx >= image.depth_prior_validity.size() ||
       !image.depth_prior_validity[observation.point2D_idx]) {
-    tracer_->RecordSkip(residual, "missing_depth_validity");
+    if (trace_residual_ledger) {
+      tracer_->RecordSkip(residual, "missing_depth_validity");
+    }
     return;
   }
   THROW_CHECK_LT(observation.point2D_idx, image.depth_priors.size());
@@ -1619,21 +1765,28 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
 
   const double depth_prior = image.depth_priors[observation.point2D_idx];
   const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];
-  residual.has_depth_prior = true;
-  residual.depth_prior = depth_prior;
-  residual.depth_sigma = depth_sigma;
+  if (trace_residual_ledger) {
+    residual.has_depth_prior = true;
+    residual.depth_prior = depth_prior;
+    residual.depth_sigma = depth_sigma;
+  }
 
   if (depth_prior <= 0.0) {
-    tracer_->RecordSkip(residual, "invalid_depth_prior");
+    if (trace_residual_ledger) {
+      tracer_->RecordSkip(residual, "invalid_depth_prior");
+    }
     return;
   }
   if (depth_sigma <= 1e-9) {
-    tracer_->RecordSkip(residual, "invalid_depth_sigma");
+    if (trace_residual_ledger) {
+      tracer_->RecordSkip(residual, "invalid_depth_sigma");
+    }
     return;
   }
 
   // Lazy-insert dmap_scales_ on first valid observation per image.
-  if (dmap_scales_.find(observation.image_id) == dmap_scales_.end()) {
+  auto dmap_scale_it = dmap_scales_.find(observation.image_id);
+  if (dmap_scale_it == dmap_scales_.end()) {
     double init_value = options_.use_log_scale_for_depth_map_scales ? 0.0 : 1.0;
     if (options_.initial_dmap_scales.has_value()) {
       const auto& init_map = *options_.initial_dmap_scales;
@@ -1645,21 +1798,20 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
                          : it->second;
       }
     }
-    dmap_scales_[observation.image_id] = init_value;
+    dmap_scale_it =
+        dmap_scales_.emplace(observation.image_id, init_value).first;
     dmap_scale_observation_counts_[observation.image_id] = 0;
   }
   dmap_scale_observation_counts_[observation.image_id]++;
+  double& dmap_scale = dmap_scale_it->second;
 
-  const MetricDepthOptions metric_depth_options =
-      CreateMetricDepthOptions(options_);
-  ceres::CostFunction* metric_depth_cost =
-      MetricDepthError::Create(image.CamFromWorld().rotation(),
-                               depth_prior,
-                               depth_sigma,
-                               metric_depth_options);
+  ceres::CostFunction* metric_depth_cost = MetricDepthError::Create(
+      camera_rotation, depth_prior, depth_sigma, metric_depth_options);
 
   if (metric_depth_cost == nullptr) {
-    tracer_->RecordSkip(residual, "metric_depth_cost_create_failed");
+    if (trace_residual_ledger) {
+      tracer_->RecordSkip(residual, "metric_depth_cost_create_failed");
+    }
     return;
   }
 
@@ -1682,14 +1834,15 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   //   TrackElement::is_depth_outlier -> cached_loss_normal_depth_outlier_
   //   else              -> cached_loss_normal_depth_
   ceres::LossFunction* depth_loss = nullptr;
-  std::string depth_loss_bucket = "none";
+  std::string_view depth_loss_bucket = "none";
   const std::pair<image_t, point2D_t> obs_key{observation.image_id,
                                               observation.point2D_idx};
   const bool image_is_track_anchor =
       observation.point2D_idx < image.is_track_anchor.size() &&
       image.is_track_anchor[observation.point2D_idx];
-  const bool image_is_inlier = observation.point2D_idx < image.is_inlier.size() &&
-                               image.is_inlier[observation.point2D_idx];
+  const bool image_is_inlier =
+      observation.point2D_idx < image.is_inlier.size() &&
+      image.is_inlier[observation.point2D_idx];
   const bool image_is_depth_outlier =
       observation.point2D_idx < image.is_depth_outlier.size() &&
       image.is_depth_outlier[observation.point2D_idx];
@@ -1697,8 +1850,10 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
     if (is_lc_observation) {
       // LC outlier: skip depth residual entirely.
       delete metric_depth_cost;
-      residual.loss_bucket = "depth_lc";
-      tracer_->RecordSkip(residual, "runtime_lc_depth_outlier_skipped");
+      if (trace_residual_ledger) {
+        residual.loss_bucket = "depth_lc";
+        tracer_->RecordSkip(residual, "runtime_lc_depth_outlier_skipped");
+      }
       return;
     }
     // Non-LC outlier: soft fallback (HuberLoss(1)).
@@ -1725,17 +1880,13 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
     depth_loss_bucket = "depth_normal_default";
   }
 
-  Point3D& point3D = reconstruction.Point3D(point3D_id);
+  auto timing_start = NowForTiming();
   problem_->AddResidualBlock(metric_depth_cost,
                              depth_loss,
-                             MutableCenterDataForImage(image),
+                             center_data,
                              point3D.xyz.data(),
-                             &dmap_scales_[observation.image_id]);
-  if (!options_.use_log_scale_for_depth_map_scales) {
-    problem_->SetParameterLowerBound(&dmap_scales_[observation.image_id],
-                                     0,
-                                     1e-5);
-  }
+                             &dmap_scale);
+  diagnostics_.time_add_metric_depth_residual += SecondsSince(timing_start);
   residual_order_hash_ = StableHashAppend(residual_order_hash_, 2);
   residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
   residual_order_hash_ =
@@ -1745,20 +1896,24 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   residual_order_hash_ =
       StableHashAppend(residual_order_hash_, is_lc_observation ? 1 : 0);
   ++diagnostics_.num_metric_depth_residuals;
-  residual.loss_bucket = depth_loss_bucket;
-  residual.loss = DepthTraceLossConfig(options_, depth_loss_bucket);
-  residual.fixed_parameters = TraceMetricDepthFixedParameters(
-      image.CamFromWorld().rotation(), metric_depth_options);
-  tracer_->RecordResidual(
-      residual,
-      metric_depth_cost,
-      depth_loss,
-      {MutableCenterDataForImage(image),
-       point3D.xyz.data(),
-       &dmap_scales_[observation.image_id]},
-      {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
-       TraceParameterBlock("point3D", "point3D", point3D_id),
-       TraceParameterBlock("dmap_scale", "dmap_scale", observation.image_id)});
+  if (trace_residual_ledger) {
+    residual.loss_bucket = std::string(depth_loss_bucket);
+    residual.loss = DepthTraceLossConfig(options_, depth_loss_bucket);
+    residual.fixed_parameters =
+        TraceMetricDepthFixedParameters(camera_rotation, metric_depth_options);
+    timing_start = NowForTiming();
+    tracer_->RecordResidual(
+        residual,
+        metric_depth_cost,
+        depth_loss,
+        {center_data, point3D.xyz.data(), &dmap_scale},
+        {TraceParameterBlock("frame_center", "frame_center", image.FrameId()),
+         TraceParameterBlock("point3D", "point3D", point3D_id),
+         TraceParameterBlock(
+             "dmap_scale", "dmap_scale", observation.image_id)});
+    diagnostics_.time_add_metric_depth_record_residual +=
+        SecondsSince(timing_start);
+  }
 }
 
 void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
@@ -1771,12 +1926,12 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
 
   const std::string ordering_mode = EnvValue("MPSFM_GP_ORDERING_MODE");
   const bool split_scales = ordering_mode == "per_block_all";
-  const bool split_points =
-      split_scales || ordering_mode == "per_block_non_scales" ||
-      ordering_mode == "per_block_points";
-  const bool split_camera_like =
-      split_scales || ordering_mode == "per_block_non_scales" ||
-      ordering_mode == "per_block_camera_like";
+  const bool split_points = split_scales ||
+                            ordering_mode == "per_block_non_scales" ||
+                            ordering_mode == "per_block_points";
+  const bool split_camera_like = split_scales ||
+                                 ordering_mode == "per_block_non_scales" ||
+                                 ordering_mode == "per_block_camera_like";
   const bool legacy_unordered = ordering_mode == "legacy_unordered";
 
   // Add scale parameters first. In the default mode, keep legacy coarse
@@ -1927,9 +2082,9 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
         dmap_order_hash = StableHashAppend(dmap_order_hash, image_id);
       }
       log << "gp_parameter_ordering"
-          << " mode=" << (ordering_mode.empty() ? "legacy_coarse" : ordering_mode)
-          << " scales=" << scales_.size()
-          << " points=" << point3D_ids.size()
+          << " mode="
+          << (ordering_mode.empty() ? "legacy_coarse" : ordering_mode)
+          << " scales=" << scales_.size() << " points=" << point3D_ids.size()
           << " frame_centers=" << frame_ids.size()
           << " image_centers=" << image_ids.size()
           << " cams_in_rig=" << sensor_ids.size()
@@ -1937,8 +2092,7 @@ void GlobalPositioner::AddCamerasAndPointsToParameterGroups(
           << " point_order_hash=" << point_order_hash
           << " frame_order_hash=" << frame_order_hash
           << " sensor_order_hash=" << sensor_order_hash
-          << " dmap_order_hash=" << dmap_order_hash
-          << "\n";
+          << " dmap_order_hash=" << dmap_order_hash << "\n";
     }
   }
 }

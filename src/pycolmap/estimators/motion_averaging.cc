@@ -4,6 +4,10 @@
 
 #include "pycolmap/helpers.h"
 #include "pycolmap/pybind11_extension.h"
+#include "pycolmap/scene/types.h"
+
+#include <algorithm>
+#include <vector>
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
@@ -14,6 +18,174 @@ using namespace pybind11::literals;
 namespace py = pybind11;
 
 void BindGlobalPositioningTraceJacobianReducer(py::module& m);
+
+namespace {
+
+bool MaskValue(const std::vector<bool>& mask, const point2D_t point2D_idx) {
+  return static_cast<size_t>(point2D_idx) < mask.size() && mask[point2D_idx];
+}
+
+TrackElement CopyTrackElementWithGpFlags(const TrackElement& element,
+                                         const ImageMap& images) {
+  const Image& image = images.at(element.image_id);
+  TrackElement copied(element.image_id, element.point2D_idx);
+  copied.is_inlier = MaskValue(image.is_inlier, element.point2D_idx);
+  copied.is_depth_outlier =
+      MaskValue(image.is_depth_outlier, element.point2D_idx);
+  copied.is_track_anchor =
+      MaskValue(image.is_track_anchor, element.point2D_idx);
+  return copied;
+}
+
+Point3D CopyPoint3DWithGpFlags(const Point3D& point3D, const ImageMap& images) {
+  Point3D copied;
+  copied.xyz = point3D.xyz;
+  copied.color = point3D.color;
+  copied.error = point3D.error;
+
+  std::vector<TrackElement> elements;
+  elements.reserve(point3D.track.Elements().size());
+  for (const TrackElement& element : point3D.track.Elements()) {
+    elements.push_back(CopyTrackElementWithGpFlags(element, images));
+  }
+  copied.track.SetElements(std::move(elements));
+
+  copied.track.lc_elements.reserve(point3D.track.lc_elements.size());
+  for (const TrackElement& element : point3D.track.lc_elements) {
+    copied.track.lc_elements.push_back(
+        CopyTrackElementWithGpFlags(element, images));
+  }
+  return copied;
+}
+
+Image CopyImageForGlobalPositioning(const Image& image) {
+  std::vector<Point2D> points2D;
+  points2D.reserve(image.features.size());
+  for (const Eigen::Vector2d& feature : image.features) {
+    Point2D point2D;
+    point2D.xy = feature;
+    points2D.push_back(point2D);
+  }
+
+  Image copied;
+  copied.SetImageId(image.ImageId());
+  copied.SetCameraId(image.CameraId());
+  copied.SetName(image.Name());
+  copied.SetPoints2D(points2D);
+  copied.features = image.features;
+  copied.features_undist = image.features_undist;
+  copied.depth_priors = image.depth_priors;
+  copied.depth_prior_stddevs = image.depth_prior_stddevs;
+  copied.depth_prior_validity = image.depth_prior_validity;
+  copied.angular_stddevs = image.angular_stddevs;
+  copied.is_inlier = image.is_inlier;
+  copied.is_track_anchor = image.is_track_anchor;
+  copied.is_depth_outlier = image.is_depth_outlier;
+  copied.SetPixelCholeskyXY(image.PixelCholeskyXY());
+  return copied;
+}
+
+py::tuple BuildGlobalPositioningProblem(
+    const CorrespondenceGraph& correspondence_graph,
+    const Reconstruction& reconstruction,
+    const py::object& tracks) {
+  PoseGraph pose_graph;
+  pose_graph.Load(correspondence_graph);
+  for (const auto& [pair_id, pair] : correspondence_graph.ImagePairsMap()) {
+    if (!pair.is_valid && pose_graph.HasEdge(pair.image_id1, pair.image_id2)) {
+      pose_graph.SetInvalidEdge(pair_id);
+    }
+  }
+
+  Reconstruction gp_reconstruction;
+
+  std::vector<camera_t> camera_ids;
+  camera_ids.reserve(reconstruction.Cameras().size());
+  for (const auto& [camera_id, camera] : reconstruction.Cameras()) {
+    camera_ids.push_back(camera_id);
+  }
+  std::sort(camera_ids.begin(), camera_ids.end());
+  for (const camera_t camera_id : camera_ids) {
+    gp_reconstruction.AddCameraWithTrivialRig(
+        reconstruction.Cameras().at(camera_id));
+  }
+
+  std::vector<image_t> image_ids;
+  image_ids.reserve(reconstruction.Images().size());
+  for (const auto& [image_id, image] : reconstruction.Images()) {
+    image_ids.push_back(image_id);
+  }
+  std::sort(image_ids.begin(), image_ids.end());
+  for (const image_t image_id : image_ids) {
+    const Image& image = reconstruction.Images().at(image_id);
+    if (!image.HasPose()) {
+      continue;
+    }
+    gp_reconstruction.AddImageWithTrivialFrame(
+        CopyImageForGlobalPositioning(image), image.CamFromWorld());
+  }
+
+  const ImageMap& images = reconstruction.Images();
+  for (const py::handle item_handle : tracks.attr("items")()) {
+    const py::tuple item = py::reinterpret_borrow<py::tuple>(item_handle);
+    const point3D_t track_id = item[0].cast<point3D_t>();
+    const Point3D& point3D = item[1].cast<const Point3D&>();
+    gp_reconstruction.AddPoint3D(track_id,
+                                 CopyPoint3DWithGpFlags(point3D, images));
+  }
+
+  return py::make_tuple(std::move(pose_graph), std::move(gp_reconstruction));
+}
+
+Reconstruction BuildReconstructionFromTracks(
+    const Reconstruction& reconstruction,
+    const py::object& tracks,
+    const bool skip_zero_observation_points,
+    const bool update_point3D_errors) {
+  Reconstruction output;
+
+  std::vector<camera_t> camera_ids;
+  camera_ids.reserve(reconstruction.Cameras().size());
+  for (const auto& [camera_id, camera] : reconstruction.Cameras()) {
+    camera_ids.push_back(camera_id);
+  }
+  std::sort(camera_ids.begin(), camera_ids.end());
+  for (const camera_t camera_id : camera_ids) {
+    output.AddCameraWithTrivialRig(reconstruction.Cameras().at(camera_id));
+  }
+
+  std::vector<image_t> image_ids;
+  image_ids.reserve(reconstruction.Images().size());
+  for (const auto& [image_id, image] : reconstruction.Images()) {
+    image_ids.push_back(image_id);
+  }
+  std::sort(image_ids.begin(), image_ids.end());
+  for (const image_t image_id : image_ids) {
+    const Image& image = reconstruction.Images().at(image_id);
+    if (!image.HasPose()) {
+      continue;
+    }
+    output.AddImageWithTrivialFrame(CopyImageForGlobalPositioning(image),
+                                    image.CamFromWorld());
+  }
+
+  for (const py::handle item_handle : tracks.attr("items")()) {
+    const py::tuple item = py::reinterpret_borrow<py::tuple>(item_handle);
+    const point3D_t track_id = item[0].cast<point3D_t>();
+    const Point3D& point3D = item[1].cast<const Point3D&>();
+    if (skip_zero_observation_points && point3D.track.Length() == 0) {
+      continue;
+    }
+    output.AddPoint3D(track_id, point3D);
+  }
+
+  if (update_point3D_errors) {
+    output.UpdatePoint3DErrors();
+  }
+  return output;
+}
+
+}  // namespace
 
 void BindGlobalPositioner(py::module& m) {
   // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
@@ -203,6 +375,8 @@ void BindGlobalPositioner(py::module& m) {
                      &GlobalPositionerOptions::debug_initial_point3D_xyz)
       .def_readwrite("debug_initial_bata_scales",
                      &GlobalPositionerOptions::debug_initial_bata_scales)
+      .def_readwrite("record_debug_bata_scales",
+                     &GlobalPositionerOptions::record_debug_bata_scales)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -229,6 +403,22 @@ void BindGlobalPositioner(py::module& m) {
 
   MakeDataclass(PyGlobalPositionerOptions);
 
+  m.def("build_global_positioning_problem",
+        &BuildGlobalPositioningProblem,
+        "correspondence_graph"_a,
+        "reconstruction"_a,
+        "tracks"_a,
+        "Build the temporary PoseGraph and Reconstruction consumed by "
+        "run_global_positioning.");
+  m.def("build_reconstruction_from_tracks",
+        &BuildReconstructionFromTracks,
+        "reconstruction"_a,
+        "tracks"_a,
+        "skip_zero_observation_points"_a = false,
+        "update_point3D_errors"_a = false,
+        "Build a BA/save-ready Reconstruction from a canonical reconstruction "
+        "and a track map.");
+
   m.def(
       "run_global_positioning",
       [](const GlobalPositionerOptions& options,
@@ -247,17 +437,13 @@ void BindGlobalPositioner(py::module& m) {
         output["dmap_scales"] = positioner.GetDmapScales();
         output["debug_initial_frame_centers"] =
             positioner.GetInitialFrameCenters();
-        output["debug_initial_point3D_xyz"] =
-            positioner.GetInitialPoint3DXYZ();
-        output["debug_initial_bata_scales"] =
-            positioner.GetInitialBataScales();
-        output["debug_final_bata_scales"] =
-            positioner.GetFinalBataScales();
+        output["debug_initial_point3D_xyz"] = positioner.GetInitialPoint3DXYZ();
+        output["debug_initial_bata_scales"] = positioner.GetInitialBataScales();
+        output["debug_final_bata_scales"] = positioner.GetFinalBataScales();
         const GlobalPositionerDiagnostics& diagnostics =
             positioner.GetDiagnostics();
         py::dict diagnostics_dict;
-        diagnostics_dict["num_bata_residuals"] =
-            diagnostics.num_bata_residuals;
+        diagnostics_dict["num_bata_residuals"] = diagnostics.num_bata_residuals;
         diagnostics_dict["num_metric_depth_residuals"] =
             diagnostics.num_metric_depth_residuals;
         diagnostics_dict["num_scale_prior_residuals"] =
@@ -279,6 +465,50 @@ void BindGlobalPositioner(py::module& m) {
         diagnostics_dict["initial_cost"] = diagnostics.initial_cost;
         diagnostics_dict["final_cost"] = diagnostics.final_cost;
         diagnostics_dict["termination_type"] = diagnostics.termination_type;
+        diagnostics_dict["time_setup_problem"] = diagnostics.time_setup_problem;
+        diagnostics_dict["time_initialize_random_positions"] =
+            diagnostics.time_initialize_random_positions;
+        diagnostics_dict["time_initialize_dmap_scales"] =
+            diagnostics.time_initialize_dmap_scales;
+        diagnostics_dict["time_add_point_to_camera_constraints"] =
+            diagnostics.time_add_point_to_camera_constraints;
+        diagnostics_dict["time_add_ptcam_setup"] =
+            diagnostics.time_add_ptcam_setup;
+        diagnostics_dict["time_add_ptcam_filter_depth_outliers"] =
+            diagnostics.time_add_ptcam_filter_depth_outliers;
+        diagnostics_dict["time_add_ptcam_collect_sort_points"] =
+            diagnostics.time_add_ptcam_collect_sort_points;
+        diagnostics_dict["time_add_ptcam_point_loop"] =
+            diagnostics.time_add_ptcam_point_loop;
+        diagnostics_dict["time_add_ptcam_scale_priors"] =
+            diagnostics.time_add_ptcam_scale_priors;
+        diagnostics_dict["time_add_ptcam_bucket_summaries"] =
+            diagnostics.time_add_ptcam_bucket_summaries;
+        diagnostics_dict["time_add_point3D_init"] =
+            diagnostics.time_add_point3D_init;
+        diagnostics_dict["time_add_point3D_regular_observations"] =
+            diagnostics.time_add_point3D_regular_observations;
+        diagnostics_dict["time_add_point3D_lc_observations"] =
+            diagnostics.time_add_point3D_lc_observations;
+        diagnostics_dict["time_add_observation_total"] =
+            diagnostics.time_add_observation_total;
+        diagnostics_dict["time_add_observation_bata_residual"] =
+            diagnostics.time_add_observation_bata_residual;
+        diagnostics_dict["time_add_observation_record_residual"] =
+            diagnostics.time_add_observation_record_residual;
+        diagnostics_dict["time_add_metric_depth_total"] =
+            diagnostics.time_add_metric_depth_total;
+        diagnostics_dict["time_add_metric_depth_residual"] =
+            diagnostics.time_add_metric_depth_residual;
+        diagnostics_dict["time_add_metric_depth_record_residual"] =
+            diagnostics.time_add_metric_depth_record_residual;
+        diagnostics_dict["time_add_parameter_groups"] =
+            diagnostics.time_add_parameter_groups;
+        diagnostics_dict["time_parameterize_variables"] =
+            diagnostics.time_parameterize_variables;
+        diagnostics_dict["time_ceres_solve"] = diagnostics.time_ceres_solve;
+        diagnostics_dict["time_convert_back_results"] =
+            diagnostics.time_convert_back_results;
         output["debug_diagnostics"] = diagnostics_dict;
         return output;
       },
