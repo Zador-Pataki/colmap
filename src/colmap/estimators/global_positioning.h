@@ -1,6 +1,7 @@
 #pragma once
 
 #include "colmap/estimators/ceres_loss.h"
+#include "colmap/estimators/cost_functions/metric_depth.h"
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
@@ -77,10 +78,9 @@ struct GlobalPositionerOptions {
   // --- Metric-depth path toggles (only consulted when
   //     use_metric_depth_constraint == true) ---
   bool use_log_scale_for_depth_map_scales = false;
-  bool use_log_residual_for_depth = false;
+  MetricDepthResidualType metric_depth_residual_type =
+      MetricDepthResidualType::kLinear;
   bool zero_residual_behind = false;
-  // Selects the log-linear residual shape and implies log residuals.
-  bool smooth_log_linear_transition = false;
   double log_linear_threshold = 0.1;
   double scale_prior_stddev = 1.0;
 

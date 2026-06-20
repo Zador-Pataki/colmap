@@ -250,11 +250,13 @@ TEST(MetricDepthError, SmoothLogLinearTransitionC1Continuity) {
   const double sigma_depth = 0.2;
   const double threshold = 0.5;
 
-  MetricDepthOptions options;
-  options.residual_type = MetricDepthResidualType::kLogLinear;
-  options.log_linear_threshold = threshold;
-
-  MetricDepthError functor(identity, depth_prior, sigma_depth, options);
+  MetricDepthError functor(identity,
+                           depth_prior,
+                           sigma_depth,
+                           /*use_log_scale=*/false,
+                           MetricDepthResidualType::kLogLinear,
+                           /*zero_residual_behind=*/false,
+                           threshold);
 
   // Helper: evaluate residual at z_est with camera at origin, identity
   // rotation, point at (0, 0, z_est), dmap_scale = 1.0.

@@ -15,6 +15,13 @@ namespace py = pybind11;
 void BindGlobalPositioner(py::module& m) {
   // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
   // bundle_adjustment.cc), which runs earlier in ``BindEstimators``.
+  auto PyMetricDepthResidualType =
+      py::enum_<MetricDepthResidualType>(m, "MetricDepthResidualType")
+          .value("LINEAR", MetricDepthResidualType::kLinear)
+          .value("LOG", MetricDepthResidualType::kLog)
+          .value("LOG_LINEAR", MetricDepthResidualType::kLogLinear);
+  AddStringToEnumConstructor(PyMetricDepthResidualType);
+
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
           .def(py::init<>())
@@ -148,12 +155,10 @@ void BindGlobalPositioner(py::module& m) {
       .def_readwrite(
           "use_log_scale_for_depth_map_scales",
           &GlobalPositionerOptions::use_log_scale_for_depth_map_scales)
-      .def_readwrite("use_log_residual_for_depth",
-                     &GlobalPositionerOptions::use_log_residual_for_depth)
+      .def_readwrite("metric_depth_residual_type",
+                     &GlobalPositionerOptions::metric_depth_residual_type)
       .def_readwrite("zero_residual_behind",
                      &GlobalPositionerOptions::zero_residual_behind)
-      .def_readwrite("smooth_log_linear_transition",
-                     &GlobalPositionerOptions::smooth_log_linear_transition)
       .def_readwrite("log_linear_threshold",
                      &GlobalPositionerOptions::log_linear_threshold)
       .def_readwrite("scale_prior_stddev",
@@ -212,17 +217,13 @@ void BindGlobalPositioner(py::module& m) {
         output["dmap_scales"] = positioner.GetDmapScales();
         output["debug_initial_frame_centers"] =
             positioner.GetInitialFrameCenters();
-        output["debug_initial_point3D_xyz"] =
-            positioner.GetInitialPoint3DXYZ();
-        output["debug_initial_bata_scales"] =
-            positioner.GetInitialBataScales();
-        output["debug_final_bata_scales"] =
-            positioner.GetFinalBataScales();
+        output["debug_initial_point3D_xyz"] = positioner.GetInitialPoint3DXYZ();
+        output["debug_initial_bata_scales"] = positioner.GetInitialBataScales();
+        output["debug_final_bata_scales"] = positioner.GetFinalBataScales();
         const GlobalPositionerDiagnostics& diagnostics =
             positioner.GetDiagnostics();
         py::dict diagnostics_dict;
-        diagnostics_dict["num_bata_residuals"] =
-            diagnostics.num_bata_residuals;
+        diagnostics_dict["num_bata_residuals"] = diagnostics.num_bata_residuals;
         diagnostics_dict["num_metric_depth_residuals"] =
             diagnostics.num_metric_depth_residuals;
         diagnostics_dict["num_scale_prior_residuals"] =
