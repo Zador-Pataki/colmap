@@ -665,6 +665,82 @@ void StampGtDepthPriors(Reconstruction& reconstruction) {
   }
 }
 
+size_t CountValidDepthObservations(const Reconstruction& reconstruction,
+                                   int min_num_view_per_track) {
+  size_t total = 0;
+  for (const auto& [_, point3D] : reconstruction.Points3D()) {
+    if (static_cast<int>(point3D.track.Length()) < min_num_view_per_track) {
+      continue;
+    }
+    for (const TrackElement& observation : point3D.track.Elements()) {
+      const Image& image = reconstruction.Image(observation.image_id);
+      if (observation.point2D_idx < image.depth_prior_validity.size() &&
+          image.depth_prior_validity[observation.point2D_idx] &&
+          observation.point2D_idx < image.depth_prior_stddevs.size() &&
+          image.depth_prior_stddevs[observation.point2D_idx] > 1e-9) {
+        ++total;
+      }
+    }
+  }
+  return total;
+}
+
+void SetFirstValidDepthPrior(Reconstruction& reconstruction,
+                             double depth_prior) {
+  for (const auto& [_, point3D] : reconstruction.Points3D()) {
+    for (const TrackElement& observation : point3D.track.Elements()) {
+      Image& image = reconstruction.Image(observation.image_id);
+      if (observation.point2D_idx < image.depth_prior_validity.size() &&
+          image.depth_prior_validity[observation.point2D_idx]) {
+        image.depth_priors[observation.point2D_idx] = depth_prior;
+        image.depth_prior_stddevs[observation.point2D_idx] = 1.0;
+        return;
+      }
+    }
+  }
+  FAIL() << "No valid depth prior found";
+}
+
+TEST(GlobalPositioning, SkipsNonpositiveMetricDepthPriorsByDefault) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+  const size_t valid_depth_observations = CountValidDepthObservations(
+      data.reconstruction, BaselineGpOptions().min_num_view_per_track);
+  ASSERT_GT(valid_depth_observations, 0u);
+  SetFirstValidDepthPrior(data.reconstruction, 0.0);
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  ASSERT_TRUE(options.skip_nonpositive_metric_depth_priors);
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.GetDiagnostics().num_metric_depth_residuals,
+            static_cast<int>(valid_depth_observations - 1));
+}
+
+TEST(GlobalPositioning, CanKeepNonpositiveMetricDepthPriorsForLegacyRuns) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+  const size_t valid_depth_observations = CountValidDepthObservations(
+      data.reconstruction, BaselineGpOptions().min_num_view_per_track);
+  ASSERT_GT(valid_depth_observations, 0u);
+  SetFirstValidDepthPrior(data.reconstruction, 0.0);
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.skip_nonpositive_metric_depth_priors = false;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.GetDiagnostics().num_metric_depth_residuals,
+            static_cast<int>(valid_depth_observations));
+}
+
 TEST(GlobalPositioning, FilterDepthOutliersRoutesSoftFallback) {
   SetPRNGSeed(0);
   GpTestData data = BuildGpTestData();
