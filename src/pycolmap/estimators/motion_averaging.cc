@@ -153,6 +153,11 @@ void BindGlobalPositioner(py::module& m) {
       .def_readwrite("use_metric_depth_constraint",
                      &GlobalPositionerOptions::use_metric_depth_constraint)
       .def_readwrite(
+          "skip_nonpositive_metric_depth_priors",
+          &GlobalPositionerOptions::skip_nonpositive_metric_depth_priors,
+          "Skip valid-mask metric-depth observations whose depth prior is "
+          "nonpositive. Default false preserves existing behavior.")
+      .def_readwrite(
           "use_log_scale_for_depth_map_scales",
           &GlobalPositionerOptions::use_log_scale_for_depth_map_scales)
       .def_readwrite("metric_depth_residual_type",

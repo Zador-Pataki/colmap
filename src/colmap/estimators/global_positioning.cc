@@ -1106,6 +1106,9 @@ void GlobalPositioner::AddMetricDepthResidual(point3D_t point3D_id,
   const double depth_prior = image.depth_priors[observation.point2D_idx];
   const double depth_sigma = image.depth_prior_stddevs[observation.point2D_idx];
 
+  if (options_.skip_nonpositive_metric_depth_priors && depth_prior <= 0.0) {
+    return;
+  }
   if (depth_sigma <= 1e-9) return;
 
   // Lazy-insert dmap_scales_ on first valid observation per image.

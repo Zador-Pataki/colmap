@@ -65,6 +65,9 @@ struct GlobalPositionerOptions {
 
   // Add per-observation MetricDepthError residual alongside BATA.
   bool use_metric_depth_constraint = false;
+  // Ignore valid-mask observations with nonpositive metric-depth priors.
+  // Default false preserves existing behavior; enable to sanitize GP inputs.
+  bool skip_nonpositive_metric_depth_priors = false;
 
   // Include loop-closure observations in point3D problems.
   bool use_lc_observations = false;
