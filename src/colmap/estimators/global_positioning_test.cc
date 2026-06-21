@@ -701,7 +701,7 @@ void SetFirstValidDepthPrior(Reconstruction& reconstruction,
   FAIL() << "No valid depth prior found";
 }
 
-TEST(GlobalPositioning, KeepsNonpositiveMetricDepthPriorsByDefault) {
+TEST(GlobalPositioning, SkipsNonpositiveMetricDepthPriorsByDefault) {
   SetPRNGSeed(0);
   GpTestData data = BuildGpTestData();
   StampGtDepthPriors(data.reconstruction);
@@ -712,33 +712,33 @@ TEST(GlobalPositioning, KeepsNonpositiveMetricDepthPriorsByDefault) {
 
   GlobalPositionerOptions options = BaselineGpOptions();
   options.use_metric_depth_constraint = true;
-  ASSERT_FALSE(options.skip_nonpositive_metric_depth_priors);
-
-  TestableGlobalPositioner positioner(options);
-  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
-
-  EXPECT_EQ(positioner.GetDiagnostics().num_metric_depth_residuals,
-            static_cast<int>(valid_depth_observations));
-}
-
-TEST(GlobalPositioning, CanSkipNonpositiveMetricDepthPriors) {
-  SetPRNGSeed(0);
-  GpTestData data = BuildGpTestData();
-  StampGtDepthPriors(data.reconstruction);
-  const size_t valid_depth_observations = CountValidDepthObservations(
-      data.reconstruction, BaselineGpOptions().min_num_view_per_track);
-  ASSERT_GT(valid_depth_observations, 0u);
-  SetFirstValidDepthPrior(data.reconstruction, 0.0);
-
-  GlobalPositionerOptions options = BaselineGpOptions();
-  options.use_metric_depth_constraint = true;
-  options.skip_nonpositive_metric_depth_priors = true;
+  ASSERT_TRUE(options.skip_nonpositive_metric_depth_priors);
 
   TestableGlobalPositioner positioner(options);
   ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
 
   EXPECT_EQ(positioner.GetDiagnostics().num_metric_depth_residuals,
             static_cast<int>(valid_depth_observations - 1));
+}
+
+TEST(GlobalPositioning, CanKeepNonpositiveMetricDepthPriorsForLegacyRuns) {
+  SetPRNGSeed(0);
+  GpTestData data = BuildGpTestData();
+  StampGtDepthPriors(data.reconstruction);
+  const size_t valid_depth_observations = CountValidDepthObservations(
+      data.reconstruction, BaselineGpOptions().min_num_view_per_track);
+  ASSERT_GT(valid_depth_observations, 0u);
+  SetFirstValidDepthPrior(data.reconstruction, 0.0);
+
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_metric_depth_constraint = true;
+  options.skip_nonpositive_metric_depth_priors = false;
+
+  TestableGlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+
+  EXPECT_EQ(positioner.GetDiagnostics().num_metric_depth_residuals,
+            static_cast<int>(valid_depth_observations));
 }
 
 TEST(GlobalPositioning, FilterDepthOutliersRoutesSoftFallback) {

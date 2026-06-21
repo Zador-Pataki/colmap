@@ -156,7 +156,7 @@ void BindGlobalPositioner(py::module& m) {
           "skip_nonpositive_metric_depth_priors",
           &GlobalPositionerOptions::skip_nonpositive_metric_depth_priors,
           "Skip valid-mask metric-depth observations whose depth prior is "
-          "nonpositive. Default false preserves existing behavior.")
+          "nonpositive. Default true; set false for legacy behavior.")
       .def_readwrite(
           "use_log_scale_for_depth_map_scales",
           &GlobalPositionerOptions::use_log_scale_for_depth_map_scales)
