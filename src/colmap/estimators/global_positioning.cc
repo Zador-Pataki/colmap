@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -70,6 +71,48 @@ class ScopedAccumulatedTimer {
  private:
   double* target_;
   std::chrono::steady_clock::time_point start_;
+};
+
+class DeadZoneHuberLoss final : public ceres::LossFunction {
+ public:
+  DeadZoneHuberLoss(double dead_zone, double huber_width)
+      : dead_zone_(dead_zone), huber_width_(huber_width) {
+    THROW_CHECK_GE(dead_zone_, 0.0);
+    THROW_CHECK_GT(huber_width_, 0.0);
+  }
+
+  void Evaluate(double sq_norm, double rho[3]) const override {
+    const double r = std::sqrt(std::max(0.0, sq_norm));
+    if (r <= dead_zone_) {
+      rho[0] = 0.0;
+      rho[1] = 0.0;
+      rho[2] = 0.0;
+      return;
+    }
+
+    if (r <= 0.0) {
+      rho[0] = 0.0;
+      rho[1] = 0.0;
+      rho[2] = 0.0;
+      return;
+    }
+
+    const double shifted = r - dead_zone_;
+    if (shifted <= huber_width_) {
+      rho[0] = shifted * shifted;
+      rho[1] = shifted / r;
+      rho[2] = dead_zone_ / (2.0 * r * r * r);
+      return;
+    }
+
+    rho[0] = 2.0 * huber_width_ * shifted - huber_width_ * huber_width_;
+    rho[1] = huber_width_ / r;
+    rho[2] = -huber_width_ / (2.0 * r * r * r);
+  }
+
+ private:
+  const double dead_zone_;
+  const double huber_width_;
 };
 
 template <typename MapT>
@@ -383,12 +426,11 @@ MetricDepthOptions CreateMetricDepthOptions(
   metric_depth_options.zero_residual_behind = options.zero_residual_behind;
   metric_depth_options.log_linear_threshold = options.log_linear_threshold;
 
+  metric_depth_options.residual_type = options.metric_depth_residual_type;
   if (options.smooth_log_linear_transition) {
     metric_depth_options.residual_type = MetricDepthResidualType::kLogLinear;
   } else if (options.use_log_residual_for_depth) {
     metric_depth_options.residual_type = MetricDepthResidualType::kLog;
-  } else {
-    metric_depth_options.residual_type = MetricDepthResidualType::kLinear;
   }
   return metric_depth_options;
 }
@@ -862,6 +904,7 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   bata_scale_indices_.clear();
   cams_in_rig_.clear();
   per_image_scale_losses_.clear();
+  temporal_acceleration_loss_.reset();
   if (tracer_ == nullptr) {
     tracer_ = std::make_unique<GlobalPositioningTracer>(options_.trace);
   }
@@ -1194,6 +1237,10 @@ void GlobalPositioner::AddPointToCameraConstraints(
     }
     diagnostics_.time_add_ptcam_scale_priors += SecondsSince(timing_start);
   }
+  timing_start = NowForTiming();
+  AddTemporalAccelerationConstraints(reconstruction);
+  diagnostics_.time_add_temporal_acceleration_constraints +=
+      SecondsSince(timing_start);
   if (tracer_->ResidualLedgerEnabled()) {
     timing_start = NowForTiming();
     tracer_->RecordBucketSummaries();
@@ -1204,6 +1251,141 @@ void GlobalPositioner::AddPointToCameraConstraints(
           << ", scales=" << scales_.size()
           << ", frame_centers=" << frame_centers_.size()
           << ", dmap_scales=" << dmap_scales_.size();
+}
+
+void GlobalPositioner::AddTemporalAccelerationConstraints(
+    Reconstruction& reconstruction) {
+  if (!options_.use_temporal_acceleration_prior ||
+      options_.temporal_acceleration_priors.empty()) {
+    return;
+  }
+  THROW_CHECK_GT(options_.temporal_acceleration_prior_stddev, 0.0);
+  THROW_CHECK_GT(options_.temporal_acceleration_prior_weight, 0.0);
+  THROW_CHECK_GE(options_.temporal_acceleration_prior_loss_dead_zone, 0.0);
+  THROW_CHECK_GT(options_.temporal_acceleration_prior_loss_huber_width, 0.0);
+
+  temporal_acceleration_loss_ = std::make_unique<DeadZoneHuberLoss>(
+      options_.temporal_acceleration_prior_loss_dead_zone,
+      options_.temporal_acceleration_prior_loss_huber_width);
+
+  for (const TemporalAccelerationPrior& prior :
+       options_.temporal_acceleration_priors) {
+    if (!reconstruction.ExistsImage(prior.prev_image_id) ||
+        !reconstruction.ExistsImage(prior.image_id) ||
+        !reconstruction.ExistsImage(prior.next_image_id)) {
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor skip;
+        skip.residual_type = "temporal_acceleration";
+        skip.image_id = prior.image_id;
+        skip.loss_bucket = "temporal_dead_zone_huber";
+        tracer_->RecordSkip(skip, "image_missing");
+      }
+      continue;
+    }
+    const Image& prev_image = reconstruction.Image(prior.prev_image_id);
+    const Image& image = reconstruction.Image(prior.image_id);
+    const Image& next_image = reconstruction.Image(prior.next_image_id);
+    if (!prev_image.HasPose() || !image.HasPose() || !next_image.HasPose()) {
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor skip;
+        skip.residual_type = "temporal_acceleration";
+        skip.image_id = prior.image_id;
+        skip.loss_bucket = "temporal_dead_zone_huber";
+        tracer_->RecordSkip(skip, "image_pose_missing");
+      }
+      continue;
+    }
+    if (prior.dt_prev <= 0.0 || prior.dt_next <= 0.0 ||
+        prior.sqrt_observation_count <= 0.0) {
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor skip;
+        skip.residual_type = "temporal_acceleration";
+        skip.image_id = prior.image_id;
+        skip.loss_bucket = "temporal_dead_zone_huber";
+        tracer_->RecordSkip(skip, "invalid_temporal_prior");
+      }
+      continue;
+    }
+    const auto has_center_block = [this](const Image& candidate) {
+      if (UseFrameInplaceCenterBlocks()) {
+        return true;
+      }
+      if (UseImageCenterBlocks()) {
+        return image_centers_.find(candidate.ImageId()) != image_centers_.end();
+      }
+      return frame_centers_.find(candidate.FrameId()) != frame_centers_.end();
+    };
+    if (!has_center_block(prev_image) || !has_center_block(image) ||
+        !has_center_block(next_image)) {
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor skip;
+        skip.residual_type = "temporal_acceleration";
+        skip.image_id = prior.image_id;
+        skip.loss_bucket = "temporal_dead_zone_huber";
+        tracer_->RecordSkip(skip, "center_block_missing");
+      }
+      continue;
+    }
+
+    const double residual_scale = options_.temporal_acceleration_prior_weight *
+                                  prior.sqrt_observation_count /
+                                  options_.temporal_acceleration_prior_stddev;
+    ceres::CostFunction* cost_function =
+        TemporalAccelerationCostFunctor::Create(
+            prior.dt_prev, prior.dt_next, residual_scale);
+    if (cost_function == nullptr) {
+      if (tracer_->ResidualLedgerEnabled()) {
+        GlobalPositioningResidualDescriptor skip;
+        skip.residual_type = "temporal_acceleration";
+        skip.image_id = prior.image_id;
+        skip.loss_bucket = "temporal_dead_zone_huber";
+        tracer_->RecordSkip(skip, "cost_create_failed");
+      }
+      continue;
+    }
+
+    double* prev_center = MutableCenterDataForImage(prev_image);
+    double* center = MutableCenterDataForImage(image);
+    double* next_center = MutableCenterDataForImage(next_image);
+    problem_->AddResidualBlock(cost_function,
+                               temporal_acceleration_loss_.get(),
+                               prev_center,
+                               center,
+                               next_center);
+    residual_order_hash_ = StableHashAppend(residual_order_hash_, 4);
+    residual_order_hash_ =
+        StableHashAppend(residual_order_hash_, prior.prev_image_id);
+    residual_order_hash_ =
+        StableHashAppend(residual_order_hash_, prior.image_id);
+    residual_order_hash_ =
+        StableHashAppend(residual_order_hash_, prior.next_image_id);
+    ++diagnostics_.num_temporal_acceleration_residuals;
+
+    if (tracer_->ResidualLedgerEnabled()) {
+      GlobalPositioningResidualDescriptor residual;
+      residual.residual_type = "temporal_acceleration";
+      residual.image_id = prior.image_id;
+      residual.frame_id = image.FrameId();
+      residual.loss_bucket = "temporal_dead_zone_huber";
+      residual.loss = GlobalPositioningTraceLossConfig{
+          "temporal_dead_zone_huber",
+          "dead_zone_huber",
+          options_.temporal_acceleration_prior_loss_huber_width,
+          options_.temporal_acceleration_prior_weight,
+          "GlobalPositionerOptions.temporal_acceleration_prior",
+          prior.sqrt_observation_count};
+      tracer_->RecordResidual(
+          residual,
+          cost_function,
+          temporal_acceleration_loss_.get(),
+          {prev_center, center, next_center},
+          {TraceParameterBlock(
+               "prev_center", "frame_center", prev_image.FrameId()),
+           TraceParameterBlock("center", "frame_center", image.FrameId()),
+           TraceParameterBlock(
+               "next_center", "frame_center", next_image.FrameId())});
+    }
+  }
 }
 
 void GlobalPositioner::AddPoint3DToProblem(
@@ -1771,12 +1953,6 @@ void GlobalPositioner::AddMetricDepthResidual(
     residual.depth_sigma = depth_sigma;
   }
 
-  if (depth_prior <= 0.0) {
-    if (trace_residual_ledger) {
-      tracer_->RecordSkip(residual, "invalid_depth_prior");
-    }
-    return;
-  }
   if (depth_sigma <= 1e-9) {
     if (trace_residual_ledger) {
       tracer_->RecordSkip(residual, "invalid_depth_sigma");
