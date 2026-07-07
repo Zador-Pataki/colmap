@@ -21,6 +21,15 @@
 
 namespace colmap {
 
+struct TemporalAccelerationPrior {
+  image_t prev_image_id = kInvalidImageId;
+  image_t image_id = kInvalidImageId;
+  image_t next_image_id = kInvalidImageId;
+  double dt_prev = 1.0;
+  double dt_next = 1.0;
+  double sqrt_observation_count = 1.0;
+};
+
 struct GlobalPositionerOptions {
   // Whether to initialize the camera and track positions randomly.
   bool generate_random_positions = true;
@@ -82,6 +91,15 @@ struct GlobalPositionerOptions {
   // Cube half-extent for random initialization of positions and points.
   double random_init_scale = 100.0;
 
+  // Add temporal acceleration priors over consecutive image triplets. The
+  // caller owns sequence/gap policy and supplies valid triplets explicitly.
+  bool use_temporal_acceleration_prior = false;
+  std::vector<TemporalAccelerationPrior> temporal_acceleration_priors;
+  double temporal_acceleration_prior_stddev = 1.0;
+  double temporal_acceleration_prior_weight = 1.0;
+  double temporal_acceleration_prior_loss_dead_zone = 0.0;
+  double temporal_acceleration_prior_loss_huber_width = 1.0;
+
   // --- Metric-depth path toggles (only consulted when
   //     use_metric_depth_constraint == true) ---
   bool use_log_scale_for_depth_map_scales = false;
@@ -89,6 +107,8 @@ struct GlobalPositionerOptions {
   bool zero_residual_behind = false;
   // Selects the log-linear residual shape and implies log residuals.
   bool smooth_log_linear_transition = false;
+  MetricDepthResidualType metric_depth_residual_type =
+      MetricDepthResidualType::kLinear;
   double log_linear_threshold = 0.1;
   double scale_prior_stddev = 1.0;
 
@@ -140,6 +160,7 @@ struct GlobalPositionerDiagnostics {
   int num_bata_residuals = 0;
   int num_metric_depth_residuals = 0;
   int num_scale_prior_residuals = 0;
+  int num_temporal_acceleration_residuals = 0;
   int num_regular_observations_used = 0;
   int num_lc_observations_used = 0;
   int num_bata_scales = 0;
@@ -157,6 +178,7 @@ struct GlobalPositionerDiagnostics {
   double time_initialize_random_positions = 0.0;
   double time_initialize_dmap_scales = 0.0;
   double time_add_point_to_camera_constraints = 0.0;
+  double time_add_temporal_acceleration_constraints = 0.0;
   double time_add_ptcam_setup = 0.0;
   double time_add_ptcam_filter_depth_outliers = 0.0;
   double time_add_ptcam_collect_sort_points = 0.0;
@@ -219,6 +241,9 @@ class GlobalPositioner {
 
   // Add tracks to the problem
   void AddPointToCameraConstraints(Reconstruction& reconstruction);
+
+  // Add temporal acceleration priors over caller-supplied image triplets.
+  void AddTemporalAccelerationConstraints(Reconstruction& reconstruction);
 
   // Add a single point3D to the problem
   void AddPoint3DToProblem(point3D_t point3D_id,
@@ -311,6 +336,7 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_geometry_trackstart_;
   std::shared_ptr<ceres::LossFunction> cached_loss_normal_depth_trackstart_;
   std::shared_ptr<ceres::LossFunction> cached_loss_scale_prior_;
+  std::unique_ptr<ceres::LossFunction> temporal_acceleration_loss_;
 
   // Soft fallback loss for non-LC depth outliers. Lazily allocated from
   // options_.loss_soft_outlier_fallback.

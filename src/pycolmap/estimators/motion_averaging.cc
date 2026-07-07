@@ -201,6 +201,27 @@ void BindGlobalPositioner(py::module& m) {
           .value("RESIDUAL_JACOBIANS", TraceLevel::kResidualJacobians);
   AddStringToEnumConstructor(PyGlobalPositioningTraceLevel);
 
+  auto PyMetricDepthResidualType =
+      py::enum_<MetricDepthResidualType>(m, "MetricDepthResidualType")
+          .value("LINEAR", MetricDepthResidualType::kLinear)
+          .value("LOG", MetricDepthResidualType::kLog)
+          .value("LOG_LINEAR", MetricDepthResidualType::kLogLinear);
+  AddStringToEnumConstructor(PyMetricDepthResidualType);
+
+  auto PyTemporalAccelerationPrior =
+      py::classh<TemporalAccelerationPrior>(m, "TemporalAccelerationPrior")
+          .def(py::init<>())
+          .def_readwrite("prev_image_id",
+                         &TemporalAccelerationPrior::prev_image_id)
+          .def_readwrite("image_id", &TemporalAccelerationPrior::image_id)
+          .def_readwrite("next_image_id",
+                         &TemporalAccelerationPrior::next_image_id)
+          .def_readwrite("dt_prev", &TemporalAccelerationPrior::dt_prev)
+          .def_readwrite("dt_next", &TemporalAccelerationPrior::dt_next)
+          .def_readwrite("sqrt_observation_count",
+                         &TemporalAccelerationPrior::sqrt_observation_count);
+  MakeDataclass(PyTemporalAccelerationPrior);
+
   auto PyGlobalPositioningTraceOptions =
       py::classh<GlobalPositioningTraceOptions>(m,
                                                 "GlobalPositioningTraceOptions")
@@ -361,6 +382,8 @@ void BindGlobalPositioner(py::module& m) {
                      &GlobalPositionerOptions::zero_residual_behind)
       .def_readwrite("smooth_log_linear_transition",
                      &GlobalPositionerOptions::smooth_log_linear_transition)
+      .def_readwrite("metric_depth_residual_type",
+                     &GlobalPositionerOptions::metric_depth_residual_type)
       .def_readwrite("log_linear_threshold",
                      &GlobalPositionerOptions::log_linear_threshold)
       .def_readwrite("scale_prior_stddev",
@@ -377,6 +400,22 @@ void BindGlobalPositioner(py::module& m) {
                      &GlobalPositionerOptions::debug_initial_bata_scales)
       .def_readwrite("record_debug_bata_scales",
                      &GlobalPositionerOptions::record_debug_bata_scales)
+      .def_readwrite("use_temporal_acceleration_prior",
+                     &GlobalPositionerOptions::use_temporal_acceleration_prior)
+      .def_readwrite("temporal_acceleration_priors",
+                     &GlobalPositionerOptions::temporal_acceleration_priors)
+      .def_readwrite(
+          "temporal_acceleration_prior_stddev",
+          &GlobalPositionerOptions::temporal_acceleration_prior_stddev)
+      .def_readwrite(
+          "temporal_acceleration_prior_weight",
+          &GlobalPositionerOptions::temporal_acceleration_prior_weight)
+      .def_readwrite(
+          "temporal_acceleration_prior_loss_dead_zone",
+          &GlobalPositionerOptions::temporal_acceleration_prior_loss_dead_zone)
+      .def_readwrite("temporal_acceleration_prior_loss_huber_width",
+                     &GlobalPositionerOptions::
+                         temporal_acceleration_prior_loss_huber_width)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -448,6 +487,8 @@ void BindGlobalPositioner(py::module& m) {
             diagnostics.num_metric_depth_residuals;
         diagnostics_dict["num_scale_prior_residuals"] =
             diagnostics.num_scale_prior_residuals;
+        diagnostics_dict["num_temporal_acceleration_residuals"] =
+            diagnostics.num_temporal_acceleration_residuals;
         diagnostics_dict["num_regular_observations_used"] =
             diagnostics.num_regular_observations_used;
         diagnostics_dict["num_lc_observations_used"] =
@@ -472,6 +513,8 @@ void BindGlobalPositioner(py::module& m) {
             diagnostics.time_initialize_dmap_scales;
         diagnostics_dict["time_add_point_to_camera_constraints"] =
             diagnostics.time_add_point_to_camera_constraints;
+        diagnostics_dict["time_add_temporal_acceleration_constraints"] =
+            diagnostics.time_add_temporal_acceleration_constraints;
         diagnostics_dict["time_add_ptcam_setup"] =
             diagnostics.time_add_ptcam_setup;
         diagnostics_dict["time_add_ptcam_filter_depth_outliers"] =

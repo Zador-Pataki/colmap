@@ -56,6 +56,9 @@ std::vector<std::string> DeferredFixedParametersForReplay(
   if (residual.residual_type == "scale_prior") {
     return {"scale_prior_target", "scale_prior_stddev"};
   }
+  if (residual.residual_type == "temporal_acceleration") {
+    return {"dt_prev", "dt_next", "residual_scale"};
+  }
   return {"unclassified_fixed_parameters"};
 }
 

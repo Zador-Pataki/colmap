@@ -488,8 +488,7 @@ std::tuple<uint32_t, uint64_t, uint64_t> ReadRawPointIndexIdentityForTest(
       ReadRawLittleEndianForTest<uint32_t>(file, path);
   const uint64_t ledger_count =
       ReadRawLittleEndianForTest<uint64_t>(file, path);
-  const uint64_t ledger_size =
-      ReadRawLittleEndianForTest<uint64_t>(file, path);
+  const uint64_t ledger_size = ReadRawLittleEndianForTest<uint64_t>(file, path);
   return {ledger_version, ledger_count, ledger_size};
 }
 
@@ -1748,6 +1747,55 @@ TEST(GlobalPositioning, Gate_UseLcObservations_On_IteratesLcElements) {
   EXPECT_EQ(positioner.NumScales(), expected_regular + expected_lc);
 }
 
+TEST(GlobalPositioning, TemporalAccelerationPriorOffOnResidualCounts) {
+  {
+    SetPRNGSeed(0);
+    GpTestData data = BuildGpTestData();
+
+    GlobalPositionerOptions options = BaselineGpOptions();
+    options.solver_options.max_num_iterations = 0;
+
+    TestableGlobalPositioner positioner(options);
+    ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+    EXPECT_EQ(positioner.GetDiagnostics().num_temporal_acceleration_residuals,
+              0);
+  }
+
+  {
+    SetPRNGSeed(0);
+    GpTestData data = BuildGpTestData();
+    std::vector<image_t> image_ids;
+    image_ids.reserve(data.reconstruction.Images().size());
+    for (const auto& [image_id, image] : data.reconstruction.Images()) {
+      image_ids.push_back(image_id);
+    }
+    std::sort(image_ids.begin(), image_ids.end());
+    ASSERT_GE(image_ids.size(), 3);
+
+    TemporalAccelerationPrior prior;
+    prior.prev_image_id = image_ids[0];
+    prior.image_id = image_ids[1];
+    prior.next_image_id = image_ids[2];
+    prior.dt_prev = 1.0;
+    prior.dt_next = 1.0;
+    prior.sqrt_observation_count = 1.0;
+
+    GlobalPositionerOptions options = BaselineGpOptions();
+    options.solver_options.max_num_iterations = 0;
+    options.use_temporal_acceleration_prior = true;
+    options.temporal_acceleration_priors = {prior};
+    options.temporal_acceleration_prior_stddev = 1.0;
+    options.temporal_acceleration_prior_weight = 1.0;
+    options.temporal_acceleration_prior_loss_dead_zone = 0.0;
+    options.temporal_acceleration_prior_loss_huber_width = 1.0;
+
+    TestableGlobalPositioner positioner(options);
+    ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+    EXPECT_EQ(positioner.GetDiagnostics().num_temporal_acceleration_residuals,
+              1);
+  }
+}
+
 TEST(GlobalPositioning, MinViewGate_UseLcObservationsOff_IgnoresLcElements) {
   SetPRNGSeed(0);
   GpTestData data = BuildGpTestData();
@@ -1865,11 +1913,13 @@ TEST(GlobalPositioning, ResidualLedgerTraceCanDisableLegacyJsonlBlocks) {
   const std::filesystem::path raw_point_index_path =
       raw_binary_dir / "static" / "residual_point_index.bin";
   ASSERT_TRUE(ExistsFile(raw_ledger_path));
-  ASSERT_TRUE(
-      ExistsFile(raw_point_index_path));
-  const uint64_t ledger_count = ReadRawLedgerRecordCountForTest(raw_ledger_path);
+  ASSERT_TRUE(ExistsFile(raw_point_index_path));
+  const uint64_t ledger_count =
+      ReadRawLedgerRecordCountForTest(raw_ledger_path);
   EXPECT_GT(ledger_count, uint64_t{0});
-  const auto [indexed_ledger_version, indexed_ledger_count, indexed_ledger_size] =
+  const auto [indexed_ledger_version,
+              indexed_ledger_count,
+              indexed_ledger_size] =
       ReadRawPointIndexIdentityForTest(raw_point_index_path);
   EXPECT_EQ(indexed_ledger_version, uint32_t{2});
   EXPECT_EQ(indexed_ledger_count, ledger_count);
