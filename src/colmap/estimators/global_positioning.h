@@ -5,6 +5,9 @@
 #include "colmap/scene/pose_graph.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -12,10 +15,30 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <ceres/ceres.h>
 
 namespace colmap {
+
+struct GlobalPositioningPlaybackCapture {
+  std::string phase;
+  int iteration = -1;
+  std::vector<uint64_t> image_ids;
+  std::vector<double> image_centers;
+  std::vector<uint64_t> point3D_ids;
+  std::vector<double> points3D;
+  std::vector<uint64_t> lc_pairs;
+  std::vector<uint64_t> lc_support_count;
+  std::vector<double> lc_raw_score;
+};
+
+struct GlobalPositioningPlaybackOptions {
+  int snapshot_every_n_iterations = 1;
+  std::function<void(const GlobalPositioningPlaybackCapture&)> callback;
+
+  bool IsEnabled() const { return static_cast<bool>(callback); }
+};
 
 struct GlobalPositionerOptions {
   // Whether to initialize the camera and track positions randomly.
@@ -62,6 +85,10 @@ struct GlobalPositionerOptions {
 
   // The options for the solver
   ceres::Solver::Options solver_options;
+
+  // Optional in-memory snapshots for visualization. No files are written by
+  // the native solver, and the disabled path preserves the original solve.
+  GlobalPositioningPlaybackOptions playback;
 
   // Add per-observation MetricDepthError residual alongside BATA.
   bool use_metric_depth_constraint = false;
@@ -217,6 +244,14 @@ class GlobalPositioner {
   // Parameterize the variables, set some variables to be constant if desired
   void ParameterizeVariables(Reconstruction& reconstruction);
 
+  void RecordPlaybackObservation(const TrackElement& observation,
+                                 bool is_lc_observation,
+                                 ceres::ResidualBlockId residual_block_id,
+                                 ceres::LossFunction* loss_function);
+  void WritePlaybackCapture(const char* phase,
+                            int iteration,
+                            const Reconstruction& reconstruction);
+
   bool UseImageCenterBlocks() const;
   bool UseFrameInplaceCenterBlocks() const;
   Eigen::Vector3d& MutableCenterForImage(const Image& image);
@@ -249,6 +284,26 @@ class GlobalPositioner {
   std::unordered_map<point3D_t, Eigen::Vector3d> initial_point3D_xyz_;
   std::unordered_map<std::string, double> initial_bata_scales_;
   uint64_t residual_order_hash_ = 1469598103934665603ULL;
+
+  struct PlaybackObservation {
+    image_t image_id;
+    point2D_t point2D_idx;
+    image_t anchor_image_id;
+    point2D_t anchor_point2D_idx;
+    ceres::ResidualBlockId residual_block_id;
+    ceres::LossFunction* loss_function;
+  };
+  struct PlaybackEdge {
+    image_t image_id1;
+    image_t image_id2;
+    std::vector<size_t> observation_indices;
+    size_t support_count;
+  };
+  std::vector<PlaybackObservation> playback_observations_;
+  std::vector<image_t> playback_image_ids_;
+  std::vector<point3D_t> playback_point3D_ids_;
+  std::vector<PlaybackEdge> playback_edges_;
+  bool playback_topology_ready_ = false;
 
   // Temporary storage for camera-in-rig positions when cam_from_rig is unknown
   // and needs to be estimated.

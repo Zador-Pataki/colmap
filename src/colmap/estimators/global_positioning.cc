@@ -13,7 +13,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <random>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -296,6 +299,32 @@ bool IsLossConfigOverride(const LossConfig& loss_config) {
          loss_config.scale != 1.0 || loss_config.weight != 1.0;
 }
 
+uint64_t SplitMix64(uint64_t value) {
+  value += 0x9e3779b97f4a7c15ULL;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
+
+class PlaybackIterationCallback final : public ceres::IterationCallback {
+ public:
+  PlaybackIterationCallback(const int interval,
+                            std::function<void(int)> capture)
+      : interval_(interval), capture_(std::move(capture)) {}
+
+  ceres::CallbackReturnType operator()(
+      const ceres::IterationSummary& summary) override {
+    if (summary.iteration % interval_ == 0) {
+      capture_(summary.iteration);
+    }
+    return ceres::SOLVER_CONTINUE;
+  }
+
+ private:
+  int interval_;
+  std::function<void(int)> capture_;
+};
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -479,7 +508,33 @@ bool GlobalPositioner::Solve(const PoseGraph& pose_graph,
               scales_,
               bata_scale_indices_,
               dmap_scales_);
-  ceres::Solve(options_.solver_options, problem_.get(), &summary);
+  try {
+    if (!options_.playback.IsEnabled()) {
+      ceres::Solve(options_.solver_options, problem_.get(), &summary);
+    } else {
+      THROW_CHECK_GT(options_.playback.snapshot_every_n_iterations, 0)
+          << "playback.snapshot_every_n_iterations must be positive";
+      WritePlaybackCapture("initial", -1, reconstruction);
+      ceres::Solver::Options playback_solver_options = options_.solver_options;
+      PlaybackIterationCallback callback(
+          options_.playback.snapshot_every_n_iterations,
+          [this, &reconstruction](const int iteration) {
+            WritePlaybackCapture("iteration", iteration, reconstruction);
+          });
+      playback_solver_options.update_state_every_iteration = true;
+      playback_solver_options.callbacks.push_back(&callback);
+      ceres::Solve(playback_solver_options, problem_.get(), &summary);
+      if (summary.IsSolutionUsable()) {
+        const int final_iteration = summary.iterations.empty()
+                                        ? -1
+                                        : summary.iterations.back().iteration;
+        WritePlaybackCapture("final", final_iteration, reconstruction);
+      }
+    }
+  } catch (...) {
+    ConvertBackResults(reconstruction);
+    throw;
+  }
   if (const char* path = GpStateDumpPath()) {
     FILE* f = std::fopen(path, "a");
     if (f != nullptr) {
@@ -554,6 +609,11 @@ void GlobalPositioner::SetupProblem(const PoseGraph& pose_graph,
   initial_point3D_xyz_.clear();
   initial_bata_scales_.clear();
   bata_scale_indices_.clear();
+  playback_observations_.clear();
+  playback_image_ids_.clear();
+  playback_point3D_ids_.clear();
+  playback_edges_.clear();
+  playback_topology_ready_ = false;
   cams_in_rig_.clear();
   per_image_scale_losses_.clear();
 
@@ -838,6 +898,170 @@ void GlobalPositioner::AddPoint3DToProblem(point3D_t point3D_id,
   }
 }
 
+void GlobalPositioner::RecordPlaybackObservation(
+    const TrackElement& observation,
+    const bool is_lc_observation,
+    const ceres::ResidualBlockId residual_block_id,
+    ceres::LossFunction* const loss_function) {
+  if (!options_.playback.IsEnabled() || !is_lc_observation) {
+    return;
+  }
+  THROW_CHECK_NE(observation.lc_anchor_image_id, kInvalidImageId)
+      << "Playback requires exact LC image-pair provenance";
+  THROW_CHECK_NE(observation.lc_anchor_point2D_idx, kInvalidPoint2DIdx)
+      << "Playback requires exact LC match provenance";
+  THROW_CHECK_NE(observation.image_id, observation.lc_anchor_image_id)
+      << "Playback LC endpoints must belong to different images";
+  playback_observations_.push_back({observation.image_id,
+                                    observation.point2D_idx,
+                                    observation.lc_anchor_image_id,
+                                    observation.lc_anchor_point2D_idx,
+                                    residual_block_id,
+                                    loss_function});
+}
+
+void GlobalPositioner::WritePlaybackCapture(
+    const char* const phase,
+    const int iteration,
+    const Reconstruction& reconstruction) {
+  constexpr size_t kPointLimit = 200000;
+  if (!playback_topology_ready_) {
+    playback_image_ids_.reserve(reconstruction.NumImages());
+    for (const auto& [image_id, image] : reconstruction.Images()) {
+      if (!image.HasPose()) {
+        continue;
+      }
+      const bool has_center =
+          UseImageCenterBlocks()
+              ? image_centers_.find(image_id) != image_centers_.end()
+              : frame_centers_.find(image.FrameId()) != frame_centers_.end();
+      if (has_center) {
+        playback_image_ids_.push_back(image_id);
+      }
+    }
+    std::sort(playback_image_ids_.begin(), playback_image_ids_.end());
+
+    playback_point3D_ids_.reserve(reconstruction.NumPoints3D());
+    for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
+      playback_point3D_ids_.push_back(point3D_id);
+    }
+    std::sort(playback_point3D_ids_.begin(), playback_point3D_ids_.end());
+    if (playback_point3D_ids_.size() > kPointLimit) {
+      std::sort(playback_point3D_ids_.begin(),
+                playback_point3D_ids_.end(),
+                [](const point3D_t lhs, const point3D_t rhs) {
+                  return std::pair(SplitMix64(static_cast<uint64_t>(lhs)),
+                                   lhs) <
+                         std::pair(SplitMix64(static_cast<uint64_t>(rhs)), rhs);
+                });
+      playback_point3D_ids_.resize(kPointLimit);
+      std::sort(playback_point3D_ids_.begin(), playback_point3D_ids_.end());
+    }
+
+    const std::set<image_t> playback_images(playback_image_ids_.begin(),
+                                            playback_image_ids_.end());
+    using ObservationKey = std::pair<image_t, point2D_t>;
+    using MatchKey = std::pair<ObservationKey, ObservationKey>;
+    std::map<std::pair<image_t, image_t>, std::vector<size_t>>
+        edge_observations;
+    std::map<std::pair<image_t, image_t>, std::set<MatchKey>> edge_matches;
+    for (size_t index = 0; index < playback_observations_.size(); ++index) {
+      const PlaybackObservation& observation = playback_observations_[index];
+      if (playback_images.find(observation.image_id) == playback_images.end() ||
+          playback_images.find(observation.anchor_image_id) ==
+              playback_images.end()) {
+        continue;
+      }
+      const auto pair =
+          std::minmax(observation.image_id, observation.anchor_image_id);
+      edge_observations[pair].push_back(index);
+      const auto endpoint =
+          std::pair(observation.image_id, observation.point2D_idx);
+      const auto anchor = std::pair(observation.anchor_image_id,
+                                    observation.anchor_point2D_idx);
+      edge_matches[pair].insert(std::minmax(endpoint, anchor));
+    }
+    for (auto& [image_pair, observation_indices] : edge_observations) {
+      const auto match_it = edge_matches.find(image_pair);
+      THROW_CHECK(match_it != edge_matches.end());
+      playback_edges_.push_back({image_pair.first,
+                                 image_pair.second,
+                                 std::move(observation_indices),
+                                 match_it->second.size()});
+    }
+    std::sort(playback_edges_.begin(),
+              playback_edges_.end(),
+              [](const PlaybackEdge& lhs, const PlaybackEdge& rhs) {
+                return std::tuple(-static_cast<int64_t>(lhs.support_count),
+                                  lhs.image_id1,
+                                  lhs.image_id2) <
+                       std::tuple(-static_cast<int64_t>(rhs.support_count),
+                                  rhs.image_id1,
+                                  rhs.image_id2);
+              });
+    playback_topology_ready_ = true;
+  }
+
+  GlobalPositioningPlaybackCapture capture;
+  capture.phase = phase;
+  capture.iteration = iteration;
+  capture.image_ids.reserve(playback_image_ids_.size());
+  capture.image_centers.reserve(3 * playback_image_ids_.size());
+  for (const image_t image_id : playback_image_ids_) {
+    const Image& image = reconstruction.Image(image_id);
+    const Eigen::Vector3d center = CenterForImage(image);
+    capture.image_ids.push_back(static_cast<uint64_t>(image_id));
+    capture.image_centers.insert(capture.image_centers.end(),
+                                 {center.x(), center.y(), center.z()});
+  }
+  capture.point3D_ids.reserve(playback_point3D_ids_.size());
+  capture.points3D.reserve(3 * playback_point3D_ids_.size());
+  for (const point3D_t point3D_id : playback_point3D_ids_) {
+    const Eigen::Vector3d& xyz = reconstruction.Point3D(point3D_id).xyz;
+    capture.point3D_ids.push_back(static_cast<uint64_t>(point3D_id));
+    capture.points3D.insert(capture.points3D.end(),
+                            {xyz.x(), xyz.y(), xyz.z()});
+  }
+  capture.lc_pairs.reserve(2 * playback_edges_.size());
+  capture.lc_support_count.reserve(playback_edges_.size());
+  capture.lc_raw_score.reserve(playback_edges_.size());
+  std::unordered_map<size_t, double> observation_scores;
+  for (const PlaybackEdge& edge : playback_edges_) {
+    capture.lc_pairs.push_back(static_cast<uint64_t>(edge.image_id1));
+    capture.lc_pairs.push_back(static_cast<uint64_t>(edge.image_id2));
+    capture.lc_support_count.push_back(edge.support_count);
+    double edge_score = 0.0;
+    for (const size_t observation_index : edge.observation_indices) {
+      const auto [score_it, inserted] =
+          observation_scores.try_emplace(observation_index, 0.0);
+      if (inserted) {
+        const PlaybackObservation& observation =
+            playback_observations_.at(observation_index);
+        double cost = 0.0;
+        if (problem_->EvaluateResidualBlock(observation.residual_block_id,
+                                            false,
+                                            &cost,
+                                            nullptr,
+                                            nullptr)) {
+          const double squared_norm = 2.0 * cost;
+          double rho[3] = {squared_norm, 1.0, 0.0};
+          if (observation.loss_function != nullptr) {
+            observation.loss_function->Evaluate(squared_norm, rho);
+          }
+          score_it->second =
+              std::max(rho[1], 0.0) * std::sqrt(std::max(rho[0], 0.0));
+          if (!std::isfinite(score_it->second)) {
+            score_it->second = 0.0;
+          }
+        }
+      }
+      edge_score += score_it->second;
+    }
+    capture.lc_raw_score.push_back(edge_score);
+  }
+  options_.playback.callback(capture);
+}
+
 void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
                                                const TrackElement& observation,
                                                bool random_initialization,
@@ -964,11 +1188,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           BATAPairwiseDirectionCostFunctor::Create(cam_from_point3D_dir);
     }
 
-    problem_->AddResidualBlock(cost_function,
-                               loss_function,
-                               MutableCenterDataForImage(image),
-                               point3D.xyz.data(),
-                               &scale);
+    const ceres::ResidualBlockId residual_block_id =
+        problem_->AddResidualBlock(cost_function,
+                                   loss_function,
+                                   MutableCenterDataForImage(image),
+                                   point3D.xyz.data(),
+                                   &scale);
+    RecordPlaybackObservation(
+        observation, is_lc_observation, residual_block_id, loss_function);
     residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
     residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
     residual_order_hash_ =
@@ -1030,11 +1257,14 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
           RigBATAPairwiseDirectionConstantRigCostFunctor::Create(
               cam_from_point3D_dir, cam_from_rig_dir);
 
-      problem_->AddResidualBlock(cost_function,
-                                 loss_function,
-                                 point3D.xyz.data(),
-                                 MutableCenterDataForImage(image),
-                                 &scale);
+      const ceres::ResidualBlockId residual_block_id =
+          problem_->AddResidualBlock(cost_function,
+                                     loss_function,
+                                     point3D.xyz.data(),
+                                     MutableCenterDataForImage(image),
+                                     &scale);
+      RecordPlaybackObservation(
+          observation, is_lc_observation, residual_block_id, loss_function);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
       residual_order_hash_ =
@@ -1063,12 +1293,15 @@ void GlobalPositioner::AddObservationToProblem(point3D_t point3D_id,
               cam_from_point3D_dir,
               image.FramePtr()->RigFromWorld().rotation());
 
-      problem_->AddResidualBlock(cost_function,
-                                 loss_function,
-                                 point3D.xyz.data(),
-                                 MutableCenterDataForImage(image),
-                                 cams_in_rig_[sensor_id].data(),
-                                 &scale);
+      const ceres::ResidualBlockId residual_block_id =
+          problem_->AddResidualBlock(cost_function,
+                                     loss_function,
+                                     point3D.xyz.data(),
+                                     MutableCenterDataForImage(image),
+                                     cams_in_rig_[sensor_id].data(),
+                                     &scale);
+      RecordPlaybackObservation(
+          observation, is_lc_observation, residual_block_id, loss_function);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, 1);
       residual_order_hash_ = StableHashAppend(residual_order_hash_, point3D_id);
       residual_order_hash_ =

@@ -4,13 +4,25 @@
 
 #include "pycolmap/helpers.h"
 
+#include <algorithm>
+#include <memory>
+
 #include <pybind11/eigen.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 using namespace colmap;
 using namespace pybind11::literals;
 namespace py = pybind11;
+
+template <typename T>
+py::array_t<T> PlaybackArray(const std::vector<T>& values,
+                             const std::vector<py::ssize_t>& shape) {
+  py::array_t<T> result(shape);
+  std::copy(values.begin(), values.end(), result.mutable_data());
+  return result;
+}
 
 void BindGlobalPositioner(py::module& m) {
   // ``LossConfig`` is bound by ``BindBundleAdjuster`` (estimators/
@@ -21,6 +33,67 @@ void BindGlobalPositioner(py::module& m) {
           .value("LOG", MetricDepthResidualType::kLog)
           .value("LOG_LINEAR", MetricDepthResidualType::kLogLinear);
   AddStringToEnumConstructor(PyMetricDepthResidualType);
+
+  auto PyGlobalPositioningPlaybackOptions =
+      py::classh<GlobalPositioningPlaybackOptions>(
+          m, "GlobalPositioningPlaybackOptions")
+          .def(py::init<>())
+          .def_readwrite(
+              "snapshot_every_n_iterations",
+              &GlobalPositioningPlaybackOptions::snapshot_every_n_iterations)
+          .def_property(
+              "callback",
+              [](const GlobalPositioningPlaybackOptions&) {
+                return py::none();
+              },
+              [](GlobalPositioningPlaybackOptions& options,
+                 const py::object& callback) {
+                if (callback.is_none()) {
+                  options.callback = {};
+                  return;
+                }
+                if (!PyCallable_Check(callback.ptr())) {
+                  throw py::type_error("callback must be callable");
+                }
+                auto callback_holder = std::shared_ptr<py::object>(
+                    new py::object(callback), [](py::object* value) {
+                      py::gil_scoped_acquire acquire;
+                      delete value;
+                    });
+                options.callback = [callback_holder](
+                                       const GlobalPositioningPlaybackCapture&
+                                           value) {
+                  py::gil_scoped_acquire acquire;
+                  py::dict capture;
+                  capture["phase"] = value.phase;
+                  capture["iteration"] = value.iteration;
+                  capture["image_ids"] = PlaybackArray<uint64_t>(
+                      value.image_ids,
+                      {static_cast<py::ssize_t>(value.image_ids.size())});
+                  capture["centers"] = PlaybackArray<double>(
+                      value.image_centers,
+                      {static_cast<py::ssize_t>(value.image_centers.size() / 3),
+                       3});
+                  capture["point_ids"] = PlaybackArray<uint64_t>(
+                      value.point3D_ids,
+                      {static_cast<py::ssize_t>(value.point3D_ids.size())});
+                  capture["points_xyz"] = PlaybackArray<double>(
+                      value.points3D,
+                      {static_cast<py::ssize_t>(value.points3D.size() / 3), 3});
+                  capture["lc_pairs"] = PlaybackArray<uint64_t>(
+                      value.lc_pairs,
+                      {static_cast<py::ssize_t>(value.lc_pairs.size() / 2), 2});
+                  capture["lc_support_count"] = PlaybackArray<uint64_t>(
+                      value.lc_support_count,
+                      {static_cast<py::ssize_t>(
+                          value.lc_support_count.size())});
+                  capture["lc_raw_score"] = PlaybackArray<double>(
+                      value.lc_raw_score,
+                      {static_cast<py::ssize_t>(value.lc_raw_score.size())});
+                  (*callback_holder)(capture);
+                };
+              });
+  MakeDataclass(PyGlobalPositioningPlaybackOptions);
 
   auto PyGlobalPositionerOptions =
       py::classh<GlobalPositionerOptions>(m, "GlobalPositionerOptions")
@@ -195,7 +268,8 @@ void BindGlobalPositioner(py::module& m) {
       .def_readwrite("filter_depth_outlier_sigma",
                      &GlobalPositionerOptions::filter_depth_outlier_sigma)
       .def_readwrite("loss_soft_outlier_fallback",
-                     &GlobalPositionerOptions::loss_soft_outlier_fallback);
+                     &GlobalPositionerOptions::loss_soft_outlier_fallback)
+      .def_readwrite("playback", &GlobalPositionerOptions::playback);
 
   MakeDataclass(PyGlobalPositionerOptions);
 

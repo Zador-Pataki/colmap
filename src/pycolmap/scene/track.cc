@@ -25,7 +25,10 @@ void BindTrack(py::module& m) {
       .def_readwrite("point2D_idx", &TrackElement::point2D_idx)
       .def_readwrite("is_inlier", &TrackElement::is_inlier)
       .def_readwrite("is_depth_outlier", &TrackElement::is_depth_outlier)
-      .def_readwrite("is_track_anchor", &TrackElement::is_track_anchor);
+      .def_readwrite("is_track_anchor", &TrackElement::is_track_anchor)
+      .def_readwrite("lc_anchor_image_id", &TrackElement::lc_anchor_image_id)
+      .def_readwrite("lc_anchor_point2D_idx",
+                     &TrackElement::lc_anchor_point2D_idx);
   MakeDataclass(PyTrackElement);
 
   py::classh<Track> PyTrack(m, "Track");

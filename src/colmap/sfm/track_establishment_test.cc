@@ -529,6 +529,21 @@ bool TrackHasLCElement(const Track& track,
   return false;
 }
 
+bool TrackHasLCElementWithAnchor(const Track& track,
+                                 image_t image_id,
+                                 point2D_t point2D_idx,
+                                 image_t anchor_image_id,
+                                 point2D_t anchor_point2D_idx) {
+  for (const auto& element : track.lc_elements) {
+    if (element.image_id == image_id && element.point2D_idx == point2D_idx &&
+        element.lc_anchor_image_id == anchor_image_id &&
+        element.lc_anchor_point2D_idx == anchor_point2D_idx) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Populate an LC-only ImagePair directly (no AddTwoViewGeometry). Use for
 // tests that call AppendLoopClosureObservations in isolation.
 void AddLCOnlyPair(CorrespondenceGraph& corr_graph,
@@ -601,6 +616,8 @@ TEST(ProcessLoopClosurePairs, BothExistingTracks) {
   // Reciprocal lc_elements.
   EXPECT_TRUE(TrackHasLCElement(tracks.at(0).track, 2, 1));
   EXPECT_TRUE(TrackHasLCElement(tracks.at(1).track, 1, 0));
+  EXPECT_TRUE(TrackHasLCElementWithAnchor(tracks.at(0).track, 2, 1, 1, 0));
+  EXPECT_TRUE(TrackHasLCElementWithAnchor(tracks.at(1).track, 1, 0, 2, 1));
   // Not regular elements.
   EXPECT_FALSE(TrackHasElement(tracks.at(0).track, 2, 1));
   EXPECT_FALSE(TrackHasElement(tracks.at(1).track, 1, 0));

@@ -21,6 +21,16 @@ inline uint64_t EncodeObservationKey(image_t image_id, point2D_t feature_id) {
          static_cast<uint64_t>(feature_id);
 }
 
+TrackElement LoopClosureElement(image_t image_id,
+                                point2D_t point2D_idx,
+                                image_t anchor_image_id,
+                                point2D_t anchor_point2D_idx) {
+  TrackElement element(image_id, point2D_idx);
+  element.lc_anchor_image_id = anchor_image_id;
+  element.lc_anchor_point2D_idx = anchor_point2D_idx;
+  return element;
+}
+
 void ValidateLoopClosureImagePairMetadata(
     image_pair_t pair_id, const CorrespondenceGraph::ImagePair& image_pair) {
   const int num_matches = image_pair.matches.rows();
@@ -150,8 +160,7 @@ std::unordered_map<point3D_t, Point3D> EstablishTracksFromCorrGraph(
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const auto& image_pair = corr_graph.ImagePairsMap().at(pair_id);
     const Eigen::MatrixXi& matches = image_pair.matches;
-    const auto add_to_track = [&](const point2D_t p2d1,
-                                  const point2D_t p2d2) {
+    const auto add_to_track = [&](const point2D_t p2d1, const point2D_t p2d2) {
       if (ignore_match && ignore_match(image_id1, p2d1, image_id2, p2d2)) {
         return;
       }
@@ -335,10 +344,12 @@ void AppendLoopClosureObservations(
         next_id = std::max(next_id, static_cast<point3D_t>(tid_b + 1));
         Point3D track_a;
         track_a.track.AddElement(image_id1, p1);
-        track_a.track.lc_elements.emplace_back(image_id2, p2);
+        track_a.track.lc_elements.push_back(
+            LoopClosureElement(image_id2, p2, image_id1, p1));
         Point3D track_b;
         track_b.track.AddElement(image_id2, p2);
-        track_b.track.lc_elements.emplace_back(image_id1, p1);
+        track_b.track.lc_elements.push_back(
+            LoopClosureElement(image_id1, p1, image_id2, p2));
         const auto inserted_a = tracks.emplace(tid_a, std::move(track_a));
         THROW_CHECK(inserted_a.second)
             << "Track id collision on " << tid_a
@@ -355,15 +366,21 @@ void AppendLoopClosureObservations(
         const point3D_t t1 = it1->second;
         const point3D_t t2 = it2->second;
         if (t1 != t2) {
-          tracks.at(t1).track.lc_elements.emplace_back(image_id2, p2);
-          tracks.at(t2).track.lc_elements.emplace_back(image_id1, p1);
+          tracks.at(t1).track.lc_elements.push_back(
+              LoopClosureElement(image_id2, p2, image_id1, p1));
+          tracks.at(t2).track.lc_elements.push_back(
+              LoopClosureElement(image_id1, p1, image_id2, p2));
         }
         continue;
       }
       if (has_track1) {
-        tracks.at(it1->second).track.lc_elements.emplace_back(image_id2, p2);
+        tracks.at(it1->second)
+            .track.lc_elements.push_back(
+                LoopClosureElement(image_id2, p2, image_id1, p1));
       } else {
-        tracks.at(it2->second).track.lc_elements.emplace_back(image_id1, p1);
+        tracks.at(it2->second)
+            .track.lc_elements.push_back(
+                LoopClosureElement(image_id1, p1, image_id2, p2));
       }
     }
   }

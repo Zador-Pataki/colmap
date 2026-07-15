@@ -49,6 +49,10 @@ struct TrackElement {
   bool is_inlier = false;
   bool is_depth_outlier = false;
   bool is_track_anchor = false;
+  // Exact opposite endpoint for observations contributed by a loop closure.
+  // Regular observations leave both fields invalid.
+  image_t lc_anchor_image_id = kInvalidImageId;
+  point2D_t lc_anchor_point2D_idx = kInvalidPoint2DIdx;
 
   inline bool operator==(const TrackElement& other) const;
   inline bool operator!=(const TrackElement& other) const;

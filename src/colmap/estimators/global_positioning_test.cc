@@ -39,6 +39,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
+#include <tuple>
 
 #include <ceres/loss_function.h>
 #include <gtest/gtest.h>
@@ -436,6 +439,13 @@ size_t DuplicateElementsAsLc(Reconstruction& reconstruction,
       continue;
     }
     point3D.track.lc_elements = point3D.track.Elements();
+    const auto& regular = point3D.track.Elements();
+    for (size_t index = 0; index < point3D.track.lc_elements.size(); ++index) {
+      TrackElement& lc = point3D.track.lc_elements[index];
+      const TrackElement& anchor = regular[(index + 1) % regular.size()];
+      lc.lc_anchor_image_id = anchor.image_id;
+      lc.lc_anchor_point2D_idx = anchor.point2D_idx;
+    }
     total_lc += point3D.track.lc_elements.size();
   }
   return total_lc;
@@ -464,8 +474,101 @@ void KeepSingleRegularPlusLcPoint(Reconstruction& reconstruction) {
   point3D.xyz = Eigen::Vector3d(0.1, 0.2, 4.0);
   point3D.track.AddElement(image_ids[0], 0);
   point3D.track.lc_elements.emplace_back(image_ids[1], 0);
+  point3D.track.lc_elements.back().lc_anchor_image_id = image_ids[0];
+  point3D.track.lc_elements.back().lc_anchor_point2D_idx = 0;
   point3D.track.lc_elements.emplace_back(image_ids[2], 0);
+  point3D.track.lc_elements.back().lc_anchor_image_id = image_ids[0];
+  point3D.track.lc_elements.back().lc_anchor_point2D_idx = 0;
   reconstruction.AddPoint3D(0, std::move(point3D));
+}
+
+TEST(GlobalPositioning, PlaybackCapturesCompactTimeline) {
+  GpTestData data = BuildGpTestData();
+  GlobalPositionerOptions options = BaselineGpOptions();
+  options.use_lc_observations = true;
+  options.solver_options.max_num_iterations = 2;
+  DuplicateElementsAsLc(data.reconstruction, options.min_num_view_per_track);
+  using Observation = std::pair<image_t, point2D_t>;
+  using Match = std::pair<Observation, Observation>;
+  std::map<std::pair<image_t, image_t>, std::set<Match>> expected_edges;
+  for (const auto& [_, point3D] : data.reconstruction.Points3D()) {
+    for (const TrackElement& observation : point3D.track.lc_elements) {
+      const auto image_pair =
+          std::minmax(observation.image_id, observation.lc_anchor_image_id);
+      const Observation endpoint(observation.image_id, observation.point2D_idx);
+      const Observation anchor(observation.lc_anchor_image_id,
+                               observation.lc_anchor_point2D_idx);
+      expected_edges[image_pair].insert(std::minmax(endpoint, anchor));
+    }
+  }
+
+  std::vector<GlobalPositioningPlaybackCapture> captures;
+  options.playback.callback =
+      [&captures](const GlobalPositioningPlaybackCapture& capture) {
+        captures.push_back(capture);
+      };
+
+  GlobalPositioner positioner(options);
+  ASSERT_TRUE(positioner.Solve(data.pose_graph, data.reconstruction));
+  ASSERT_GE(captures.size(), 2);
+  EXPECT_EQ(captures.front().phase, "initial");
+  EXPECT_EQ(captures.back().phase, "final");
+  ASSERT_GE(captures.size(), 3);
+  EXPECT_EQ(captures[1].phase, "iteration");
+  EXPECT_EQ(captures[1].iteration, 0);
+  EXPECT_EQ(captures.back().iteration, captures[captures.size() - 2].iteration);
+  for (const GlobalPositioningPlaybackCapture& capture : captures) {
+    EXPECT_EQ(capture.image_centers.size(), 3 * capture.image_ids.size());
+    EXPECT_EQ(capture.points3D.size(), 3 * capture.point3D_ids.size());
+    EXPECT_EQ(capture.lc_pairs.size(), 2 * capture.lc_support_count.size());
+    EXPECT_EQ(capture.lc_raw_score.size(), capture.lc_support_count.size());
+    EXPECT_LE(capture.point3D_ids.size(), 200000);
+    EXPECT_FALSE(capture.image_ids.empty());
+    EXPECT_FALSE(capture.point3D_ids.empty());
+    EXPECT_FALSE(capture.lc_pairs.empty());
+    ASSERT_EQ(capture.lc_support_count.size(), expected_edges.size());
+    for (size_t index = 0; index < capture.lc_support_count.size(); ++index) {
+      const image_t image_id1 =
+          static_cast<image_t>(capture.lc_pairs[2 * index]);
+      const image_t image_id2 =
+          static_cast<image_t>(capture.lc_pairs[2 * index + 1]);
+      const auto pair = std::minmax(image_id1, image_id2);
+      const auto expected = expected_edges.find(pair);
+      ASSERT_NE(expected, expected_edges.end());
+      EXPECT_EQ(capture.lc_support_count[index], expected->second.size());
+    }
+    EXPECT_TRUE(std::all_of(capture.lc_raw_score.begin(),
+                            capture.lc_raw_score.end(),
+                            [](const double score) {
+                              return std::isfinite(score) && score >= 0.0;
+                            }));
+  }
+}
+
+TEST(GlobalPositioning, PlaybackRetainsEquivalentSolverResult) {
+  GpTestData data = BuildGpTestData();
+  Reconstruction disabled = data.reconstruction;
+  Reconstruction enabled = data.reconstruction;
+  GlobalPositionerOptions disabled_options = BaselineGpOptions();
+  disabled_options.solver_options.max_num_iterations = 5;
+  GlobalPositionerOptions enabled_options = disabled_options;
+  int capture_count = 0;
+  enabled_options.playback.callback =
+      [&capture_count](const GlobalPositioningPlaybackCapture&) {
+        ++capture_count;
+      };
+
+  GlobalPositioner disabled_positioner(disabled_options);
+  ASSERT_TRUE(disabled_positioner.Solve(data.pose_graph, disabled));
+  GlobalPositioner enabled_positioner(enabled_options);
+  ASSERT_TRUE(enabled_positioner.Solve(data.pose_graph, enabled));
+  EXPECT_GT(capture_count, 0);
+  EXPECT_THAT(disabled,
+              ReconstructionNear(enabled,
+                                 /*max_rotation_error_deg=*/1e-9,
+                                 /*max_proj_center_error=*/1e-8,
+                                 /*max_scale_error=*/1e-8,
+                                 /*num_obs_tolerance=*/0.0));
 }
 
 }  // namespace
