@@ -29,6 +29,25 @@ ceres::CostFunction* CreateBATACostFunction(const Eigen::Matrix3d* covariance,
       *covariance, std::forward<Args>(args)...);
 }
 
+class DefaultGlobalPositioner final : public GlobalPositioner {
+ public:
+  DefaultGlobalPositioner(
+      const GlobalPositionerOptions& options,
+      const PoseGraph& pose_graph,
+      Reconstruction& reconstruction,
+      const ObservationCovarianceMap& observation_covariances,
+      std::shared_ptr<ceres::LossFunction> loss_function)
+      : GlobalPositioner(options) {
+    Prepare(pose_graph,
+            reconstruction,
+            observation_covariances,
+            std::move(loss_function));
+    options_.solver_options.num_threads =
+        GetEffectiveNumThreads(options_.solver_options.num_threads);
+    options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);
+  }
+};
+
 }  // namespace
 
 GlobalPositioner::GlobalPositioner(const GlobalPositionerOptions& options)
@@ -62,14 +81,6 @@ void GlobalPositioner::Prepare(
     Reconstruction& reconstruction,
     const ObservationCovarianceMap& observation_covariances,
     std::shared_ptr<ceres::LossFunction> loss_function) {
-  if (reconstruction.NumImages() == 0) {
-    LOG(ERROR) << "Number of images = " << reconstruction.NumImages();
-    throw std::runtime_error("global positioning requires images");
-  }
-  if (reconstruction.NumPoints3D() == 0) {
-    LOG(ERROR) << "Number of tracks = " << reconstruction.NumPoints3D();
-    throw std::runtime_error("global positioning requires 3D points");
-  }
   reconstruction_ = &reconstruction;
 
   LOG(INFO) << "Setting up the global positioner problem";
@@ -500,40 +511,33 @@ void GlobalPositioner::SetParameterBlockOrdering() {
   options_.solver_options.linear_solver_ordering = std::move(ordering);
 }
 
-std::unique_ptr<GlobalPositioner> CreateDefaultGlobalPositioner(
+std::unique_ptr<GlobalPositioner> GlobalPositioner::CreateDefault(
     const GlobalPositionerOptions& options,
     const PoseGraph& pose_graph,
-    Reconstruction* reconstruction,
+    Reconstruction& reconstruction,
     const ObservationCovarianceMap& observation_covariances,
     std::shared_ptr<ceres::LossFunction> loss_function) {
-  if (reconstruction == nullptr) {
-    throw std::invalid_argument("reconstruction must not be null");
+  if (reconstruction.NumImages() == 0 || reconstruction.NumPoints3D() == 0) {
+    LOG(ERROR) << "Failed to run global positioning for incomplete "
+                  "reconstruction: "
+               << reconstruction;
+    return nullptr;
   }
-  std::unique_ptr<GlobalPositioner> positioner(new GlobalPositioner(options));
-  positioner->Prepare(pose_graph,
-                      *reconstruction,
-                      observation_covariances,
-                      std::move(loss_function));
-  positioner->options_.solver_options.num_threads =
-      GetEffectiveNumThreads(positioner->options_.solver_options.num_threads);
-  positioner->options_.solver_options.minimizer_progress_to_stdout =
-      VLOG_IS_ON(2);
-  return positioner;
+  return std::make_unique<DefaultGlobalPositioner>(options,
+                                                   pose_graph,
+                                                   reconstruction,
+                                                   observation_covariances,
+                                                   std::move(loss_function));
 }
 
 bool RunGlobalPositioning(const GlobalPositionerOptions& options,
                           const PoseGraph& pose_graph,
                           Reconstruction& reconstruction) {
-  if (reconstruction.NumImages() == 0) {
-    LOG(ERROR) << "Number of images = " << reconstruction.NumImages();
-    return false;
-  }
-  if (reconstruction.NumPoints3D() == 0) {
-    LOG(ERROR) << "Number of tracks = " << reconstruction.NumPoints3D();
-    return false;
-  }
   auto positioner =
-      CreateDefaultGlobalPositioner(options, pose_graph, &reconstruction);
+      GlobalPositioner::CreateDefault(options, pose_graph, reconstruction);
+  if (positioner == nullptr) {
+    return false;
+  }
   if (options.use_parameter_block_ordering) {
     positioner->SetParameterBlockOrdering();
   }
