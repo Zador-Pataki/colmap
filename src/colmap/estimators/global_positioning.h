@@ -77,7 +77,8 @@ class GlobalPositioner {
  public:
   virtual ~GlobalPositioner() = default;
 
-  // The reconstruction must outlive the returned positioner.
+  // Returns nullptr for an incomplete reconstruction. The reconstruction must
+  // outlive the returned positioner.
   static std::unique_ptr<GlobalPositioner> CreateDefault(
       const GlobalPositionerOptions& options,
       const PoseGraph& pose_graph,
