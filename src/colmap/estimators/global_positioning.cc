@@ -180,9 +180,12 @@ void GlobalPositioner::AddPointToCameraConstraints(
           << " point to camera constraints were added to the position "
              "estimation problem.";
 
-  // Down-weight uncalibrated cameras.
-  loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
-      loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  if (options_.downweight_uncalibrated_observations) {
+    loss_function_ptcam_uncalibrated_ = std::make_shared<ceres::ScaledLoss>(
+        loss_function_.get(), 0.5, ceres::DO_NOT_TAKE_OWNERSHIP);
+  } else {
+    loss_function_ptcam_uncalibrated_ = loss_function_;
+  }
   loss_function_ptcam_calibrated_ = loss_function_;
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
@@ -248,7 +251,7 @@ void GlobalPositioner::AddPoint3DToProblem(
       covariance = &covariance_it->second;
     }
 
-    if (!options_.generate_scales && random_initialization) {
+    if (!options_.generate_scales) {
       const Eigen::Vector3d cam_from_point3D_translation =
           point3D.xyz - frame_centers_[image.FrameId()];
       scale = std::max(1e-5,
@@ -366,12 +369,13 @@ void GlobalPositioner::ParameterizeVariables(Reconstruction& reconstruction) {
         problem_->SetParameterBlockConstant(&scale);
       }
     }
-  }
-  // Set the first scale to be constant to remove the gauge ambiguity.
-  for (double& scale : scales_) {
-    if (problem_->HasParameterBlock(&scale)) {
-      problem_->SetParameterBlockConstant(&scale);
-      break;
+  } else if (options_.fix_observation_scale_gauge) {
+    // Set the first scale to be constant to remove the gauge ambiguity.
+    for (double& scale : scales_) {
+      if (problem_->HasParameterBlock(&scale)) {
+        problem_->SetParameterBlockConstant(&scale);
+        break;
+      }
     }
   }
 
