@@ -3,12 +3,11 @@
 #include "colmap/estimators/rotation_averaging.h"
 
 #include "pycolmap/helpers.h"
+#include "pycolmap/pybind11_extension.h"
 
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
-PYBIND11_MAKE_OPAQUE(colmap::ObservationCovarianceMap);
 
 using namespace colmap;
 using namespace pybind11::literals;
@@ -77,8 +76,6 @@ void BindGlobalPositioner(py::module& m) {
       .def("set_parameter_block_ordering",
            &GlobalPositioner::SetParameterBlockOrdering)
       .def("finalize", &GlobalPositioner::Finalize, "summary"_a);
-
-  py::class_<ObservationCovarianceMap>(m, "_ObservationCovarianceMap");
 
   m.def("create_default_global_positioner",
         &GlobalPositioner::CreateDefault,
