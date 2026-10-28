@@ -149,6 +149,38 @@ TEST(GlobalMapper, WithNoiseAndOutliers) {
                                  /*num_obs_tolerance=*/0.02));
 }
 
+TEST(GlobalMapper, TrackConstructionBeforeScaleGeneration) {
+  auto database = Database::Open(CreateTestDir() / "database.db");
+  Reconstruction original;
+  SyntheticDatasetOptions dataset_options;
+  dataset_options.num_rigs = 1;
+  dataset_options.num_cameras_per_rig = 1;
+  dataset_options.num_frames_per_rig = 3;
+  dataset_options.two_view_geometry_has_relative_pose = true;
+  SynthesizeDataset(dataset_options, &original, database.get());
+  auto cache = CreateDatabaseCache(*database);
+  for (const bool skip_global_positioning : {false, true}) {
+    for (const int min_track_length : {0, 3, 4}) {
+      auto reconstruction = std::make_shared<Reconstruction>(original);
+      for (const auto point_id : reconstruction->Point3DIds()) {
+        reconstruction->DeletePoint3D(point_id);
+      }
+      GlobalMapper mapper(cache);
+      mapper.BeginReconstruction(reconstruction);
+      GlobalMapperOptions options;
+      options.skip_global_positioning = skip_global_positioning;
+      options.global_positioning.min_num_view_per_track = min_track_length;
+      mapper.EstablishTracks(options);
+      const size_t expected = skip_global_positioning || min_track_length <= 3
+                                  ? original.NumPoints3D()
+                                  : 0;
+      EXPECT_EQ(reconstruction->NumPoints3D(), expected);
+      const auto scales = GenerateObservationScales(*reconstruction);
+      EXPECT_EQ(scales.size(), 3 * expected);
+    }
+  }
+}
+
 TEST(GlobalMapper, GlobalPositioningTrackFiltering) {
   auto database = Database::Open(CreateTestDir() / "database.db");
   auto reconstruction = std::make_shared<Reconstruction>();
@@ -156,6 +188,7 @@ TEST(GlobalMapper, GlobalPositioningTrackFiltering) {
   dataset_options.num_rigs = 1;
   dataset_options.num_cameras_per_rig = 1;
   dataset_options.num_frames_per_rig = 3;
+  dataset_options.two_view_geometry_has_relative_pose = true;
   SynthesizeDataset(dataset_options, reconstruction.get(), database.get());
   GlobalMapper mapper(CreateDatabaseCache(*database));
   mapper.BeginReconstruction(reconstruction);
@@ -164,7 +197,13 @@ TEST(GlobalMapper, GlobalPositioningTrackFiltering) {
   reconstruction->DeleteObservation(observation.image_id,
                                     observation.point2D_idx);
   const Reconstruction original = *reconstruction;
-  GlobalPositionerOptions options;
+  GlobalMapperOptions mapper_options;
+  mapper_options.skip_rotation_averaging = true;
+  mapper_options.skip_track_establishment = true;
+  mapper_options.skip_bundle_adjustment = true;
+  mapper_options.skip_retriangulation = true;
+  mapper_options.min_tri_angle_deg = 0.0;
+  auto& options = mapper_options.global_positioning;
   options.use_gpu = false;
   options.generate_random_positions = false;
   options.generate_random_points = false;
@@ -181,8 +220,7 @@ TEST(GlobalMapper, GlobalPositioningTrackFiltering) {
             positioner->Problem().HasParameterBlock(point3D.xyz.data()));
       }
     }
-    EXPECT_EQ(mapper.GlobalPositioning(options, 1.0, 1e-2, 0.0),
-              min_track_length <= 3);
+    EXPECT_EQ(mapper.Solve(mapper_options), min_track_length <= 3);
     for (const auto& [id, point3D] : original.Points3D()) {
       EXPECT_EQ(
           reconstruction->ExistsPoint3D(id),
