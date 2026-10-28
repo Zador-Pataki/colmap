@@ -187,8 +187,8 @@ void BindGlobalPositioner(py::module& m) {
         "options"_a,
         "pose_graph"_a,
         "reconstruction"_a,
-        "Randomize frame centers constrained by the pose graph or qualifying "
-        "tracks, and points in qualifying tracks, according to options. "
+        "Randomize frame centers constrained by the pose graph or posed "
+        "observations, and all points, according to options. "
         "Preserve rotations.");
   m.def("generate_observation_scales",
         &GenerateObservationScales,

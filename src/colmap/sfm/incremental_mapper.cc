@@ -1110,6 +1110,9 @@ bool IncrementalMapper::AdjustGlobalBundle(
 
   // Avoid degeneracies in bundle adjustment.
   obs_manager_->FilterObservationsWithNegativeDepth();
+  if (ba_options.min_track_length > 0) {
+    obs_manager_->FilterPoints3DWithShortTracks(ba_options.min_track_length);
+  }
 
   // Configure bundle adjustment.
   BundleAdjustmentConfig ba_config;
@@ -1230,11 +1233,16 @@ void IncrementalMapper::IterativeLocalRefinement(
     const BundleAdjustmentOptions& ba_options,
     const IncrementalTriangulator::Options& tri_options,
     const image_t image_id) {
+  THROW_CHECK_NOTNULL(obs_manager_);
   BundleAdjustmentOptions custom_ba_options = ba_options;
   for (int i = 0; i < max_num_refinements; ++i) {
     if (custom_ba_options.check_if_stopped &&
         custom_ba_options.check_if_stopped()) {
       break;
+    }
+    if (custom_ba_options.min_track_length > 0) {
+      obs_manager_->FilterPoints3DWithShortTracks(
+          custom_ba_options.min_track_length);
     }
     const auto report = AdjustLocalBundle(options,
                                           custom_ba_options,

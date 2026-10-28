@@ -163,11 +163,6 @@ void GlobalPositioner::AddPointToCameraConstraints(
   loss_function_ptcam_calibrated_ = loss_function_;
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (point3D.track.Length() <
-        static_cast<size_t>(options_.min_num_view_per_track)) {
-      continue;
-    }
-
     AddPoint3DToProblem(point3D_id, reconstruction);
   }
 }
@@ -545,10 +540,6 @@ void RandomizeReconstructionPositions(const GlobalPositionerOptions& options,
   }
 
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (point3D.track.Length() <
-        static_cast<size_t>(options.min_num_view_per_track)) {
-      continue;
-    }
     for (const auto& observation : point3D.track.Elements()) {
       THROW_CHECK(reconstruction.ExistsImage(observation.image_id));
       const Image& image = reconstruction.Image(observation.image_id);
@@ -576,10 +567,6 @@ void RandomizeReconstructionPositions(const GlobalPositionerOptions& options,
   // Only set the points to be random if they are needed to be optimized
   if (random_initialization) {
     for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-      if (point3D.track.Length() <
-          static_cast<size_t>(options.min_num_view_per_track)) {
-        continue;
-      }
       reconstruction.Point3D(point3D_id).xyz = 100.0 * RandVector3d(-1, 1);
     }
   }

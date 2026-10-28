@@ -157,3 +157,28 @@ def test_hierarchical_mapping(tmp_path: Path) -> None:
         == gt_reconstruction.num_reg_images()
     )
     assert (output_path / "0").exists()
+
+
+@pytest.mark.parametrize("min_track_length", [0, 3, 4])
+def test_bundle_adjustment_filters_short_tracks(min_track_length: int) -> None:
+    dataset = pycolmap.SyntheticDatasetOptions(
+        num_rigs=1, num_cameras_per_rig=1, num_frames_per_rig=3
+    )
+    reconstruction = pycolmap.synthesize_dataset(dataset)
+    point_id = next(iter(reconstruction.points3D))
+    observation = reconstruction.points3D[point_id].track.elements[0]
+    reconstruction.delete_observation(
+        observation.image_id, observation.point2D_idx
+    )
+    expected = {
+        point_id
+        for point_id, point in reconstruction.points3D.items()
+        if point.track.length() >= min_track_length
+    }
+    pycolmap.bundle_adjustment(
+        reconstruction,
+        pycolmap.BundleAdjustmentOptions(
+            min_track_length=min_track_length, print_summary=False
+        ),
+    )
+    assert set(reconstruction.points3D) == expected

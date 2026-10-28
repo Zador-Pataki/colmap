@@ -198,7 +198,7 @@ def test_global_positioner_frame_center_parameter_block() -> None:
     reconstruction = pycolmap.synthesize_dataset(dataset_options)
     options = pycolmap.GlobalPositionerOptions()
     options.use_gpu = False
-    options.min_num_view_per_track = reconstruction.num_images() + 1
+    reconstruction.delete_all_points2D_and_points3D()
     frame_id, unposed_id = list(reconstruction.frames)[:2]
     reconstruction.frames[unposed_id].reset_pose()
     owner = pycolmap.create_default_global_positioner(

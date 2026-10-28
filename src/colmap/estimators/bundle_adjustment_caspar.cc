@@ -73,8 +73,7 @@ class CasparBundleAdjuster : public BundleAdjuster {
       }
       for (const Point2D& point2D : image.Points2D()) {
         if (!point2D.HasPoint3D() ||
-            config_.IsIgnoredPoint(point2D.point3D_id) ||
-            !HasSufficientTrackLength(point2D.point3D_id)) {
+            config_.IsIgnoredPoint(point2D.point3D_id)) {
           continue;
         }
         point3D_num_observations_[point2D.point3D_id]++;
@@ -89,9 +88,6 @@ class CasparBundleAdjuster : public BundleAdjuster {
   }
 
   void CountExternalObservations(const point3D_t point3D_id) {
-    if (!HasSufficientTrackLength(point3D_id)) {
-      return;
-    }
     const Point3D& point3D = reconstruction_.Point3D(point3D_id);
     for (const auto& track_el : point3D.track.Elements()) {
       if (!config_.HasImage(track_el.image_id)) {
@@ -243,9 +239,6 @@ class CasparBundleAdjuster : public BundleAdjuster {
 
   void AddFactorsForExternalObservations(const point3D_t point3D_id) {
     THROW_CHECK(!config_.IsIgnoredPoint(point3D_id));
-    if (!HasSufficientTrackLength(point3D_id)) {
-      return;
-    }
     Point3D& point3D = reconstruction_.Point3D(point3D_id);
     GetOrCreatePoint(point3D_id, point3D);
 
@@ -489,13 +482,6 @@ class CasparBundleAdjuster : public BundleAdjuster {
     const auto it = point3D_num_observations_.find(point3D_id);
     return it != point3D_num_observations_.end() &&
            reconstruction_.Point3D(point3D_id).track.Length() <= it->second;
-  }
-
-  bool HasSufficientTrackLength(const point3D_t point3D_id) const {
-    return options_.min_track_length <= 0 ||
-           static_cast<int>(
-               reconstruction_.Point3D(point3D_id).track.Length()) >=
-               options_.min_track_length;
   }
 
   void FixGauge() {

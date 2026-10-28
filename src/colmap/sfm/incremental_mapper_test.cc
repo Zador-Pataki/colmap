@@ -245,6 +245,46 @@ TEST_F(IncrementalMapperTest, ModifiedPoints3D) {
   EXPECT_TRUE(mapper_->GetModifiedPoints3D().empty());
 }
 
+TEST_F(IncrementalMapperTest, ShortTrackGlobalFiltering) {
+  for (const int min_track_length : {0, 3}) {
+    BeginWithSynthesizedReconstruction();
+    const auto point_id = reconstruction_->Points3D().begin()->first;
+    const auto observations =
+        reconstruction_->Point3D(point_id).track.Elements();
+    for (size_t i = 2; i < observations.size(); ++i) {
+      mapper_->ObservationManager().DeleteObservation(
+          observations[i].image_id, observations[i].point2D_idx);
+    }
+    BundleAdjustmentOptions ba_options;
+    ba_options.min_track_length = min_track_length;
+    EXPECT_TRUE(mapper_->AdjustGlobalBundle(options_, ba_options));
+    EXPECT_EQ(reconstruction_->ExistsPoint3D(point_id), min_track_length == 0);
+  }
+}
+
+TEST_F(IncrementalMapperTest, ShortTrackLocalFiltering) {
+  for (const int min_track_length : {0, 3}) {
+    BeginWithSynthesizedReconstruction();
+    const auto point_id = reconstruction_->Points3D().begin()->first;
+    const auto observations =
+        reconstruction_->Point3D(point_id).track.Elements();
+    for (size_t j = 2; j < observations.size(); ++j) {
+      mapper_->ObservationManager().DeleteObservation(
+          observations[j].image_id, observations[j].point2D_idx);
+    }
+    BundleAdjustmentOptions ba_options;
+    ba_options.min_track_length = min_track_length;
+    mapper_->Triangulator().AddModifiedPoint3D(point_id);
+    mapper_->IterativeLocalRefinement(1,
+                                     0.0,
+                                     options_,
+                                     ba_options,
+                                     tri_options_,
+                                     observations[0].image_id);
+    EXPECT_EQ(reconstruction_->ExistsPoint3D(point_id), min_track_length == 0);
+  }
+}
+
 TEST_F(IncrementalMapperTest, FullPipeline) {
   // Step 1: Find and register initial image pair
   FindAndRegisterInitialPair();
