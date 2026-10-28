@@ -697,13 +697,6 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
       Point3D& point3D = reconstruction.Point3D(point2D.point3D_id);
       THROW_CHECK_GT(point3D.track.Length(), 1);
 
-      // Skip points with track length below minimum.
-      if (options_.min_track_length > 0 &&
-          static_cast<int>(point3D.track.Length()) <
-              options_.min_track_length) {
-        continue;
-      }
-
       num_observations += 1;
       point3D_num_observations_[point2D.point3D_id] += 1;
 
@@ -762,13 +755,6 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
       Point3D& point3D = reconstruction.Point3D(point2D.point3D_id);
       THROW_CHECK_GT(point3D.track.Length(), 1);
 
-      // Skip points with track length below minimum.
-      if (options_.min_track_length > 0 &&
-          static_cast<int>(point3D.track.Length()) <
-              options_.min_track_length) {
-        continue;
-      }
-
       num_observations += 1;
       point3D_num_observations_[point2D.point3D_id] += 1;
 
@@ -811,12 +797,6 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
                          Reconstruction& reconstruction) {
     THROW_CHECK(!config_.IsIgnoredPoint(point3D_id));
     Point3D& point3D = reconstruction.Point3D(point3D_id);
-
-    // Skip points with track length below minimum.
-    if (options_.min_track_length > 0 &&
-        static_cast<int>(point3D.track.Length()) < options_.min_track_length) {
-      return;
-    }
 
     size_t& num_observations = point3D_num_observations_[point3D_id];
 

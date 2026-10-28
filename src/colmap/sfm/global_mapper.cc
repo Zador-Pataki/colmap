@@ -311,12 +311,13 @@ bool GlobalMapper::GlobalPositioning(const GlobalPositionerOptions& options,
                                      double max_angular_reproj_error_deg,
                                      double max_normalized_reproj_error,
                                      double min_tri_angle_deg) {
+  ObservationManager obs_manager(*reconstruction_);
+  obs_manager.FilterPoints3DWithShortTracks(options.min_num_view_per_track);
   if (!RunGlobalPositioning(options, *pose_graph_, *reconstruction_)) {
     return false;
   }
 
   // Filter tracks based on the estimation
-  ObservationManager obs_manager(*reconstruction_);
 
   // First pass: use relaxed threshold (2x) for cameras without prior focal.
   obs_manager.FilterPoints3DWithLargeReprojectionError(
@@ -377,7 +378,11 @@ bool GlobalMapper::IterativeBundleAdjustment(
     bool skip_fixed_rotation_stage,
     bool skip_joint_optimization_stage,
     const std::function<bool()>& on_progress) {
+  ObservationManager obs_manager(*reconstruction_);
   for (int ite = 0; ite < num_iterations; ite++) {
+    if (options.min_track_length > 0) {
+      obs_manager.FilterPoints3DWithShortTracks(options.min_track_length);
+    }
     // Optional fixed-rotation stage: optimize positions only
     if (!skip_fixed_rotation_stage) {
       BundleAdjustmentOptions opts_position_only = options;
@@ -427,7 +432,6 @@ bool GlobalMapper::IterativeBundleAdjustment(
     // adjustment right away. Instead, use a more strict criteria to filter
     LOG(INFO) << "Filtering tracks by reprojection ...";
 
-    ObservationManager obs_manager(*reconstruction_);
     bool status = true;
     size_t filtered_num = 0;
     while (status && ite < num_iterations) {
@@ -451,14 +455,14 @@ bool GlobalMapper::IterativeBundleAdjustment(
 
   // Filter tracks based on the estimation
   LOG(INFO) << "Filtering tracks by reprojection ...";
-  {
-    ObservationManager obs_manager(*reconstruction_);
-    obs_manager.FilterPoints3DWithLargeReprojectionError(
-        max_normalized_reproj_error,
-        reconstruction_->Point3DIds(),
-        ReprojectionErrorType::NORMALIZED);
-    obs_manager.FilterPoints3DWithSmallTriangulationAngle(
-        min_tri_angle_deg, reconstruction_->Point3DIds());
+  obs_manager.FilterPoints3DWithLargeReprojectionError(
+      max_normalized_reproj_error,
+      reconstruction_->Point3DIds(),
+      ReprojectionErrorType::NORMALIZED);
+  obs_manager.FilterPoints3DWithSmallTriangulationAngle(
+      min_tri_angle_deg, reconstruction_->Point3DIds());
+  if (options.min_track_length > 0) {
+    obs_manager.FilterPoints3DWithShortTracks(options.min_track_length);
   }
 
   return true;
@@ -501,6 +505,9 @@ bool GlobalMapper::IterativeRetriangulateAndRefine(
       reconstruction_->Point3DIds(),
       ReprojectionErrorType::NORMALIZED);
 
+  if (ba_options.min_track_length > 0) {
+    obs_manager.FilterPoints3DWithShortTracks(ba_options.min_track_length);
+  }
   if (!RunBundleAdjustment(ba_options, *reconstruction_)) {
     return false;
   }
@@ -510,6 +517,9 @@ bool GlobalMapper::IterativeRetriangulateAndRefine(
       reconstruction_->Point3DIds(),
       ReprojectionErrorType::NORMALIZED);
 
+  if (ba_options.min_track_length > 0) {
+    obs_manager.FilterPoints3DWithShortTracks(ba_options.min_track_length);
+  }
   if (!RunBundleAdjustment(ba_options, *reconstruction_)) {
     return false;
   }
@@ -525,6 +535,9 @@ bool GlobalMapper::IterativeRetriangulateAndRefine(
       ReprojectionErrorType::NORMALIZED);
   obs_manager.FilterPoints3DWithSmallTriangulationAngle(
       min_tri_angle_deg, reconstruction_->Point3DIds());
+  if (ba_options.min_track_length > 0) {
+    obs_manager.FilterPoints3DWithShortTracks(ba_options.min_track_length);
+  }
 
   return true;
 }

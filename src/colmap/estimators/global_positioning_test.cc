@@ -33,10 +33,6 @@ double ObservationWeightedCost(const GlobalPositionerOptions& options,
                                const Reconstruction& reconstruction) {
   double expected_cost = 0.0;
   for (const auto& [point3D_id, point3D] : reconstruction.Points3D()) {
-    if (point3D.track.Length() <
-        static_cast<size_t>(options.min_num_view_per_track)) {
-      continue;
-    }
     for (const auto& observation : point3D.track.Elements()) {
       const Image& image = reconstruction.Image(observation.image_id);
       const Camera& camera = *image.CameraPtr();
@@ -451,12 +447,12 @@ TEST(GlobalPositioning, UnknownSensorOffsetInitialization) {
 TEST(GlobalPositioning, CustomFrameConstraint) {
   for (const bool optimize_positions : {false, true}) {
     Reconstruction reconstruction = CreateGlobalPositioningTestReconstruction();
+    reconstruction.DeleteAllPoints2DAndPoints3D();
     const Reconstruction original = reconstruction;
     auto scales = GenerateObservationScales(reconstruction);
     GlobalPositionerOptions options;
     options.use_gpu = false;
     options.optimize_positions = optimize_positions;
-    options.min_num_view_per_track = reconstruction.NumImages() + 1;
     auto positioner =
         GlobalPositioner::CreateDefault(options, reconstruction, scales);
     const frame_t frame_id = reconstruction.Frames().begin()->first;
@@ -585,11 +581,6 @@ TEST(GlobalPositioning, CallerOwnedObservationScaleValidation) {
   EXPECT_DOUBLE_EQ(
       positioner->Problem().GetParameterLowerBound(&scales.at(observation), 0),
       1e-5);
-  options.min_num_view_per_track = reconstruction.NumImages() + 1;
-  ObservationScaleMap empty;
-  auto filtered =
-      GlobalPositioner::CreateDefault(options, reconstruction, empty);
-  EXPECT_EQ(filtered->Problem().NumResidualBlocks(), 0);
 }
 
 TEST(GlobalPositioning, FirstScaleFollowsAdmittedObservationOrder) {

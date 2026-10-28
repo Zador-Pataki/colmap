@@ -85,7 +85,8 @@ class GlobalPositioner {
  public:
   virtual ~GlobalPositioner() = default;
 
-  // Build from supplied frame poses, points, and scales without initialization.
+  // Build from supplied frame poses, points, and scales without initialization
+  // or minimum-track-length filtering.
   // All posed frames have center blocks, including those without observations.
   // Scales update in place; included observations require finite values >=
   // 1e-5. Unused entries are ignored. Reconstruction and scales must outlive
@@ -162,8 +163,7 @@ class GlobalPositioner {
 };
 
 // Randomize rig-frame centers and 3D points according to options; keep
-// rotations. Frames come from pose_graph or posed observations in tracks
-// meeting min_num_view_per_track; points must meet the same track threshold.
+// rotations. Frames come from pose_graph or posed observations in tracks.
 // To continue the same random sequence in GlobalPositioner::CreateDefault,
 // pass it options with random_seed = -1.
 void RandomizeReconstructionPositions(const GlobalPositionerOptions& options,
@@ -172,8 +172,7 @@ void RandomizeReconstructionPositions(const GlobalPositionerOptions& options,
 
 // Generate ones or geometry-based scales without modifying reconstruction.
 // Geometric initialization skips observations without usable poses or rays.
-// It examines all tracks, including those below GP's minimum track length;
-// feature indices in posed images must be valid.
+// Feature indices in posed images must be valid.
 // Scales must cover all observations used by the global positioner.
 ObservationScaleMap GenerateObservationScales(
     const Reconstruction& reconstruction, bool from_geometry = false);

@@ -538,7 +538,7 @@ TEST_P(BundleAdjusterBackendTest, PartiallyContainedTracks) {
   }
 }
 
-TEST_P(BundleAdjusterBackendTest, MinimumTrackLength) {
+TEST_P(BundleAdjusterBackendTest, PreparedTracks) {
   Reconstruction reconstruction;
   SyntheticDatasetOptions synthetic_dataset_options;
   synthetic_dataset_options.num_rigs = 3;
@@ -566,12 +566,11 @@ TEST_P(BundleAdjusterBackendTest, MinimumTrackLength) {
       CreateDefaultBundleAdjuster(options, config, reconstruction)->Solve();
   ASSERT_TRUE(summary->IsSolutionUsable());
 
-  // 99 points x 3 observations x 2 residuals per observation. The point with
-  // a two-observation track is excluded.
-  EXPECT_EQ(summary->num_residuals, 594);
+  // The factory uses all supplied tracks, including the two-observation point.
+  EXPECT_EQ(summary->num_residuals, 598);
 }
 
-TEST_P(BundleAdjusterBackendTest, MinimumTrackLengthWithExternalObservations) {
+TEST_P(BundleAdjusterBackendTest, PreparedTracksWithExternalObservations) {
   Reconstruction reconstruction;
   SyntheticDatasetOptions synthetic_dataset_options;
   synthetic_dataset_options.num_rigs = 3;
@@ -603,10 +602,8 @@ TEST_P(BundleAdjusterBackendTest, MinimumTrackLengthWithExternalObservations) {
       CreateDefaultBundleAdjuster(options, config, reconstruction)->Solve();
   ASSERT_TRUE(summary->IsSolutionUsable());
 
-  // 99 points x 3 observations x 2 residuals per observation. The point with
-  // a two-observation track is excluded from both configured and external
-  // images.
-  EXPECT_EQ(summary->num_residuals, 594);
+  // Include the short track across configured and external images.
+  EXPECT_EQ(summary->num_residuals, 598);
 }
 
 TEST_P(BundleAdjusterBackendTest, ConstantPoints) {

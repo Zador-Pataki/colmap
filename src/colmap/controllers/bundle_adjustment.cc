@@ -29,7 +29,12 @@ void BundleAdjustmentController::Run() {
   }
 
   // Avoid degeneracies in bundle adjustment.
-  ObservationManager(*reconstruction_).FilterObservationsWithNegativeDepth();
+  ObservationManager obs_manager(*reconstruction_);
+  obs_manager.FilterObservationsWithNegativeDepth();
+  if (options_.bundle_adjustment->min_track_length > 0) {
+    obs_manager.FilterPoints3DWithShortTracks(
+        options_.bundle_adjustment->min_track_length);
+  }
 
   BundleAdjustmentOptions ba_options = *options_.bundle_adjustment;
   ba_options.check_if_stopped = [this]() { return CheckIfStopped(); };

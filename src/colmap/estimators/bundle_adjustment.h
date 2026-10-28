@@ -165,7 +165,7 @@ struct BundleAdjustmentOptions : public BundleAdjustmentBackendOptions {
   bool refine_points3D = true;
 
   // Minimum track length for a 3D point to be included in bundle adjustment.
-  // Points with fewer observations are ignored.
+  // Applied by mapping pipelines and BundleAdjustmentController.
   int min_track_length = 0;
 
   // Whether to keep the rotation component of rig_from_world constant.
