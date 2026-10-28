@@ -217,6 +217,12 @@ void GlobalMapper::EstablishTracks(const GlobalMapperOptions& options) {
   point3D_t next_point3D_id = 0;
 
   for (const auto& [track_id, observations] : track_map) {
+    if (!options.skip_global_positioning &&
+        observations.size() <
+            static_cast<size_t>(
+                options.global_positioning.min_num_view_per_track)) {
+      continue;
+    }
     NodeHashMap<image_t, std::vector<Eigen::Vector2d>> image_id_set;
     Point3D point3D;
     bool is_consistent = true;
@@ -312,7 +318,6 @@ bool GlobalMapper::GlobalPositioning(const GlobalPositionerOptions& options,
                                      double max_normalized_reproj_error,
                                      double min_tri_angle_deg) {
   ObservationManager obs_manager(*reconstruction_);
-  obs_manager.FilterPoints3DWithShortTracks(options.min_num_view_per_track);
   if (!RunGlobalPositioning(options, *pose_graph_, *reconstruction_)) {
     return false;
   }
@@ -585,6 +590,10 @@ bool GlobalMapper::Solve(const GlobalMapperOptions& options,
     EstablishTracks(options);
     LOG(INFO) << "Track establishment done in " << run_timer.ElapsedSeconds()
               << " seconds";
+  } else if (!options.skip_global_positioning) {
+    ObservationManager obs_manager(*reconstruction_);
+    obs_manager.FilterPoints3DWithShortTracks(
+        options.global_positioning.min_num_view_per_track);
   }
 
   // Global positioning
